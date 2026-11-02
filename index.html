@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GeoCheckIn · UniCerrado</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{--bg:#f2f4ee;--card:#fff;--ink:#1b2a22;--mut:#5d6b63;--line:#d9dfd3;--pri:#1d6b47;--pri-ink:#fff;--ok:#1d6b47;--okbg:#e2f1e8;--err:#a3281f;--errbg:#fbe7e4;--ring:#e0a526}
+@media(prefers-color-scheme:dark){:root{--bg:#121a15;--card:#1b261f;--ink:#e8efe9;--mut:#9fb0a5;--line:#2f3f35;--pri:#4fb583;--pri-ink:#0e1a13;--ok:#7fd6a6;--okbg:#17301f;--err:#ff9b90;--errbg:#3a1d1a}}
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 'Bricolage Grotesque',system-ui,sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--card)}
+.logo{width:30px;height:30px;border-radius:50%;border:3px solid var(--pri);display:grid;place-items:center;flex:none}
+.logo::after{content:"";width:10px;height:10px;border-radius:50%;background:var(--ring)}
+header b{font-size:19px;font-weight:800;letter-spacing:-.3px}header small{color:var(--mut)}
+#user{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:14px}
+main{max-width:960px;margin:0 auto;padding:20px}
+h1,h2,h3{margin:0 0 6px;line-height:1.2}h2{font-size:22px}h3{font-size:18px}
+.mut{color:var(--mut);font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+label{display:block;font-size:14px;font-weight:600;margin:12px 0 4px}
+input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+input:focus,button:focus-visible{outline:3px solid var(--ring);outline-offset:1px}
+.btn{border:0;border-radius:8px;background:var(--pri);color:var(--pri-ink);font:inherit;font-weight:600;padding:11px 18px;cursor:pointer}
+.btn:disabled{opacity:.55;cursor:wait}
+.btn.big{width:100%;padding:16px;font-size:18px;margin-top:10px}
+.btn.alt{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn.stop{background:var(--err);color:#fff}
+.link{background:none;border:0;color:var(--pri);font:inherit;font-weight:600;cursor:pointer;padding:0;text-align:left}
+.tabs{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:6px}
+.tab{padding:11px;border:0;background:transparent;color:var(--mut);font:inherit;font-weight:600;cursor:pointer}
+.tab.on{background:var(--pri);color:var(--pri-ink)}
+.msg{padding:10px 12px;border-radius:8px;margin:12px 0;font-size:15px}
+.msg.err{background:var(--errbg);color:var(--err)}.msg.ok{background:var(--okbg);color:var(--ok)}
+.ok-badge{margin-top:10px;padding:12px;border-radius:8px;background:var(--okbg);color:var(--ok);font-weight:600;text-align:center}
+.vazio{text-align:center;padding:30px 10px}
+.auth{max-width:420px;margin:24px auto}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}.grid3{grid-template-columns:1fr 1fr 1fr}
+#mapa{height:260px;border-radius:10px;margin-top:12px;border:1px solid var(--line)}
+.top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.count{font-size:46px;font-weight:800;line-height:1;color:var(--pri)}
+.live{color:var(--ok);font-weight:600;font-size:14px}.live.off{color:var(--mut)}
+.scroll{overflow-x:auto;max-height:420px;overflow-y:auto;margin-top:10px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{position:sticky;top:0;background:var(--card);color:var(--mut);font-weight:600}
+ul{list-style:none;margin:0;padding:0}li{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+@media(max-width:560px){.grid,.grid3{grid-template-columns:1fr}.count{font-size:38px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo" aria-hidden="true"></div>
+  <div><b>GeoCheckIn</b> <small>UniCerrado</small></div>
+  <div id="user" hidden><span id="user-nome"></span><button class="btn alt" id="btn-sair">Sair</button></div>
+</header>
+
+<main>
+<!-- ============ LOGIN / CADASTRO ============ -->
+<section id="v-auth" class="auth" hidden>
+  <div class="card">
+    <h2>Registre sua presença pelo celular</h2>
+    <p class="mut">Entre com seu e-mail institucional.</p>
+    <div class="tabs">
+      <button class="tab on" data-p="aluno" type="button">Sou aluno</button>
+      <button class="tab" data-p="professor" type="button">Sou professor</button>
+    </div>
+    <form id="form-auth" novalidate>
+      <label id="f-nome" hidden>Nome completo<input id="nome" autocomplete="name"></label>
+      <label>E-mail institucional<input id="email" type="email" autocomplete="username" placeholder="nome@..." required></label>
+      <div class="mut" id="dica"></div>
+      <label id="f-mat" hidden>Matrícula (opcional)<input id="mat" inputmode="numeric"></label>
+      <label>Senha<input id="senha" type="password" autocomplete="current-password" minlength="8" required></label>
+      <label id="f-cod" hidden>Código de acesso de professor (se a coordenação informou)<input id="cod"></label>
+      <div class="msg" id="msg-auth" hidden></div>
+      <button class="btn big" id="btn-auth" type="submit">Entrar</button>
+    </form>
+    <p style="text-align:center;margin:14px 0 0"><button class="link" id="toggle" type="button"></button></p>
+  </div>
+</section>
+
+<!-- ============ ALUNO ============ -->
+<section id="v-aluno" hidden>
+  <h2>Aulas com chamada aberta</h2>
+  <p class="mut">Ao registrar, o navegador vai pedir permissão para usar sua localização. Fique dentro da sala.</p>
+  <div class="msg" id="msg-aluno" hidden></div>
+  <div id="aulas"></div>
+</section>
+
+<!-- ============ PROFESSOR ============ -->
+<section id="v-prof" hidden>
+  <div class="card">
+    <h2>Abrir chamada</h2>
+    <form id="form-aula" novalidate>
+      <label>Nome da aula<input id="titulo" placeholder="Ex.: Cálculo II · Bloco B, sala 4" required></label>
+      <div class="grid grid3">
+        <label>Latitude<input id="lat" inputmode="decimal" placeholder="-18.0119"></label>
+        <label>Longitude<input id="lon" inputmode="decimal" placeholder="-49.3561"></label>
+        <label>Raio de tolerância (m)<input id="raio" type="number" min="5" max="5000" value="50"></label>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+        <button class="btn alt" id="btn-gps" type="button">Usar minha localização atual</button>
+        <button class="btn" type="submit">Abrir chamada</button>
+      </div>
+      <p class="mut">Estando na sala, use sua localização atual ou clique no mapa para marcar o ponto. Prefira raios de 30 m ou mais: o GPS dentro de prédios oscila.</p>
+      <div id="mapa"></div>
+    </form>
+    <div class="msg" id="msg-prof" hidden></div>
+  </div>
+
+  <div class="card" id="painel" hidden>
+    <div class="top">
+      <div><h3 id="p-titulo"></h3><div class="mut" id="p-info"></div><div class="live" id="p-estado"></div></div>
+      <div style="text-align:right"><div class="count" id="p-total">0</div><div class="mut">presenças</div></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn stop" id="btn-fim" type="button">Encerrar chamada</button>
+      <button class="btn alt" id="btn-csv" type="button">Baixar CSV</button>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th>Aluno</th><th>Matrícula</th><th>Distância</th><th>Hora</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table></div>
+    <p class="mut" id="p-mais"></p>
+  </div>
+
+  <div class="card"><h3>Minhas aulas recentes</h3><ul id="hist"></ul></div>
+</section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const S = {token:null, user:null, perfil:'aluno', modo:'login', aula:null, rows:[], ultimo:0, hist:[], poll:null, timer:null,
+           map:null, marker:null, circle:null, cfg:{dominio_aluno:'alunos.unicerrado.edu.br', dominios_professor:['unicerrado.edu.br']}};
+const store = {get:k=>{try{return localStorage.getItem(k)}catch{return null}}, set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}, del:k=>{try{localStorage.removeItem(k)}catch{}}};
+
+function msg(el, txt, tipo){ el.textContent = txt || ''; el.className = 'msg ' + (tipo || ''); el.hidden = !txt; }
+function show(v){ ['auth','aluno','prof'].forEach(x => $('#v-'+x).hidden = x !== v); $('#user').hidden = v === 'auth'; }
+
+async function api(path, {method='GET', body} = {}){
+  const h = {'Content-Type':'application/json'}; if (S.token) h.Authorization = 'Bearer ' + S.token;
+  let r; try { r = await fetch('/api' + path, {method, headers:h, body: body ? JSON.stringify(body) : undefined}); }
+  catch { throw new Error('Sem conexão com o servidor. Verifique sua internet.'); }
+  let d = null; try { d = await r.json(); } catch {}
+  if (!r.ok){
+    if (r.status === 401 && S.token){ sair('Sessão expirada. Entre novamente.'); }
+    throw new Error(typeof d?.detail === 'string' ? d.detail : r.status === 422 ? 'Dados inválidos. Confira os campos.' : 'Erro ' + r.status);
+  }
+  return d;
+}
+
+function pos(){
+  return new Promise((ok, no) => {
+    if (!navigator.geolocation) return no(new Error('Seu navegador não suporta geolocalização.'));
+    navigator.geolocation.getCurrentPosition(p => ok(p.coords), e => no(new Error({
+      1:'Permissão de localização negada. Libere o acesso à localização nas configurações do navegador e tente de novo.',
+      2:'Não foi possível obter sua localização. Ative o GPS.',
+      3:'Tempo esgotado ao obter a localização. Tente novamente.'}[e.code] || 'Erro ao obter a localização.')),
+      {enableHighAccuracy:true, timeout:20000, maximumAge:0});
+  });
+}
+
+/* ---------------- Login / cadastro ---------------- */
+function renderAuth(){
+  const reg = S.modo === 'reg', alu = S.perfil === 'aluno';
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.p === S.perfil));
+  $('#f-nome').hidden = !reg; $('#f-mat').hidden = !(reg && alu); $('#f-cod').hidden = !(reg && !alu);
+  $('#btn-auth').textContent = reg ? 'Criar conta' : 'Entrar';
+  $('#toggle').textContent = reg ? 'Já tenho conta · Entrar' : 'Primeiro acesso · Criar conta';
+  $('#senha').autocomplete = reg ? 'new-password' : 'current-password';
+  $('#dica').textContent = alu ? 'Alunos: nome@' + S.cfg.dominio_aluno : 'Professores: nome@' + S.cfg.dominios_professor[0];
+  msg($('#msg-auth'), '');
+}
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => { S.perfil = t.dataset.p; renderAuth(); });
+$('#toggle').onclick = () => { S.modo = S.modo === 'reg' ? 'login' : 'reg'; renderAuth(); };
+
+$('#form-auth').onsubmit = async e => {
+  e.preventDefault();
+  const m = $('#msg-auth'); msg(m, '');
+  const alu = S.perfil === 'aluno', email = $('#email').value.trim().toLowerCase(), dom = email.split('@')[1] || '';
+  if (alu ? dom !== S.cfg.dominio_aluno : !S.cfg.dominios_professor.includes(dom))
+    return msg(m, alu ? 'Alunos devem usar o e-mail @' + S.cfg.dominio_aluno
+                      : 'Professores devem usar o e-mail @' + S.cfg.dominios_professor.join(' ou @'), 'err');
+  if ($('#senha').value.length < 8) return msg(m, 'A senha precisa ter pelo menos 8 caracteres.', 'err');
+  const body = {perfil:S.perfil, email, senha:$('#senha').value};
+  if (S.modo === 'reg'){
+    body.nome = $('#nome').value.trim();
+    if (alu) body.matricula = $('#mat').value.trim() || null; else body.codigo = $('#cod').value.trim() || null;
+  }
+  const b = $('#btn-auth'); b.disabled = true;
+  try {
+    const r = await api(S.modo === 'reg' ? '/auth/registro' : '/auth/login', {method:'POST', body});
+    S.token = r.token; S.user = r.usuario; store.set('gc_token', r.token); store.set('gc_user', JSON.stringify(r.usuario));
+    $('#senha').value = ''; iniciar();
+  } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; }
+};
+
+function iniciar(){
+  $('#user-nome').textContent = S.user.nome.split(' ')[0];
+  if (S.user.perfil === 'aluno'){
+    show('aluno'); carregarAulas();
+    S.timer = setInterval(() => { if (!document.hidden) carregarAulas(); }, 10000);
+  } else { show('prof'); initMapa(); recarregarHist(true); }
+}
+function sair(aviso){
+  clearInterval(S.timer); clearInterval(S.poll);
+  S.token = S.user = S.aula = null; store.del('gc_token'); store.del('gc_user');
+  $('#painel').hidden = true; S.modo = 'login'; renderAuth(); show('auth'); if (aviso) msg($('#msg-auth'), aviso, 'err');
+}
+$('#btn-sair').onclick = () => sair();
+
+/* ---------------- Aluno ---------------- */
+async function carregarAulas(){
+  try {
+    const l = await api('/aulas/ativas');
+    $('#aulas').innerHTML = l.length ? l.map(a => `<article class="card"><h3>${esc(a.titulo)}</h3>
+      <div class="mut">Prof. ${esc(a.professor)} · raio de ${Math.round(a.raio_metros)} m</div>
+      ${a.ja_registrou ? '<div class="ok-badge">✓ Presença registrada</div>'
+                       : `<button class="btn big" data-id="${a.id}">Registrar Presença</button>`}</article>`).join('')
+      : '<div class="card vazio mut">Nenhuma chamada aberta agora. Esta tela atualiza sozinha quando o professor abrir a chamada.</div>';
+  } catch (x) { msg($('#msg-aluno'), x.message, 'err'); }
+}
+$('#aulas').onclick = async e => {
+  const b = e.target.closest('button[data-id]'); if (!b) return;
+  const m = $('#msg-aluno'), rotulo = b.textContent; msg(m, ''); b.disabled = true;
+  try {
+    b.textContent = 'Obtendo localização…';
+    const c = await pos();
+    b.textContent = 'Enviando…';
+    const r = await api(`/aulas/${b.dataset.id}/presenca`, {method:'POST', body:{latitude:c.latitude, longitude:c.longitude, precisao_m:c.accuracy}});
+    msg(m, `Presença registrada em "${r.aula}". Você está a ${r.distancia_m} m do ponto da aula.`, 'ok');
+    carregarAulas();
+  } catch (x) { msg(m, x.message, 'err'); b.disabled = false; b.textContent = rotulo; }
+};
+
+/* ---------------- Professor: mapa e abertura ---------------- */
+function initMapa(){
+  if (S.map) return S.map.invalidateSize();
+  if (!window.L){ $('#mapa').hidden = true; return; }
+  S.map = L.map('mapa').setView([-18.0119, -49.3561], 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'}).addTo(S.map);
+  S.map.on('click', e => setPonto(e.latlng.lat, e.latlng.lng, true));
+}
+function setPonto(lat, lon, doMapa){
+  $('#lat').value = lat.toFixed(6); $('#lon').value = lon.toFixed(6); desenhar();
+  if (S.map && !doMapa) S.map.setView([lat, lon], 18);
+}
+function desenhar(){
+  if (!S.map) return;
+  const lat = parseFloat($('#lat').value), lon = parseFloat($('#lon').value), r = parseFloat($('#raio').value) || 50;
+  if (isNaN(lat) || isNaN(lon)) return;
+  if (S.marker){ S.marker.setLatLng([lat, lon]); S.circle.setLatLng([lat, lon]).setRadius(r); }
+  else { S.marker = L.marker([lat, lon]).addTo(S.map); S.circle = L.circle([lat, lon], {radius:r, color:'#1d6b47'}).addTo(S.map); }
+}
+['lat','lon','raio'].forEach(id => $('#'+id).addEventListener('input', desenhar));
+$('#btn-gps').onclick = async () => {
+  const m = $('#msg-prof'), b = $('#btn-gps'); msg(m, ''); b.disabled = true;
+  try { const c = await pos(); setPonto(c.latitude, c.longitude); } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; }
+};
+$('#form-aula').onsubmit = async e => {
+  e.preventDefault(); const m = $('#msg-prof'); msg(m, '');
+  if (!$('#lat').value.trim() || !$('#lon').value.trim()) return msg(m, 'Defina a localização da sala (use sua localização atual ou clique no mapa).', 'err');
+  try {
+    const a = await api('/aulas', {method:'POST', body:{titulo:$('#titulo').value.trim(),
+      latitude:parseFloat($('#lat').value.replace(',', '.')), longitude:parseFloat($('#lon').value.replace(',', '.')), raio_metros:parseFloat($('#raio').value)}});
+    abrirAula(a); recarregarHist();
+  } catch (x) { msg(m, x.message, 'err'); }
+};
+
+/* ---------------- Professor: painel em tempo real ---------------- */
+function abrirAula(a){
+  S.aula = a; S.rows = []; S.ultimo = 0;
+  $('#painel').hidden = false; $('#p-titulo').textContent = a.titulo; $('#p-total').textContent = a.total ?? 0;
+  $('#p-info').textContent = `Raio de ${Math.round(a.raio_metros)} m · ${a.latitude.toFixed(5)}, ${a.longitude.toFixed(5)}`;
+  renderRows(); clearInterval(S.poll); buscar(); S.poll = setInterval(buscar, 3000);
+  $('#painel').scrollIntoView({behavior:'smooth', block:'start'});
+}
+async function buscar(){
+  if (!S.aula || document.hidden) return;
+  try {
+    const r = await api(`/aulas/${S.aula.id}/presencas?apos_id=${S.ultimo}`);
+    if (r.presencas.length){ S.rows.push(...r.presencas); S.ultimo = r.presencas[r.presencas.length - 1].id; }
+    S.aula.ativa = r.ativa;
+    $('#p-total').textContent = r.total; $('#btn-fim').hidden = !r.ativa;
+    $('#p-estado').textContent = r.ativa ? '● Chamada aberta · atualizando a cada 3 s' : 'Chamada encerrada';
+    $('#p-estado').classList.toggle('off', !r.ativa);
+    renderRows();
+    if (!r.ativa && r.presencas.length < r.limite) clearInterval(S.poll);
+  } catch (x) { msg($('#msg-prof'), x.message, 'err'); }
+}
+function renderRows(){
+  const v = S.rows.slice(-200).reverse();
+  $('#tbody').innerHTML = v.map(p => `<tr><td>${esc(p.nome)}</td><td>${esc(p.matricula || '—')}</td><td>${p.distancia_m} m</td>
+    <td>${new Date(p.registrado_em).toLocaleTimeString('pt-BR')}</td></tr>`).join('') || '<tr><td colspan="4" class="mut">Aguardando os alunos…</td></tr>';
+  $('#p-mais').textContent = S.rows.length > 200 ? `Mostrando as 200 mais recentes de ${S.rows.length}. O CSV traz a lista completa.` : '';
+}
+$('#btn-fim').onclick = async () => {
+  if (!S.aula || !confirm('Encerrar a chamada? Os alunos não poderão mais registrar presença.')) return;
+  try { await api(`/aulas/${S.aula.id}/encerrar`, {method:'POST'}); await buscar(); recarregarHist(); }
+  catch (x) { msg($('#msg-prof'), x.message, 'err'); }
+};
+$('#btn-csv').onclick = () => {
+  const q = v => { v = String(v ?? ''); if (/^[=+\-@]/.test(v)) v = "'" + v; return '"' + v.replace(/"/g, '""') + '"'; };
+  const csv = ['Nome;Matrícula;E-mail;Distância (m);Horário', ...S.rows.map(p => [p.nome, p.matricula, p.email, p.distancia_m, p.registrado_em].map(q).join(';'))].join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], {type:'text/csv;charset=utf-8'}));
+  a.download = `presencas-aula-${S.aula.id}.csv`; a.click();
+};
+async function recarregarHist(retomar){
+  try {
+    S.hist = await api('/professor/aulas');
+    $('#hist').innerHTML = S.hist.map(a => `<li><button class="link" data-i="${a.id}">${esc(a.titulo)}</button>
+      <span class="mut">${new Date(a.aberta_em).toLocaleString('pt-BR')} · ${a.total} presença(s)${a.ativa ? ' · aberta' : ''}</span></li>`).join('')
+      || '<li class="mut">Você ainda não abriu nenhuma chamada.</li>';
+    const aberta = retomar && S.hist.find(a => a.ativa); if (aberta) abrirAula(aberta);
+  } catch (x) { msg($('#msg-prof'), x.message, 'err'); }
+}
+$('#hist').onclick = e => { const b = e.target.closest('button[data-i]'); if (b) abrirAula(S.hist.find(a => a.id == b.dataset.i)); };
+
+/* ---------------- Início ---------------- */
+(async () => {
+  try { S.cfg = await (await fetch('/api/config')).json(); } catch {}
+  S.token = store.get('gc_token');
+  try { S.user = JSON.parse(store.get('gc_user') || 'null'); } catch { S.user = null; }
+  if (S.token && S.user){ S.perfil = S.user.perfil; iniciar(); } else { renderAuth(); show('auth'); }
+})();
+</script>
+</body>
+</html>
