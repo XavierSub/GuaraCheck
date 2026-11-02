@@ -281,8 +281,10 @@ app = FastAPI(title="GeoCheckIn - UniCerrado", lifespan=lifespan)
 
 @app.get("/")
 def index():
-    return FileResponse(BASE_DIR / "web" / "index.html")
-
+    for p in (BASE_DIR / "web" / "index.html", BASE_DIR / "index.html"):
+        if p.exists():
+            return FileResponse(p)
+    raise HTTPException(404, "index.html não encontrado no repositório")
 
 @app.get("/api/health")
 def health(db: Session = Depends(get_db)):
