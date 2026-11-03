@@ -25,3 +25,7 @@ services:
         sync: false
       - key: ADMIN_PATH
         sync: false
+      - key: PROXYCHECK_KEY
+        sync: false
+      - key: VPN_MODO
+        value: bloquear

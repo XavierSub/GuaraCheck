@@ -37,7 +37,7 @@ input:focus,select:focus,button:focus-visible{outline:3px solid var(--ring);outl
 .msg{padding:10px 12px;border-radius:8px;margin:12px 0;font-size:15px}
 .msg.err{background:var(--errbg);color:var(--err)}.msg.ok{background:var(--okbg);color:var(--ok)}
 .ok-badge{margin-top:10px;padding:12px;border-radius:8px;background:var(--okbg);color:var(--ok);font-weight:600;text-align:center}
-.vazio{text-align:center;padding:30px 10px}
+.vazio{text-align:center;padding:30px 10px}.comp{border-left:4px solid var(--pri)}.comp.novo{background:var(--okbg)}.comp p{margin:6px 0}
 .auth{max-width:420px;margin:24px auto}
 .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 14px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
 #mapa{height:260px;border-radius:10px;margin-top:12px;border:1px solid var(--line)}
@@ -96,6 +96,9 @@ li{display:flex;justify-content:space-between;align-items:center;gap:10px;paddin
   <p class="mut" id="aluno-info">Ao registrar, o navegador vai pedir permissão para usar sua localização. Use o seu próprio celular e fique dentro da sala.</p>
   <div class="msg" id="msg-aluno" hidden></div>
   <div id="aulas"></div>
+  <h2 style="margin-top:22px">Meus comprovantes</h2>
+  <p class="mut">Mostre esta lista ao professor se ele pedir uma confirmação da sua presença.</p>
+  <div id="comprov"></div>
 </section>
 
 <!-- ============ PROFESSOR ============ -->
@@ -135,11 +138,31 @@ li{display:flex;justify-content:space-between;align-items:center;gap:10px;paddin
       <button class="btn alt" id="btn-csv" type="button">Exportar Chamada (CSV)</button>
       <button class="btn alt" id="btn-del" type="button" style="color:var(--err)">Excluir evento</button>
     </div>
+    <div class="atabs" id="p-tabs">
+      <button data-pt="presentes" class="on">Presentes (<span id="n-pres">0</span>)</button>
+      <button data-pt="tentativas">Tentativas recusadas (<span id="n-tent">0</span>)</button>
+    </div>
+    <div id="pt-presentes">
     <div class="scroll"><table>
-      <thead><tr><th>Aluno</th><th>Curso</th><th>Distância</th><th>Hora</th><th>Alertas</th></tr></thead>
+      <thead><tr><th>Nº</th><th>Aluno</th><th>Matrícula</th><th>Curso</th><th>Distância</th><th>Hora</th><th>Alertas</th></tr></thead>
       <tbody id="tbody"></tbody>
     </table></div>
     <p class="mut" id="p-mais"></p>
+    </div>
+    <div id="pt-tentativas" hidden>
+      <h3 style="margin-top:6px">Suspeitas de burla</h3>
+      <p class="mut">VPN ou proxy, localização falsa, aparelho usado por outro aluno ou deslocamento impossível. Nada disso gerou presença.</p>
+      <div class="scroll"><table>
+        <thead><tr><th>Aluno</th><th>Matrícula</th><th>Curso</th><th>Motivo</th><th>Detalhe</th><th>Vezes</th><th>Última</th><th>Situação</th></tr></thead>
+        <tbody id="tb-burla"></tbody>
+      </table></div>
+      <h3 style="margin-top:18px">Fora da área (sem indício de fraude)</h3>
+      <p class="mut">O aluno tentou registrar, mas estava mesmo longe do local do evento.</p>
+      <div class="scroll"><table>
+        <thead><tr><th>Aluno</th><th>Matrícula</th><th>Curso</th><th>Motivo</th><th>Detalhe</th><th>Vezes</th><th>Última</th><th>Situação</th></tr></thead>
+        <tbody id="tb-fora"></tbody>
+      </table></div>
+    </div>
   </div>
 
   <div class="card"><h3>Minhas aulas recentes</h3><ul id="hist"></ul></div>
@@ -286,7 +309,7 @@ function iniciar(){
   $('#user-nome').textContent = S.user.nome.split(' ')[0];
   if (S.user.perfil === 'admin'){ show('admin'); admRender(); }
   else if (S.user.perfil === 'aluno'){
-    show('aluno'); carregarAulas();
+    show('aluno'); carregarAulas(); carregarComprovantes();
     $('#aluno-info').textContent = (S.user.curso ? S.user.curso + ' · ' : '') + 'Use o seu próprio celular e fique dentro da sala. O navegador vai pedir permissão para usar a localização.';
     S.timer = setInterval(() => { if (!document.hidden) carregarAulas(); }, 10000);
   } else { show('prof'); initMapa(); recarregarHist(true); }
@@ -322,10 +345,23 @@ $('#aulas').onclick = async e => {
     const r = await api(`/aulas/${b.dataset.id}/presenca`, {method:'POST', body:{
       latitude:c.lat, longitude:c.lon, precisao_m:c.acc, pos_ts:c.ts, amostras:c.n, variacao_m:c.variacao,
       webdriver:!!navigator.webdriver, device_id:deviceId(), fp_hash:await fpHash()}});
-    msg(m, `Presença registrada em "${r.aula}". Você está a ${r.distancia_m} m do ponto da aula.`, 'ok');
+    msg(m, `Presença registrada em "${r.aula}"! Seu comprovante está logo abaixo.`, 'ok');
+    await carregarComprovantes(true);
     carregarAulas();
   } catch (x) { msg(m, x.message, 'err'); b.disabled = false; b.textContent = rotulo; }
 };
+
+async function carregarComprovantes(destacar){
+  const box = $('#comprov');
+  try {
+    const [me, l] = await Promise.all([api('/me'), api('/aluno/presencas')]);
+    box.innerHTML = l.length ? l.map((p, i) => `<article class="card comp${destacar && i === 0 ? ' novo' : ''}">
+      <h3>✓ Presença registrada · Protocolo nº ${p.id}</h3>
+      <p>O aluno <b>${esc(me.nome)}</b>${me.matricula ? `, matrícula <b>${esc(me.matricula)}</b>` : ''}${me.curso ? `, do curso de ${esc(me.curso)}` : ''}, registrou presença em <b>${esc(p.titulo)}</b> (${p.tipo === 'palestra' ? 'palestra' : 'aula'} · ${p.local_tipo === 'fora' ? 'fora da faculdade' : 'dentro da faculdade'}), com o(a) prof. ${esc(p.professor)}, em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.</p>
+    </article>`).join('') : '<div class="card vazio mut">Você ainda não registrou nenhuma presença.</div>';
+    if (destacar) box.scrollIntoView({behavior:'smooth', block:'start'});
+  } catch (x) { box.innerHTML = `<div class="msg err">${esc(x.message)}</div>`; }
+}
 
 /* ---------------- Professor: mapa e abertura ---------------- */
 function initMapa(){
@@ -369,7 +405,7 @@ function abrirAula(a){
   $('#painel').hidden = false; $('#p-titulo').textContent = a.titulo; $('#p-total').textContent = a.total ?? 0;
   $('#p-info').textContent = `${rotulo(a)}${a.local_descricao ? ' · ' + a.local_descricao : ''} · raio de ${Math.round(a.raio_metros)} m`;
   $('#btn-fim').hidden = !a.ativa;
-  renderRows(); clearInterval(S.poll); buscar(); S.poll = setInterval(buscar, 3000);
+  renderRows(); $('#tb-burla').innerHTML = $('#tb-fora').innerHTML = ''; $('#n-tent').textContent = '0'; clearInterval(S.poll); buscar(); S.poll = setInterval(buscar, 3000);
   $('#painel').scrollIntoView({behavior:'smooth', block:'start'});
 }
 async function buscar(){
@@ -380,18 +416,18 @@ async function buscar(){
     if (!S.aula || S.aula.id !== id) return;
     if (r.presencas.length){ S.rows.push(...r.presencas); S.ultimo = r.presencas[r.presencas.length - 1].id; }
     S.aula.ativa = r.ativa;
-    $('#p-total').textContent = r.total; $('#btn-fim').hidden = !r.ativa;
+    $('#p-total').textContent = r.total; $('#n-pres').textContent = r.total; $('#btn-fim').hidden = !r.ativa;
     $('#p-estado').textContent = r.ativa ? '● Chamada aberta · atualizando a cada 3 s' : 'Chamada encerrada';
     $('#p-estado').classList.toggle('off', !r.ativa);
-    renderRows();
+    renderRows(); carregarTentativas(id);
     if (!r.ativa && r.presencas.length < r.limite) clearInterval(S.poll);
   } catch (x) { msg($('#msg-prof'), x.message, 'err'); }
 }
 function renderRows(){
   const v = S.rows.slice(-200).reverse();
-  $('#tbody').innerHTML = v.map(p => `<tr><td>${esc(p.nome)}</td><td>${esc(p.curso || '—')}</td><td>${p.distancia_m} m</td>
+  $('#tbody').innerHTML = v.map(p => `<tr><td>${p.id}</td><td>${esc(p.nome)}</td><td>${esc(p.matricula || '—')}</td><td>${esc(p.curso || '—')}</td><td>${p.distancia_m} m</td>
     <td>${new Date(p.registrado_em).toLocaleTimeString('pt-BR')}</td><td class="warn">${esc(p.alertas || '')}</td></tr>`).join('')
-    || '<tr><td colspan="5" class="mut">Aguardando os alunos…</td></tr>';
+    || '<tr><td colspan="7" class="mut">Aguardando os alunos…</td></tr>';
   $('#p-mais').textContent = S.rows.length > 200 ? `Mostrando as 200 mais recentes de ${S.rows.length}. O CSV traz a lista completa.` : '';
 }
 $('#btn-fim').onclick = async () => {
@@ -433,6 +469,26 @@ $('#hist').onclick = e => {
   if (d){ const a = S.hist.find(x => x.id == d.dataset.x); excluirAula(a.id, a.titulo, a.total); }
 };
 
+const MOTIVO = {fora_raio:'Fora do raio', vpn:'VPN / proxy', gps_suspeito:'GPS suspeito', aparelho_repetido:'Aparelho repetido', deslocamento:'Deslocamento impossível'};
+async function carregarTentativas(id){
+  try {
+    const r = await api(`/aulas/${id}/tentativas`);
+    if (!S.aula || S.aula.id !== id) return;
+    const lin = t => `<tr><td>${esc(t.nome)}</td><td>${esc(t.matricula || '—')}</td><td>${esc(t.curso || '—')}</td><td>${esc(MOTIVO[t.motivo] || t.motivo)}</td>
+      <td class="warn">${esc(t.detalhe || '')}</td><td>${t.quantidade}</td><td>${new Date(t.ultima_em).toLocaleTimeString('pt-BR')}</td>
+      <td>${t.registrou ? 'Registrou depois' : 'Sem presença'}</td></tr>`;
+    const vazio = '<tr><td colspan="8" class="mut">Nenhum caso.</td></tr>';
+    $('#tb-fora').innerHTML = r.itens.filter(t => t.motivo === 'fora_raio').map(lin).join('') || vazio;
+    $('#tb-burla').innerHTML = r.itens.filter(t => t.motivo !== 'fora_raio').map(lin).join('') || vazio;
+    $('#n-tent').textContent = r.itens.length;
+  } catch {}
+}
+$('#p-tabs').onclick = e => {
+  const b = e.target.closest('button[data-pt]'); if (!b) return;
+  document.querySelectorAll('#p-tabs button').forEach(x => x.classList.toggle('on', x === b));
+  $('#pt-presentes').hidden = b.dataset.pt !== 'presentes'; $('#pt-tentativas').hidden = b.dataset.pt !== 'tentativas';
+};
+
 /* ---------------- Coordenação ---------------- */
 $('#form-adm').onsubmit = async e => {
   e.preventDefault(); const m = $('#msg-admlogin'), b = $('#btn-adm'); msg(m, ''); b.disabled = true;
@@ -449,7 +505,8 @@ const ADM_ABAS = {
   async resumo(){
     const r = await api('/admin/resumo');
     return `<div class="stats">${[['Alunos',r.alunos],['Professores',r.professores],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
-      <h3 style="margin-top:16px">Alunos por curso</h3>` + tb(['Curso','Alunos'], r.por_curso.map(c => `<tr><td>${esc(c.curso)}</td><td>${c.alunos}</td></tr>`));
+      <h3 style="margin-top:16px">Alunos por curso</h3>` + tb(['Curso','Alunos'], r.por_curso.map(c => `<tr><td>${esc(c.curso)}</td><td>${c.alunos}</td></tr>`)) +
+      `<h3 style="margin-top:16px">Proteção contra VPN</h3><p class="mut">Confere se o servidor enxerga o seu IP corretamente e se a verificação de VPN está ativa.</p><button class="btn alt" data-act="vpn-test">Testar proteção contra VPN</button>`;
   },
   async cursos(){
     const l = await api('/admin/cursos');
@@ -509,6 +566,10 @@ $('#adm-corpo').onclick = async e => {
       await admRender(); return msg(m, 'Conta criada. Informe a senha provisória ao professor.', 'ok');
     }
     else if (act === 'prof-del'){ if (!confirm(`Excluir o professor "${t}", as ${n} aula(s) dele e todas as presenças dessas aulas? Não pode ser desfeito.`)) return; await api(`/admin/professores/${id}`, {method:'DELETE'}); }
+    else if (act === 'vpn-test'){
+      const d = await api('/meu-ip');
+      return msg(m, `IP detectado: ${d.ip_detectado || '—'} · modo: ${d.vpn_modo} · verificação ${d.verificacao_ativa ? 'ativa' : 'DESLIGADA (falta PROXYCHECK_KEY)'} · este IP ${d.ip_e_vpn === true ? 'é VPN/proxy' : d.ip_e_vpn === false ? 'não é VPN/proxy' : 'não pôde ser verificado'}.`, 'ok');
+    }
     else if (act === 'senha'){
       const s = prompt('Nova senha (mínimo 8 caracteres):'); if (!s) return;
       await api('/admin/senha', {method:'POST', body:{perfil, id:+id, nova_senha:s}});

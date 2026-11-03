@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import (Boolean, DateTime, Float, ForeignKey, Index, Integer, String,
                         UniqueConstraint, create_engine, delete, event, func, inspect,
-                        or_, select, text, update)
+                        exists, or_, select, text, update)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -192,6 +192,31 @@ class Presenca(Base):
         UniqueConstraint("aula_id", "aluno_id", name="uq_presenca_aula_aluno"),
         UniqueConstraint("aula_id", "device_id", name="uq_presenca_aula_device"),
         Index("ix_presenca_aula_id_id", "aula_id", "id"),
+    )
+
+
+class Tentativa(Base):
+    """
+    Check-ins RECUSADOS (fora do raio, VPN, GPS suspeito, aparelho repetido, deslocamento impossível).
+    Uma linha por aluno/aula/motivo: repetições só aumentam o contador, então a tabela não incha.
+    """
+    __tablename__ = "tentativas"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    aula_id: Mapped[int] = mapped_column(ForeignKey("aulas.id"))
+    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), index=True)
+    motivo: Mapped[str] = mapped_column(String(20))
+    detalhe: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    distancia_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    precisao_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    quantidade: Mapped[int] = mapped_column(Integer, default=1)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ultima_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (
+        UniqueConstraint("aula_id", "aluno_id", "motivo", name="uq_tentativa"),
+        Index("ix_tentativa_aula_ultima", "aula_id", "ultima_em"),
     )
 
 
@@ -595,6 +620,7 @@ def encerrar_aula(aula_id: int, u: dict = Depends(so_professor), db: Session = D
 def excluir_aula(aula_id: int, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
     """Exclui a aula e, em cascata, todas as presenças dela (na mesma transação)."""
     _aula_do_professor(db, aula_id, u["id"])
+    db.execute(delete(Tentativa).where(Tentativa.aula_id == aula_id))
     removidas = db.execute(delete(Presenca).where(Presenca.aula_id == aula_id)).rowcount
     db.execute(delete(Aula).where(Aula.id == aula_id))
     db.commit()
@@ -629,6 +655,24 @@ def presencas_da_aula(aula_id: int, apos_id: int = 0, u: dict = Depends(so_profe
                            "registrado_em": iso(r.registrado_em), "alertas": r.alertas} for r in rows]}
 
 
+@app.get("/api/aulas/{aula_id}/tentativas")
+def tentativas_da_aula(aula_id: int, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
+    """Alunos que TENTARAM registrar e foram recusados (separado de quem conseguiu)."""
+    _aula_do_professor(db, aula_id, u["id"])
+    registrou = exists().where(Presenca.aula_id == Tentativa.aula_id, Presenca.aluno_id == Tentativa.aluno_id)
+    rows = db.execute(
+        select(Tentativa.id, Aluno.nome, Aluno.matricula, Curso.nome.label("curso"), Tentativa.motivo,
+               Tentativa.detalhe, Tentativa.distancia_m, Tentativa.quantidade, Tentativa.ultima_em,
+               registrou.label("registrou"))
+        .select_from(Tentativa).join(Aluno, Aluno.id == Tentativa.aluno_id)
+        .outerjoin(Curso, Curso.id == Aluno.curso_id)
+        .where(Tentativa.aula_id == aula_id).order_by(Tentativa.ultima_em.desc()).limit(300)).all()
+    return {"itens": [{"id": r.id, "nome": r.nome, "matricula": r.matricula, "curso": r.curso, "motivo": r.motivo,
+                       "detalhe": r.detalhe, "distancia_m": round(r.distancia_m, 1) if r.distancia_m is not None else None,
+                       "quantidade": r.quantidade, "ultima_em": iso(r.ultima_em), "registrou": bool(r.registrou)}
+                      for r in rows]}
+
+
 def _seguro(v) -> str:
     """Evita injeção de fórmula ao abrir o CSV no Excel."""
     v = str(v or "")
@@ -655,8 +699,14 @@ def exportar_chamada(aula_id: int, u: dict = Depends(so_professor), db: Session 
                     headers={"Content-Disposition": f'attachment; filename="chamada-{aula_id}.csv"'})
 
 
+def _prof_ou_admin(u: dict = Depends(usuario_atual)) -> dict:
+    if u["role"] not in ("professor", "admin"):
+        raise HTTPException(403, "Acesso negado.")
+    return u
+
+
 @app.get("/api/meu-ip")
-def meu_ip(request: Request, u: dict = Depends(so_professor)):
+def meu_ip(request: Request, u: dict = Depends(_prof_ou_admin)):
     """Diagnóstico: mostra qual IP o servidor enxerga (para calibrar PROXY_HOPS antes de bloquear VPN)."""
     return {"ip_detectado": ip_cliente(request), "x_forwarded_for": request.headers.get("x-forwarded-for"),
             "proxy_hops": PROXY_HOPS, "vpn_modo": VPN_MODO, "verificacao_ativa": bool(PROXYCHECK_KEY),
@@ -664,6 +714,52 @@ def meu_ip(request: Request, u: dict = Depends(so_professor)):
 
 
 # ------------------------------ Aluno ---------------------------------
+def registrar_tentativa(db: Session, aula_id: int, aluno_id: int, motivo: str, detalhe: Optional[str] = None,
+                        b=None, dist: Optional[float] = None, ip: Optional[str] = None):
+    """Guarda uma tentativa recusada. Nunca deixa um erro aqui atrapalhar a resposta ao aluno."""
+    try:
+        agora = utcnow()
+        t = db.scalar(select(Tentativa).where(Tentativa.aula_id == aula_id, Tentativa.aluno_id == aluno_id,
+                                                Tentativa.motivo == motivo))
+        if t:
+            t.quantidade += 1
+            t.ultima_em, t.detalhe, t.distancia_m = agora, (detalhe or "")[:200] or None, dist
+            if b is not None:
+                t.latitude, t.longitude, t.precisao_m = b.latitude, b.longitude, b.precisao_m
+        else:
+            db.add(Tentativa(aula_id=aula_id, aluno_id=aluno_id, motivo=motivo, detalhe=(detalhe or "")[:200] or None,
+                             latitude=b.latitude if b is not None else None,
+                             longitude=b.longitude if b is not None else None,
+                             precisao_m=b.precisao_m if b is not None else None,
+                             distancia_m=dist, ip=(ip or "")[:64] or None, ultima_em=agora))
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+@app.get("/api/me")
+def meu_perfil(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """Dados do aluno para o comprovante (sem CPF: o sistema não coleta esse dado)."""
+    r = db.execute(select(Aluno.nome, Aluno.matricula, Aluno.email, Curso.nome.label("curso"))
+                   .outerjoin(Curso, Curso.id == Aluno.curso_id).where(Aluno.id == u["id"])).first()
+    if not r:
+        raise HTTPException(404, "Aluno não encontrado.")
+    return {"nome": r.nome, "matricula": r.matricula, "email": r.email, "curso": r.curso}
+
+
+@app.get("/api/aluno/presencas")
+def minhas_presencas(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """Comprovantes: as 20 últimas presenças do aluno (continuam visíveis depois que a chamada fecha)."""
+    rows = db.execute(
+        select(Presenca.id, Presenca.registrado_em, Aula.titulo, Aula.tipo, Aula.local_tipo,
+               Professor.nome.label("professor"))
+        .select_from(Presenca).join(Aula, Aula.id == Presenca.aula_id)
+        .join(Professor, Professor.id == Aula.professor_id)
+        .where(Presenca.aluno_id == u["id"]).order_by(Presenca.id.desc()).limit(20)).all()
+    return [{"id": r.id, "registrado_em": iso(r.registrado_em), "titulo": r.titulo, "tipo": r.tipo or "aula",
+             "local_tipo": r.local_tipo or "dentro", "professor": r.professor} for r in rows]
+
+
 @app.get("/api/aulas/ativas")
 def aulas_ativas(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
     cid = u["cid"] if u.get("tem_cid") else db.scalar(select(Aluno.curso_id).where(Aluno.id == u["id"]))
@@ -697,14 +793,18 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
     if abs(time.time() * 1000 - b.pos_ts) > IDADE_MAX_POSICAO_S * 1000:
         raise HTTPException(422, "Leitura de localização desatualizada. Deixe data e hora do aparelho em "
                                  "modo automático e tente novamente.")
+    ip = ip_cliente(request)
     risco, alertas = avaliar_risco(b)
     if risco >= RISCO_MAX:
+        registrar_tentativa(db, aula_id, u["id"], "gps_suspeito", "; ".join(alertas), b, None, ip)
         raise HTTPException(403, "Sua localização parece falsificada ou inconsistente. Desative apps de "
                                  "localização falsa e use o GPS real do aparelho.")
 
     # 2) geofencing (Haversine)
     dist = haversine(b.latitude, b.longitude, aula.latitude, aula.longitude)
     if dist > aula.raio_metros:
+        registrar_tentativa(db, aula_id, u["id"], "fora_raio",
+                            f"A {round(dist)} m da sala (limite de {round(aula.raio_metros)} m)", b, dist, ip)
         raise HTTPException(403, f"Você está a {round(dist)} m da sala; o limite desta aula é "
                                  f"{round(aula.raio_metros)} m. Aproxime-se e tente novamente.")
 
@@ -715,13 +815,15 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
         dt = max((utcnow() - aware(ult.registrado_em)).total_seconds(), 1)
         d = haversine(b.latitude, b.longitude, ult.latitude, ult.longitude)
         if d > 2000 and dt < 6 * 3600 and d / dt > VELOCIDADE_MAX_MS:
+            registrar_tentativa(db, aula_id, u["id"], "deslocamento",
+                                f"{round(d / 1000, 1)} km em {round(dt / 60)} min desde o último check-in", b, dist, ip)
             raise HTTPException(403, "Deslocamento incompatível com seu último registro de presença. "
                                      "Se for um engano, procure o professor.")
 
     # 4) VPN / proxy (consulta externa, só para quem passou nas etapas anteriores; resultado em cache)
-    ip = ip_cliente(request)
     if VPN_MODO != "off" and ip_e_vpn(ip) is True:
         if VPN_MODO == "bloquear":
+            registrar_tentativa(db, aula_id, u["id"], "vpn", "Conexão por VPN ou proxy", b, dist, ip)
             raise HTTPException(403, "Conexão via VPN ou proxy detectada. Desative a VPN e use o Wi-Fi da "
                                      "instituição ou os dados móveis.")
         alertas.append("IP de VPN/proxy")
@@ -736,6 +838,10 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
         # duplicata do próprio aluno (duplo clique) -> idempotente; senão, o aparelho já foi usado por outro aluno
         if db.scalar(select(Presenca.id).where(Presenca.aula_id == aula_id, Presenca.aluno_id == u["id"])):
             return {"ok": True, "ja_registrado": True, "distancia_m": round(dist, 1), "aula": aula.titulo}
+        outro = db.scalar(select(Aluno.nome).join(Presenca, Presenca.aluno_id == Aluno.id)
+                          .where(Presenca.aula_id == aula_id, Presenca.device_id == b.device_id))
+        registrar_tentativa(db, aula_id, u["id"], "aparelho_repetido",
+                            f"Aparelho já usado por {outro}" if outro else "Aparelho já usado por outro aluno", b, dist, ip)
         raise HTTPException(409, "Este aparelho já foi usado para registrar a presença de outro aluno "
                                  "nesta aula. Cada aluno deve usar o próprio celular.")
     return {"ok": True, "ja_registrado": False, "distancia_m": round(dist, 1), "aula": aula.titulo}
@@ -894,7 +1000,9 @@ def adm_professor_excluir(prof_id: int, u: dict = Depends(so_admin), db: Session
         raise HTTPException(400, "Você não pode excluir a própria conta.")
     if p.email in ADMIN_EMAILS:
         raise HTTPException(400, "Essa conta é da coordenação. Tire o e-mail de ADMIN_EMAILS antes de excluí-la.")
-    db.execute(delete(Presenca).where(Presenca.aula_id.in_(select(Aula.id).where(Aula.professor_id == prof_id))))
+    ids_aulas = select(Aula.id).where(Aula.professor_id == prof_id)
+    db.execute(delete(Tentativa).where(Tentativa.aula_id.in_(ids_aulas)))
+    db.execute(delete(Presenca).where(Presenca.aula_id.in_(ids_aulas)))
     db.execute(delete(Aula).where(Aula.professor_id == prof_id))
     db.execute(delete(Professor).where(Professor.id == prof_id))
     db.commit()
@@ -932,6 +1040,7 @@ def adm_aluno_curso(aluno_id: int, b: AlunoCursoIn, u: dict = Depends(so_admin),
 def adm_aluno_excluir(aluno_id: int, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
     if not db.get(Aluno, aluno_id):
         raise HTTPException(404, "Aluno não encontrado.")
+    db.execute(delete(Tentativa).where(Tentativa.aluno_id == aluno_id))
     db.execute(delete(Presenca).where(Presenca.aluno_id == aluno_id))
     db.execute(delete(Aluno).where(Aluno.id == aluno_id))
     db.commit()
@@ -975,6 +1084,7 @@ def adm_aula_encerrar(aula_id: int, u: dict = Depends(so_admin), db: Session = D
 def adm_aula_excluir(aula_id: int, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
     if not db.get(Aula, aula_id):
         raise HTTPException(404, "Aula não encontrada.")
+    db.execute(delete(Tentativa).where(Tentativa.aula_id == aula_id))
     removidas = db.execute(delete(Presenca).where(Presenca.aula_id == aula_id)).rowcount
     db.execute(delete(Aula).where(Aula.id == aula_id))
     db.commit()
