@@ -65,6 +65,9 @@ try:
 except re.error:
     MATRICULA_RE = re.compile(r"^\d{6,12}$")
 MATRICULA_OBRIGATORIA = os.getenv("MATRICULA_OBRIGATORIA", "1").strip() != "0"  # 0 = desliga a lista (só para testes)
+# Limpeza ÚNICA dos dados de teste na inicialização. Desligada por padrão: só age se esta variável estiver preenchida
+# e ainda não tiver rodado com esse mesmo valor. Para repetir, troque o valor.
+RESET_BANCO = os.getenv("RESET_BANCO", "").strip()
 REGISTRO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/\-]{2,29}$")  # Registro Funcional / ID Docente (ex.: DOC-2026-08)
 
 # Coordenação (área administrativa escondida): só contas de PROFESSOR cujo e-mail esteja em ADMIN_EMAILS.
@@ -256,6 +259,13 @@ class LogSeguranca(Base):
     ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
 
+class ControleSistema(Base):
+    """Marcas internas do sistema (ex.: a limpeza RESET_BANCO já executada). Nunca é apagada pela limpeza."""
+    __tablename__ = "controle_sistema"
+    chave: Mapped[str] = mapped_column(String(60), primary_key=True)
+    valor: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+
+
 def get_db():
     with SessionLocal() as db:
         yield db
@@ -292,6 +302,33 @@ def migrar_esquema():
                         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_alunos_curso_id ON alunos (curso_id)"))
             except Exception as exc:  # outra instância pode ter feito ao mesmo tempo
                 print(f"Migração {tabela}.{nome}:", exc)
+
+
+def resetar_dados_de_teste():
+    """
+    Apaga alunos, professores, aulas, presenças, tentativas, matrículas autorizadas e a auditoria. Mantém os cursos.
+    Roda no máximo UMA vez por valor de RESET_BANCO (o valor fica registrado, em forma de hash, em controle_sistema),
+    então pode deixar a variável cadastrada: reiniciar o servidor não apaga de novo.
+    """
+    if not RESET_BANCO:
+        return
+    marca = "token:" + hashlib.sha256(RESET_BANCO.encode()).hexdigest()[:16]
+    with SessionLocal() as db:
+        if engine.dialect.name == "postgresql":  # vários workers subindo juntos: só um faz a limpeza
+            db.execute(text("SELECT pg_advisory_xact_lock(727274)"))
+        atual = db.get(ControleSistema, "reset_banco")
+        if atual and atual.valor == marca:
+            print("RESET_BANCO: já executado com este valor; nada a fazer.")
+            return
+        for modelo in (Tentativa, Presenca, Aula, Aluno, Professor, MatriculasAutorizadas, LogSeguranca):
+            db.execute(delete(modelo))  # ordem respeita as chaves estrangeiras
+        if atual:
+            atual.valor = marca
+        else:
+            db.add(ControleSistema(chave="reset_banco", valor=marca))
+        db.add(LogSeguranca(acao="reset_banco", detalhe="limpeza dos dados de teste na inicialização", ip="inicializacao"))
+        db.commit()
+    print("RESET_BANCO: dados de teste apagados (cursos mantidos).")
 
 
 def semear_cursos():
@@ -552,6 +589,10 @@ async def lifespan(_: FastAPI):
         semear_cursos()
     except Exception as exc:
         print("Aviso na inicialização do banco:", exc)
+    try:
+        resetar_dados_de_teste()
+    except Exception as exc:
+        print("RESET_BANCO falhou (nada foi apagado):", exc)
     yield
 
 
