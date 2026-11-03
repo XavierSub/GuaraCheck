@@ -89,10 +89,10 @@ textarea{min-height:110px;resize:vertical}
       <div class="mut" id="dica"></div>
       <label id="f-curso" hidden>Curso<select id="curso"><option value="">Selecione seu curso…</option></select></label>
       <label id="f-periodo" hidden>Período / semestre<select id="periodo"><option value="">Selecione seu período…</option></select></label>
-      <label id="f-mat" hidden>Número de matrícula<input id="mat" inputmode="numeric" autocomplete="off" placeholder="Ex.: 202610405"></label>
+      <label id="f-mat" hidden>Matrícula (letras e números)<input id="mat" inputmode="text" autocapitalize="characters" autocomplete="off" placeholder="Ex.: 202610405 ou GTI202610405"></label>
       <label id="f-registro" hidden>Registro Funcional / ID Docente<input id="registro" autocomplete="off" placeholder="Ex.: DOC-2026-08"></label>
       <label id="f-depto" hidden>Departamento / Área<input id="depto" autocomplete="off" placeholder="Ex.: Ciências Exatas e Tecnologia"></label>
-      <label id="f-ref" hidden><span id="ref-rot">Número de matrícula</span><input id="ref" autocomplete="off"></label>
+      <label id="f-ref" hidden><span id="ref-rot">Matrícula</span><input id="ref" autocomplete="off"></label>
       <label id="f-senha">Senha<input id="senha" type="password" autocomplete="current-password" minlength="8" required></label>
       <label id="f-senha2" hidden>Confirmar senha<input id="senha2" type="password" autocomplete="new-password" minlength="8"></label>
       <label id="f-chave" hidden>Chave de Acesso da Coordenação (fornecida pela coordenação)<input id="chave" type="password" autocomplete="off"></label>
@@ -228,7 +228,7 @@ textarea{min-height:110px;resize:vertical}
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const S = {token:null, user:null, perfil:'aluno', modo:'login', aula:null, rows:[], ultimo:0, hist:[], poll:null, timer:null,
-           map:null, marker:null, circle:null, cursos:[], cfg:{dominio_aluno:'alunos.unicerrado.edu.br', dominios_professor:['unicerrado.edu.br'], matricula_regex:'^\\d{6,12}$', coordenacao_aberta:false}, tick:0};
+           map:null, marker:null, circle:null, cursos:[], cfg:{dominio_aluno:'alunos.unicerrado.edu.br', dominios_professor:['unicerrado.edu.br'], matricula_regex:'^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$', coordenacao_aberta:false}, tick:0};
 const store = {get:k=>{try{return localStorage.getItem(k)}catch{return null}}, set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}, del:k=>{try{localStorage.removeItem(k)}catch{}}};
 
 const KT = 'gc_token', KU = 'gc_user';
@@ -303,8 +303,8 @@ function renderAuth(){
   $('#f-nome').hidden = !reg; $('#f-curso').hidden = !(reg && alu); $('#f-periodo').hidden = !(reg && alu); $('#f-mat').hidden = !(reg && alu);
   $('#f-registro').hidden = !(reg && prof); $('#f-depto').hidden = !(reg && prof); $('#f-chave').hidden = !(reg && !alu);
   $('#f-senha').hidden = esq; $('#f-senha2').hidden = !reg; $('#f-ref').hidden = !esq; $('#p-esqueci').hidden = S.modo !== 'login' || adm;
-  $('#ref-rot').textContent = alu ? 'Número de matrícula' : 'Registro Funcional / ID Docente';
-  $('#ref').placeholder = alu ? 'Ex.: 202610405' : 'Ex.: DOC-2026-08';
+  $('#ref-rot').textContent = alu ? 'Matrícula' : 'Registro Funcional / ID Docente';
+  $('#ref').placeholder = alu ? 'Ex.: 202610405 ou GTI202610405' : 'Ex.: DOC-2026-08';
   $('#btn-auth').textContent = esq ? 'Enviar pedido à coordenação' : reg ? 'Criar conta' : 'Entrar';
   $('#toggle').hidden = adm && S.modo === 'login' && !S.cfg.coordenacao_aberta;
   $('#toggle').textContent = S.modo === 'login' ? (adm ? 'Primeiro acesso da coordenação · Criar conta' : 'Primeiro acesso · Criar conta') : 'Já tenho conta · Entrar';
@@ -356,9 +356,9 @@ $('#form-auth').onsubmit = async e => {
     if (alu){
       if (!$('#curso').value) return msg(m, 'Selecione o seu curso.', 'err');
       if (!$('#periodo').value) return msg(m, 'Selecione o seu período (1º ao 10º).', 'err');
-      const mat = $('#mat').value.trim(); let okMat;
-      try { okMat = new RegExp(S.cfg.matricula_regex || '^\\d{6,12}$').test(mat); } catch { okMat = /^\d{6,12}$/.test(mat); }
-      if (!okMat) return msg(m, 'Matrícula inválida. Digite só os números da sua matrícula (ex.: 202610405).', 'err');
+      const mat = $('#mat').value.replace(/\s+/g, '').toUpperCase(); let okMat;
+      try { okMat = new RegExp(S.cfg.matricula_regex || '^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$').test(mat); } catch { okMat = /^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$/.test(mat); }
+      if (!okMat) return msg(m, 'Matrícula inválida. Use letras e números, sem espaços (ex.: 202610405 ou GTI202610405).', 'err');
       body.curso_id = +$('#curso').value; body.periodo = +$('#periodo').value; body.matricula = mat;
     } else {
       const registro = $('#registro').value.trim(), depto = $('#depto').value.trim();
@@ -622,7 +622,7 @@ const ACAO = {exportar_chamada:'Exportou chamada (CSV)', excluir_aula:'Excluiu a
 const ADM_ABAS = {
   async resumo(){
     const r = await api('/admin/resumo');
-    const aviso = !r.matricula_obrigatoria ? '<div class="msg err">A conferência da lista de matrículas autorizadas está DESLIGADA (MATRICULA_OBRIGATORIA=0). Qualquer matrícula numérica é aceita.</div>'
+    const aviso = !r.matricula_obrigatoria ? '<div class="msg">A lista de matrículas autorizadas está DESLIGADA por enquanto: qualquer matrícula numérica pode se cadastrar. Para ligar de novo, defina MATRICULA_OBRIGATORIA=1 na Render.</div>'
       : r.matriculas_autorizadas === 0 ? '<div class="msg err">Nenhuma matrícula autorizada ainda: alunos novos não conseguem criar conta. Importe a lista na aba Matrículas.</div>' : '';
     const pend = r.pedidos_senha_pendentes ? `<div class="msg err">${r.pedidos_senha_pendentes} pedido(s) de nova senha aguardando. Abra a aba Pedidos de senha.</div>` : '';
     return aviso + pend + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
@@ -659,9 +659,9 @@ const ADM_ABAS = {
   },
   async matriculas(){
     const [cs, r] = await Promise.all([api('/cursos'), api(`/admin/matriculas?q=${encodeURIComponent(ADM.q)}&pagina=${ADM.pag}`)]);
-    return `<h3>Importar matrículas autorizadas</h3>
+    return (r.obrigatoria ? '' : '<div class="msg">A lista está DESLIGADA por enquanto: qualquer matrícula numérica pode se cadastrar. Você já pode importar a lista; ela só passa a valer quando você definir MATRICULA_OBRIGATORIA=1 na Render.</div>') + `<h3>Importar matrículas autorizadas</h3>
       <p class="mut">Cole uma matrícula por linha (ou <code>matrícula;nome do curso</code>). Só quem tem a matrícula nesta lista consegue criar conta, e cada matrícula vale para um único e-mail.</p>
-      <textarea id="mat-texto" placeholder="202610405&#10;202610406;Engenharia de Software"></textarea>
+      <textarea id="mat-texto" placeholder="202610405&#10;GTI202610406&#10;202610407;Engenharia de Software"></textarea>
       <div class="row"><select id="mat-curso"><option value="">Curso: o que estiver na linha (ou qualquer)</option>${opcCursos(cs, 0)}</select><button class="btn" data-act="mat-imp">Importar</button></div>
       <h3 style="margin-top:16px">Lista (${r.total_geral} no total · ${r.utilizadas} já vinculadas)</h3>
       <div class="row"><input id="adm-q" value="${esc(ADM.q)}" placeholder="Buscar matrícula"><button class="btn" data-act="busca-mat">Buscar</button></div>` +

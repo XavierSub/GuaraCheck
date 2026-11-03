@@ -60,11 +60,15 @@ VELOCIDADE_MAX_MS = float(os.getenv("VELOCIDADE_MAX_MS", "70"))  # ~250 km/h ent
 LIMITE_PRESENCAS_POR_CONSULTA = 2000
 
 # Matrícula (Pasta 1): formato numérico + lista pré-aprovada (tabela MatriculasAutorizadas)
+# Matrícula: letras e números (ex.: 202610405 ou GTI202610405), de 4 a 30 caracteres, sem espaços. Guardada em MAIÚSCULAS.
+MATRICULA_PADRAO = r"^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$"
 try:
-    MATRICULA_RE = re.compile(os.getenv("MATRICULA_REGEX", r"^\d{6,12}$"))
+    MATRICULA_RE = re.compile(os.getenv("MATRICULA_REGEX", MATRICULA_PADRAO))
 except re.error:
-    MATRICULA_RE = re.compile(r"^\d{6,12}$")
-MATRICULA_OBRIGATORIA = os.getenv("MATRICULA_OBRIGATORIA", "1").strip() != "0"  # 0 = desliga a lista (só para testes)
+    MATRICULA_RE = re.compile(MATRICULA_PADRAO)
+# Conferência da lista de matrículas autorizadas. DESLIGADA por padrão por enquanto (qualquer matrícula numérica
+# válida pode se cadastrar). Para ligar de novo: MATRICULA_OBRIGATORIA=1 (importe a lista na coordenação antes).
+MATRICULA_OBRIGATORIA = os.getenv("MATRICULA_OBRIGATORIA", "0").strip().lower() in ("1", "true", "sim", "on")
 # Limpeza ÚNICA dos dados de teste na inicialização. Desligada por padrão: só age se esta variável estiver preenchida
 # e ainda não tiver rodado com esse mesmo valor. Para repetir, troque o valor.
 RESET_BANCO = os.getenv("RESET_BANCO", "").strip()
@@ -438,8 +442,13 @@ def limitar_tentativas(chave: str, maximo: int = 5, janela: int = 600):
 EMAIL_RE = re.compile(r"^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$")
 
 
-def matricula_valida(m: str) -> bool:
-    return bool(MATRICULA_RE.fullmatch(m or ""))
+def normalizar_matricula(m: Optional[str]) -> str:
+    """Tira espaços e põe em maiúsculas, para 'gti 2026' e 'GTI2026' serem a mesma matrícula."""
+    return re.sub(r"\s+", "", m or "").upper()
+
+
+def matricula_valida(m: Optional[str]) -> bool:
+    return bool(MATRICULA_RE.fullmatch(normalizar_matricula(m)))
 
 
 def log_seg(db: Session, usuario_id: Optional[int], acao: str, detalhe: str = "", ip: Optional[str] = None,
@@ -664,9 +673,9 @@ def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
             raise HTTPException(422, "Selecione o seu curso.")
         if not b.periodo:
             raise HTTPException(422, "Selecione o seu período (1º ao 10º).")
-        mat = (b.matricula or "").strip()
+        mat = normalizar_matricula(b.matricula)
         if not matricula_valida(mat):
-            raise HTTPException(422, "Matrícula inválida. Digite só os números da sua matrícula (ex.: 202610405).")
+            raise HTTPException(422, "Matrícula inválida. Use letras e números, sem espaços (ex.: 202610405 ou GTI202610405).")
         dono = db.scalar(select(Aluno.email).where(Aluno.matricula == mat))
         if dono and dono != email:
             raise HTTPException(409, "Esta matrícula já está vinculada a outro e-mail. Procure a coordenação.")
@@ -725,7 +734,7 @@ def esqueci_senha(b: EsqueciIn, request: Request, db: Session = Depends(get_db))
     limitar_tentativas("esq-em:" + email, 3, 900)
     if b.perfil == "aluno":
         u = db.scalar(select(Aluno).where(Aluno.email == email))
-        confere = bool(u and u.matricula and u.matricula == ref)
+        confere = bool(u and u.matricula and u.matricula == normalizar_matricula(ref))
     else:
         u = db.scalar(select(Professor).where(Professor.email == email))
         confere = bool(u and u.registro_funcional and u.registro_funcional.lower() == ref.lower())
@@ -1454,7 +1463,7 @@ def adm_alunos(q: str = "", curso_id: int = 0, pagina: int = 1,
     cond = []
     if q.strip():
         like = f"%{q.strip().lower()}%"
-        cond.append(or_(func.lower(Aluno.nome).like(like), Aluno.email.like(like), Aluno.matricula.like(like)))
+        cond.append(or_(func.lower(Aluno.nome).like(like), Aluno.email.like(like), func.lower(Aluno.matricula).like(like)))
     if curso_id:
         cond.append(Aluno.curso_id == curso_id)
     total = _contar(db, Aluno, *cond)
@@ -1523,10 +1532,10 @@ def adm_senha(b: SenhaIn, request: Request, u: dict = Depends(so_admin), db: Ses
 @app.get("/api/admin/matriculas")
 def adm_matriculas(q: str = "", pagina: int = 1, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
     M = MatriculasAutorizadas
-    cond = [M.matricula.like(f"%{q.strip()}%")] if q.strip() else []
+    cond = [M.matricula.like(f"%{normalizar_matricula(q)}%")] if q.strip() else []
     rows = db.execute(select(M, Curso.nome).outerjoin(Curso, Curso.id == M.curso_id).where(*cond)
                       .order_by(M.matricula).limit(50).offset((max(pagina, 1) - 1) * 50)).all()
-    return {"total": _contar(db, M, *cond), "total_geral": _contar(db, M),
+    return {"obrigatoria": MATRICULA_OBRIGATORIA, "total": _contar(db, M, *cond), "total_geral": _contar(db, M),
             "utilizadas": _contar(db, M, M.utilizada.is_(True)),
             "itens": [{"id": m.id, "matricula": m.matricula, "curso": c, "utilizada": m.utilizada} for m, c in rows]}
 
@@ -1547,7 +1556,7 @@ def adm_matriculas_importar(b: MatriculasIn, request: Request, u: dict = Depends
     novas, invalidas = {}, []
     for i, linha in enumerate(linhas, 1):
         partes = [p.strip() for p in re.split(r"[;,\t]", linha)]
-        mat, cid = partes[0], padrao
+        mat, cid = normalizar_matricula(partes[0]), padrao
         if not matricula_valida(mat):
             invalidas.append(f"linha {i}: matrícula inválida ({mat[:20]})")
             continue
