@@ -31,8 +31,8 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid v
 .btn.stop{background:var(--err);color:#fff}
 .link{background:none;border:0;color:var(--pri);font:inherit;font-weight:600;cursor:pointer;padding:0;text-align:left}
 .link.del{color:var(--err);font-weight:400;font-size:14px}
-.tabs{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:6px}
-.tab{padding:11px;border:0;background:transparent;color:var(--mut);font:inherit;font-weight:600;cursor:pointer}
+.tabs{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:6px}
+.tab{padding:11px 4px;border:0;background:transparent;color:var(--mut);font:inherit;font-size:15px;font-weight:600;cursor:pointer}
 .tab.on{background:var(--pri);color:var(--pri-ink)}
 .msg{padding:10px 12px;border-radius:8px;margin:12px 0;font-size:15px}
 .msg.err{background:var(--errbg);color:var(--err)}.msg.ok{background:var(--okbg);color:var(--ok)}
@@ -55,6 +55,12 @@ li{display:flex;justify-content:space-between;align-items:center;gap:10px;paddin
 .atabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.atabs button{padding:8px 14px;border:1px solid var(--line);border-radius:20px;background:transparent;color:var(--ink);font:inherit;cursor:pointer}.atabs button.on{background:var(--pri);color:var(--pri-ink);border-color:var(--pri)}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}.stat{border:1px solid var(--line);border-radius:10px;padding:12px;font-size:14px;color:var(--mut)}.stat b{display:block;font-size:28px;color:var(--pri)}
 textarea{min-height:110px;resize:vertical}
+.overlay{position:fixed;inset:0;z-index:50;background:var(--bg);overflow:auto;padding:16px;display:flex;justify-content:center;align-items:flex-start}
+.overlay-box{width:100%;max-width:560px;background:var(--card);border:2px solid var(--pri);border-radius:14px;padding:20px}
+.m-nome{font-size:28px;font-weight:800;line-height:1.15;margin:14px 0 4px}
+.m-lin{margin:6px 0;font-size:17px}
+.m-frase{margin:14px 0;padding:12px;border-left:4px solid var(--pri);background:var(--okbg);border-radius:6px;font-size:16px}
+.m-rel{font-size:30px;font-weight:800;color:var(--pri);font-variant-numeric:tabular-nums}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}.row input,.row select{width:auto;flex:1;min-width:140px}td select{width:auto;padding:6px}
 @media(max-width:560px){.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}}
 </style>
@@ -73,8 +79,9 @@ textarea{min-height:110px;resize:vertical}
     <h2>Registre sua presença pelo celular</h2>
     <p class="mut">Entre com seu e-mail institucional.</p>
     <div class="tabs">
-      <button class="tab on" data-p="aluno" type="button">Sou aluno</button>
-      <button class="tab" data-p="professor" type="button">Sou professor</button>
+      <button class="tab on" data-p="aluno" type="button">Aluno</button>
+      <button class="tab" data-p="professor" type="button">Professor</button>
+      <button class="tab" data-p="admin" type="button">Coordenação</button>
     </div>
     <form id="form-auth" novalidate>
       <label id="f-nome" hidden>Nome completo<input id="nome" autocomplete="name"></label>
@@ -104,7 +111,7 @@ textarea{min-height:110px;resize:vertical}
   <div class="msg" id="msg-aluno" hidden></div>
   <div id="aulas"></div>
   <h2 style="margin-top:22px">Meus comprovantes</h2>
-  <p class="mut">Mostre esta lista ao professor se ele pedir uma confirmação da sua presença.</p>
+  <p class="mut">Para provar ao professor que você fez a chamada, toque em <b>Mostrar ao professor</b>: o comprovante abre em tela cheia, com seus dados, o evento, o horário e um relógio ao vivo.</p>
   <div id="comprov"></div>
 </section>
 
@@ -187,19 +194,7 @@ textarea{min-height:110px;resize:vertical}
     <ul id="hist"></ul>
   </div>
 </section>
-<!-- ============ COORDENAÇÃO (só aparece na URL escondida) ============ -->
-<section id="v-admlogin" class="auth" hidden>
-  <div class="card">
-    <h2>Coordenação</h2>
-    <p class="mut">Acesso restrito. Entre com a sua conta de professor autorizada.</p>
-    <form id="form-adm" novalidate>
-      <label>E-mail<input id="adm-email" type="email" autocomplete="username"></label>
-      <label>Senha<input id="adm-senha" type="password" autocomplete="current-password"></label>
-      <div class="msg" id="msg-admlogin" hidden></div>
-      <button class="btn big" id="btn-adm" type="submit">Entrar</button>
-    </form>
-  </div>
-</section>
+<!-- ============ PAINEL DA COORDENAÇÃO (o login fica na aba Coordenação da tela inicial) ============ -->
 <section id="v-admin" hidden>
   <h2>Painel da coordenação</h2>
   <div class="atabs" id="adm-tabs">
@@ -212,20 +207,35 @@ textarea{min-height:110px;resize:vertical}
 </section>
 </main>
 
+<div id="mostrar" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="m-titulo">
+  <div class="overlay-box">
+    <div class="ok-badge" id="m-titulo">✓ PRESENÇA REGISTRADA</div>
+    <div class="m-nome" id="m-nome"></div>
+    <div class="m-lin" id="m-dados"></div>
+    <div class="m-lin" id="m-evento"></div>
+    <div class="m-lin" id="m-quando"></div>
+    <p class="m-frase" id="m-frase"></p>
+    <div class="mut">Hora agora neste celular</div>
+    <div class="m-rel" id="m-rel"></div>
+    <p class="mut">O professor confere o protocolo na coluna "Nº" da lista de presentes.</p>
+    <button class="btn alt big" id="m-fechar" type="button">Fechar</button>
+  </div>
+</div>
+
 <!--ADMIN-->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const S = {token:null, user:null, perfil:'aluno', modo:'login', aula:null, rows:[], ultimo:0, hist:[], poll:null, timer:null,
-           map:null, marker:null, circle:null, cursos:[], cfg:{dominio_aluno:'alunos.unicerrado.edu.br', dominios_professor:['unicerrado.edu.br'], matricula_regex:'^\\d{6,12}$'}, tick:0};
+           map:null, marker:null, circle:null, cursos:[], cfg:{dominio_aluno:'alunos.unicerrado.edu.br', dominios_professor:['unicerrado.edu.br'], matricula_regex:'^\\d{6,12}$', coordenacao_aberta:false}, tick:0};
 const store = {get:k=>{try{return localStorage.getItem(k)}catch{return null}}, set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}, del:k=>{try{localStorage.removeItem(k)}catch{}}};
 
-const KT = window.GC_ADMIN ? 'gc_atoken' : 'gc_token', KU = window.GC_ADMIN ? 'gc_auser' : 'gc_user'; // sessões separadas
+const KT = 'gc_token', KU = 'gc_user';
 const PERIODOS = Array.from({length:10}, (_, i) => i + 1);
 const rotulo = a => `${a.tipo === 'palestra' ? 'Palestra' : 'Aula'} · ${a.local_tipo === 'fora' ? 'Fora da faculdade' : 'Dentro da faculdade'} · ${a.curso || 'Todos os cursos'}${a.periodo ? ' · ' + a.periodo + 'º período' : ''}`;
 function msg(el, txt, tipo){ el.textContent = txt || ''; el.className = 'msg ' + (tipo || ''); el.hidden = !txt; }
-function show(v){ ['auth','aluno','prof','admin','admlogin'].forEach(x => $('#v-'+x).hidden = x !== v); $('#user').hidden = v === 'auth' || v === 'admlogin'; }
+function show(v){ ['auth','aluno','prof','admin'].forEach(x => $('#v-'+x).hidden = x !== v); $('#user').hidden = v === 'auth'; }
 
 async function api(path, {method='GET', body} = {}){
   const h = {'Content-Type':'application/json'}; if (S.token) h.Authorization = 'Bearer ' + S.token;
@@ -287,18 +297,21 @@ async function fpHash(){
 
 /* ---------------- Login / cadastro ---------------- */
 function renderAuth(){
-  const reg = S.modo === 'reg', alu = S.perfil === 'aluno';
+  const reg = S.modo === 'reg', esq = S.modo === 'esqueci', alu = S.perfil === 'aluno', prof = S.perfil === 'professor', adm = S.perfil === 'admin';
+  const dp = '@' + S.cfg.dominios_professor[0];
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.p === S.perfil));
   $('#f-nome').hidden = !reg; $('#f-curso').hidden = !(reg && alu); $('#f-periodo').hidden = !(reg && alu); $('#f-mat').hidden = !(reg && alu);
-  $('#f-registro').hidden = !(reg && !alu); $('#f-depto').hidden = !(reg && !alu); $('#f-chave').hidden = !(reg && !alu);
-  const esq = S.modo === 'esqueci';
-  $('#f-senha').hidden = esq; $('#f-senha2').hidden = !reg; $('#f-ref').hidden = !esq; $('#p-esqueci').hidden = S.modo !== 'login';
+  $('#f-registro').hidden = !(reg && prof); $('#f-depto').hidden = !(reg && prof); $('#f-chave').hidden = !(reg && !alu);
+  $('#f-senha').hidden = esq; $('#f-senha2').hidden = !reg; $('#f-ref').hidden = !esq; $('#p-esqueci').hidden = S.modo !== 'login' || adm;
   $('#ref-rot').textContent = alu ? 'Número de matrícula' : 'Registro Funcional / ID Docente';
   $('#ref').placeholder = alu ? 'Ex.: 202610405' : 'Ex.: DOC-2026-08';
   $('#btn-auth').textContent = esq ? 'Enviar pedido à coordenação' : reg ? 'Criar conta' : 'Entrar';
-  $('#toggle').textContent = S.modo === 'login' ? 'Primeiro acesso · Criar conta' : 'Já tenho conta · Entrar';
+  $('#toggle').hidden = adm && S.modo === 'login' && !S.cfg.coordenacao_aberta;
+  $('#toggle').textContent = S.modo === 'login' ? (adm ? 'Primeiro acesso da coordenação · Criar conta' : 'Primeiro acesso · Criar conta') : 'Já tenho conta · Entrar';
   $('#senha').autocomplete = reg ? 'new-password' : 'current-password';
-  $('#dica').textContent = alu ? 'Alunos: nome@' + S.cfg.dominio_aluno : 'Professores: nome@' + S.cfg.dominios_professor[0];
+  $('#dica').textContent = alu ? 'Alunos: nome@' + S.cfg.dominio_aluno
+    : adm ? (reg ? 'Coordenação: e-mail ' + dp + '. Use a Chave de Acesso da Coordenação (CHAVE_MASTER).' : 'Coordenação: e-mail ' + dp + '. Esqueceu a senha? Outra pessoa da coordenação redefine no painel.')
+    : 'Professores: nome' + dp;
   msg($('#msg-auth'), '');
 }
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => { S.perfil = t.dataset.p; renderAuth(); });
@@ -311,7 +324,7 @@ $('#form-auth').onsubmit = async e => {
   const alu = S.perfil === 'aluno', reg = S.modo === 'reg', email = $('#email').value.trim().toLowerCase(), dom = email.split('@')[1] || '';
   if (alu ? dom !== S.cfg.dominio_aluno : !S.cfg.dominios_professor.includes(dom))
     return msg(m, alu ? 'Alunos devem usar o e-mail @' + S.cfg.dominio_aluno
-                      : 'Professores devem usar o e-mail @' + S.cfg.dominios_professor.join(' ou @'), 'err');
+                      : (S.perfil === 'admin' ? 'A coordenação deve usar o e-mail @' : 'Professores devem usar o e-mail @') + S.cfg.dominios_professor.join(' ou @'), 'err');
   if (S.modo === 'esqueci'){ // sem e-mail: o pedido vai para a coordenação, que define uma senha provisória
     const ref = $('#ref').value.trim();
     if (!ref) return msg(m, alu ? 'Informe o seu número de matrícula.' : 'Informe o seu Registro Funcional / ID Docente.', 'err');
@@ -322,6 +335,21 @@ $('#form-auth').onsubmit = async e => {
   }
   if ($('#senha').value.length < 8) return msg(m, 'A senha precisa ter pelo menos 8 caracteres.', 'err');
   if (reg && $('#senha2').value !== $('#senha').value) return msg(m, 'As senhas não conferem. Digite a mesma senha nos dois campos.', 'err');
+  if (S.perfil === 'admin'){ // coordenação: login próprio, ou primeiro acesso com a chave
+    let corpo = {email, senha:$('#senha').value};
+    if (reg){
+      if ($('#nome').value.trim().length < 3) return msg(m, 'Informe o seu nome completo.', 'err');
+      if (!$('#chave').value.trim()) return msg(m, 'Informe a Chave de Acesso da Coordenação.', 'err');
+      corpo = {...corpo, nome:$('#nome').value.trim(), confirmar_senha:$('#senha2').value, chave_master:$('#chave').value.trim()};
+    }
+    const b = $('#btn-auth'); b.disabled = true;
+    try {
+      const r = await api(reg ? '/admin/registro' : '/admin/login', {method:'POST', body:corpo});
+      S.token = r.token; S.user = r.usuario; store.set(KT, r.token); store.set(KU, JSON.stringify(r.usuario));
+      $('#senha').value = ''; $('#senha2').value = ''; $('#chave').value = ''; iniciar();
+    } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; }
+    return;
+  }
   const body = {perfil:S.perfil, email, senha:$('#senha').value};
   if (reg){
     body.nome = $('#nome').value.trim(); body.confirmar_senha = $('#senha2').value;
@@ -361,8 +389,7 @@ function sair(aviso){
   clearInterval(S.timer); clearInterval(S.poll);
   S.token = S.user = S.aula = null; store.del(KT); store.del(KU);
   $('#painel').hidden = true; S.modo = 'login';
-  if (window.GC_ADMIN){ show('admlogin'); if (aviso) msg($('#msg-admlogin'), aviso, 'err'); }
-  else { renderAuth(); show('auth'); if (aviso) msg($('#msg-auth'), aviso, 'err'); }
+  fecharMostrar(); renderAuth(); show('auth'); if (aviso) msg($('#msg-auth'), aviso, 'err');
 }
 $('#btn-sair').onclick = () => sair();
 
@@ -398,13 +425,34 @@ async function carregarComprovantes(destacar){
   const box = $('#comprov');
   try {
     const [me, l] = await Promise.all([api('/me'), api('/aluno/presencas')]);
+    S.me = me; S.comp = l;
     box.innerHTML = l.length ? l.map((p, i) => `<article class="card comp${destacar && i === 0 ? ' novo' : ''}">
       <h3>✓ Presença registrada · Protocolo nº ${p.id}</h3>
       <p>O aluno <b>${esc(me.nome)}</b>${me.matricula ? `, matrícula <b>${esc(me.matricula)}</b>` : ''}${me.curso ? `, do curso de ${esc(me.curso)}` : ''}${me.periodo ? `, ${me.periodo}º período` : ''}, registrou presença em <b>${esc(p.titulo)}</b>${p.disciplina ? ` (disciplina ${esc(p.disciplina)})` : ''} (${p.tipo === 'palestra' ? 'palestra' : 'aula'} · ${p.local_tipo === 'fora' ? 'fora da faculdade' : 'dentro da faculdade'}), com o(a) prof. ${esc(p.professor)}, em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.</p>
+      <button class="btn" type="button" data-m="${i}">Mostrar ao professor</button>
     </article>`).join('') : '<div class="card vazio mut">Você ainda não registrou nenhuma presença.</div>';
     if (destacar) box.scrollIntoView({behavior:'smooth', block:'start'});
   } catch (x) { box.innerHTML = `<div class="msg err">${esc(x.message)}</div>`; }
 }
+
+/* Comprovante em tela cheia para o aluno mostrar ao professor. O relógio ao vivo mostra que a tela não é um print antigo. */
+function mostrarAoProfessor(i){
+  const p = S.comp && S.comp[i], me = S.me; if (!p || !me) return;
+  const q = new Date(p.registrado_em), data = q.toLocaleDateString('pt-BR'), hora = q.toLocaleTimeString('pt-BR');
+  const tipo = p.tipo === 'palestra' ? 'Palestra' : 'Aula', onde = p.local_tipo === 'fora' ? 'fora da faculdade' : 'dentro da faculdade';
+  $('#m-nome').textContent = me.nome;
+  $('#m-dados').textContent = ['Matrícula ' + (me.matricula || '—'), me.curso, me.periodo ? me.periodo + 'º período' : null].filter(Boolean).join(' · ');
+  $('#m-evento').textContent = `${tipo}: ${p.titulo}${p.disciplina ? ' (' + p.disciplina + ')' : ''} · ${onde} · Prof. ${p.professor}`;
+  $('#m-quando').textContent = `Registrado em ${data} às ${hora} · Protocolo nº ${p.id}`;
+  $('#m-frase').textContent = `Eu, ${me.nome}, matrícula ${me.matricula || '—'}${me.curso ? ', do curso de ' + me.curso : ''}${me.periodo ? ' (' + me.periodo + 'º período)' : ''}, registrei presença no evento "${p.titulo}"${p.disciplina ? ', disciplina ' + p.disciplina : ''}, em ${data} às ${hora}.`;
+  const tic = () => { $('#m-rel').textContent = new Date().toLocaleTimeString('pt-BR'); }; tic();
+  clearInterval(S.relogio); S.relogio = setInterval(tic, 1000);
+  $('#mostrar').hidden = false; document.body.style.overflow = 'hidden';
+}
+function fecharMostrar(){ clearInterval(S.relogio); $('#mostrar').hidden = true; document.body.style.overflow = ''; }
+$('#m-fechar').onclick = fecharMostrar;
+document.addEventListener('keydown', e => { if (e.key === 'Escape') fecharMostrar(); });
+$('#comprov').addEventListener('click', e => { const b = e.target.closest('button[data-m]'); if (b) mostrarAoProfessor(+b.dataset.m); });
 
 /* ---------------- Professor: mapa e abertura ---------------- */
 function initMapa(){
@@ -559,14 +607,6 @@ $('#p-tabs').onclick = e => {
 };
 
 /* ---------------- Coordenação ---------------- */
-$('#form-adm').onsubmit = async e => {
-  e.preventDefault(); const m = $('#msg-admlogin'), b = $('#btn-adm'); msg(m, ''); b.disabled = true;
-  try {
-    const r = await api('/admin/login', {method:'POST', body:{email:$('#adm-email').value.trim().toLowerCase(), senha:$('#adm-senha').value}});
-    S.token = r.token; S.user = r.usuario; store.set(KT, r.token); store.set(KU, JSON.stringify(r.usuario));
-    $('#adm-senha').value = ''; iniciar();
-  } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; }
-};
 const ADM = {aba:'resumo', pag:1, q:'', curso:0};
 const tb = (cab, linhas) => `<div class="scroll"><table><thead><tr>${cab.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${linhas.join('') || `<tr><td colspan="${cab.length}" class="mut">Nada por aqui.</td></tr>`}</tbody></table></div>`;
 const dh = d => d ? new Date(d).toLocaleString('pt-BR') : '—';
@@ -577,7 +617,7 @@ const pager = (total, sufixo) => { const n = Math.max(1, Math.ceil(total / 50));
     <button class="btn alt" data-act="pag" data-v="1"${ADM.pag >= n ? ' disabled' : ''}>Próxima ›</button></div>`; };
 const ACAO = {exportar_chamada:'Exportou chamada (CSV)', excluir_aula:'Excluiu aula', excluir_todas_aulas:'Excluiu todas as aulas', excluir_aula_admin:'Coordenação excluiu aula',
   pedido_senha:'Pediu nova senha', login_admin:'Login da coordenação', login_admin_falha:'Falha de login da coordenação', cadastro_professor:'Professor se cadastrou', criar_professor:'Coordenação criou professor',
-  excluir_professor:'Excluiu professor', professor_ativo:'Ativou/desativou professor', criar_curso:'Criou curso', curso_ativo:'Ativou/desativou curso', editar_aluno:'Editou aluno',
+  excluir_professor:'Excluiu professor', criar_coordenacao:'Criou conta da coordenação', professor_coordenacao:'Mudou papel na coordenação', professor_ativo:'Ativou/desativou professor', criar_curso:'Criou curso', curso_ativo:'Ativou/desativou curso', editar_aluno:'Editou aluno',
   excluir_aluno:'Excluiu aluno', redefinir_senha:'Redefiniu senha', importar_matriculas:'Importou matrículas', excluir_matricula:'Excluiu matrícula autorizada'};
 const ADM_ABAS = {
   async resumo(){
@@ -597,10 +637,11 @@ const ADM_ABAS = {
   },
   async professores(){
     const l = await api('/admin/professores');
-    return `<h3>Criar conta de professor</h3><div class="row"><input id="np-nome" placeholder="Nome completo"><input id="np-email" type="email" placeholder="nome@unicerrado.edu.br"></div>
-      <div class="row"><input id="np-reg" placeholder="Registro funcional (DOC-2026-08)"><input id="np-depto" placeholder="Departamento / Área"><input id="np-senha" type="password" placeholder="Senha provisória (mín. 8)"><button class="btn" data-act="prof-add">Criar conta</button></div>
+    return `<h3>Criar conta de professor ou da coordenação</h3><div class="row"><input id="np-nome" placeholder="Nome completo"><input id="np-email" type="email" placeholder="nome@unicerrado.edu.br"></div>
+      <div class="row"><input id="np-reg" placeholder="Registro funcional (DOC-2026-08)"><input id="np-depto" placeholder="Departamento / Área"><input id="np-senha" type="password" placeholder="Senha provisória (mín. 8)"><label class="mut" style="margin:0;display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" id="np-coord" style="width:auto;flex:none;min-width:0"> Conta da coordenação</label><button class="btn" data-act="prof-add">Criar conta</button></div>
       <h3 style="margin-top:16px">Professores</h3>` + tb(['Nome','E-mail','Registro','Departamento','Aulas','Situação',''], l.map(p => `<tr><td>${esc(p.nome)}${p.admin ? ' <span class="mut">(coordenação)</span>' : ''}</td><td>${esc(p.email)}</td><td>${esc(p.registro_funcional || '—')}</td><td>${esc(p.departamento || '—')}</td><td>${p.aulas}</td><td>${p.ativo ? 'Ativo' : 'Desativado'}</td>
       <td><button class="link" data-act="prof-tog" data-id="${p.id}" data-v="${p.ativo ? 0 : 1}">${p.ativo ? 'Desativar' : 'Reativar'}</button> ·
+      ${p.fixo_env ? '' : `<button class="link" data-act="prof-coord" data-id="${p.id}" data-v="${p.admin ? 0 : 1}">${p.admin ? 'Tirar da coordenação' : 'Tornar coordenação'}</button> ·`}
       <button class="link" data-act="senha" data-perfil="professor" data-id="${p.id}">Redefinir senha</button> ·
       <button class="link del" data-act="prof-del" data-id="${p.id}" data-t="${esc(p.nome)}" data-n="${p.aulas}">Excluir</button></td></tr>`));
   },
@@ -661,11 +702,13 @@ $('#adm-corpo').onclick = async e => {
     if (act === 'curso-add'){ const nome = $('#novo-curso').value.trim(); if (!nome) return; await api('/admin/cursos', {method:'POST', body:{nome, departamento:$('#novo-depto').value.trim() || null}}); }
     else if (act === 'curso-tog') await api(`/admin/cursos/${id}`, {method:'PATCH', body:{ativo:v === '1'}});
     else if (act === 'prof-tog') await api(`/admin/professores/${id}`, {method:'PATCH', body:{ativo:v === '1'}});
+    else if (act === 'prof-coord') await api(`/admin/professores/${id}/coordenacao`, {method:'PATCH', body:{ativo:v === '1'}});
     else if (act === 'prof-add'){
       const nome = $('#np-nome').value.trim(), email = $('#np-email').value.trim().toLowerCase(), senha = $('#np-senha').value,
-            registro_funcional = $('#np-reg').value.trim(), departamento = $('#np-depto').value.trim();
-      if (!nome || !email || !registro_funcional || !departamento || senha.length < 8) return msg(m, 'Preencha nome, e-mail, registro funcional, departamento e uma senha com 8 caracteres ou mais.', 'err');
-      await api('/admin/professores', {method:'POST', body:{nome, email, senha, registro_funcional, departamento}});
+            registro_funcional = $('#np-reg').value.trim(), departamento = $('#np-depto').value.trim(), coordenacao = $('#np-coord').checked;
+      if (!nome || !email || senha.length < 8 || (!coordenacao && (!registro_funcional || !departamento)))
+        return msg(m, 'Preencha nome, e-mail e senha (8 caracteres ou mais). Para professor, preencha também registro funcional e departamento.', 'err');
+      await api('/admin/professores', {method:'POST', body:{nome, email, senha, registro_funcional:registro_funcional || null, departamento:departamento || null, coordenacao}});
       await admRender(); return msg(m, 'Conta criada. Informe a senha provisória ao professor.', 'ok');
     }
     else if (act === 'prof-del'){ if (!confirm(`Excluir o professor "${t}", as ${n} aula(s) dele e todas as presenças dessas aulas? Não pode ser desfeito.`)) return; await api(`/admin/professores/${id}`, {method:'DELETE'}); }
@@ -715,10 +758,8 @@ $('#adm-corpo').onchange = async e => {
   $('#periodo').innerHTML += opcP; $('#aula-periodo').innerHTML += opcP;
   S.token = store.get(KT);
   try { S.user = JSON.parse(store.get(KU) || 'null'); } catch { S.user = null; }
-  if (window.GC_ADMIN){
-    $('#marca').textContent = 'Coordenação'; document.title = 'Coordenação · GeoCheckIn';
-    if (S.token && S.user && S.user.perfil === 'admin') iniciar(); else { S.token = S.user = null; show('admlogin'); }
-  } else if (S.token && S.user && S.user.perfil !== 'admin'){ S.perfil = S.user.perfil; iniciar(); }
+  if (window.GC_ADMIN) S.perfil = 'admin'; // endereço /coordenacao abre direto na aba Coordenação
+  if (S.token && S.user){ S.perfil = S.user.perfil; iniciar(); }
   else { S.token = S.user = null; renderAuth(); show('auth'); }
 })();
 </script>

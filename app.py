@@ -157,6 +157,7 @@ class Professor(Base):
     __tablename__ = "professores"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     ativo: Mapped[Optional[bool]] = mapped_column(Boolean, default=True)  # a coordenação pode desativar
+    coordenacao: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)  # conta da coordenação (painel administrativo)
     registro_funcional: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # ex.: DOC-2026-08
     departamento: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     nome: Mapped[str] = mapped_column(String(120))
@@ -266,7 +267,8 @@ def migrar_esquema():
         "cursos": [("departamento", "VARCHAR(100)")],
         "alunos": [("curso_id", "INTEGER REFERENCES cursos (id)"), ("periodo", "INTEGER"),
                    ("status", "VARCHAR(10) DEFAULT 'ativo'")],
-        "professores": [("ativo", "BOOLEAN DEFAULT TRUE"), ("registro_funcional", "VARCHAR(30)"),
+        "professores": [("ativo", "BOOLEAN DEFAULT TRUE"), ("coordenacao", "BOOLEAN DEFAULT FALSE"),
+                        ("registro_funcional", "VARCHAR(30)"),
                         ("departamento", "VARCHAR(100)")],
         "aulas": [("tipo", "VARCHAR(20) DEFAULT 'aula'"), ("local_tipo", "VARCHAR(10) DEFAULT 'dentro'"),
                   ("local_descricao", "VARCHAR(160)"), ("curso_id", "INTEGER REFERENCES cursos (id)"),
@@ -577,9 +579,10 @@ def health(db: Session = Depends(get_db)):
 
 
 @app.get("/api/config")
-def config():
+def config(db: Session = Depends(get_db)):
+    sem_coordenacao = not ADMIN_EMAILS and not _contar(db, Professor, Professor.coordenacao.is_(True))
     return {"dominio_aluno": DOMINIO_ALUNOS, "dominios_professor": DOMINIOS_PROFESSORES,
-            "matricula_regex": MATRICULA_RE.pattern}
+            "matricula_regex": MATRICULA_RE.pattern, "coordenacao_aberta": bool(sem_coordenacao)}
 
 
 @app.get("/api/cursos")
@@ -1105,9 +1108,14 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
 # Ações sensíveis ficam registradas em LogSeguranca (aba "Auditoria").
 # =====================================================================
 def so_admin(u: dict = Depends(usuario_atual)) -> dict:
-    if u["role"] != "admin" or not ADMIN_EMAILS:
+    if u["role"] != "admin":
         raise HTTPException(403, "Acesso restrito à coordenação.")
     return u
+
+
+def eh_coordenacao(p: Professor) -> bool:
+    """Conta da coordenação: marcada no cadastro (coordenacao) ou listada em ADMIN_EMAILS (opcional)."""
+    return bool(p.coordenacao) or p.email in ADMIN_EMAILS
 
 
 class AdminLoginIn(BaseModel):
@@ -1140,13 +1148,20 @@ class ProfessorIn(BaseModel):
     nome: str = Field(min_length=3, max_length=120)
     email: str = Field(max_length=160)
     senha: str = Field(min_length=8, max_length=128)
-    registro_funcional: str = Field(min_length=3, max_length=30)
-    departamento: str = Field(min_length=2, max_length=100)
+    registro_funcional: Optional[str] = Field(None, max_length=30)  # obrigatório para professor; opcional para a coordenação
+    departamento: Optional[str] = Field(None, max_length=100)
+    coordenacao: bool = False
 
 
 class MatriculasIn(BaseModel):
     texto: str = Field(max_length=1_000_000)  # uma matrícula por linha, ou "matrícula;nome do curso"
     curso_id: Optional[int] = None
+
+
+def _resposta_admin(p: Professor) -> dict:
+    token = jwt.encode({"sub": str(p.id), "role": "admin", "nome": p.nome,
+                        "exp": utcnow() + timedelta(hours=ADMIN_TOKEN_HORAS)}, SECRET_KEY, algorithm="HS256")
+    return {"token": token, "usuario": {"id": p.id, "nome": p.nome, "email": p.email, "perfil": "admin", "curso": None}}
 
 
 @app.post("/api/admin/login")
@@ -1155,26 +1170,73 @@ def admin_login(b: AdminLoginIn, request: Request, db: Session = Depends(get_db)
     ip = ip_cliente(request)
     limitar_tentativas("adm-ip:" + ip, 8, 600)
     limitar_tentativas("adm-em:" + email, 8, 600)
-    p = db.scalar(select(Professor).where(Professor.email == email)) if email in ADMIN_EMAILS else None
-    if not p or p.ativo is False or not confere_senha(b.senha, p.senha_hash):
+    p = db.scalar(select(Professor).where(Professor.email == email))
+    if not p or p.ativo is False or not eh_coordenacao(p) or not confere_senha(b.senha, p.senha_hash):
         log_seg(db, None, "login_admin_falha", email, ip, commit=True)
         raise HTTPException(401, "E-mail ou senha incorretos.")  # mesma resposta para qualquer falha
     log_seg(db, p.id, "login_admin", "", ip, commit=True)
-    token = jwt.encode({"sub": str(p.id), "role": "admin", "nome": p.nome,
-                        "exp": utcnow() + timedelta(hours=ADMIN_TOKEN_HORAS)}, SECRET_KEY, algorithm="HS256")
-    return {"token": token, "usuario": {"id": p.id, "nome": p.nome, "email": p.email, "perfil": "admin", "curso": None}}
+    return _resposta_admin(p)
+
+
+class AdminRegistroIn(BaseModel):
+    nome: str = Field(min_length=3, max_length=120)
+    email: str = Field(max_length=160)
+    senha: str = Field(min_length=8, max_length=128)
+    confirmar_senha: Optional[str] = Field(None, max_length=128)
+    chave_master: str = Field(max_length=100)
+
+
+@app.post("/api/admin/registro")
+def admin_registro(b: AdminRegistroIn, request: Request, db: Session = Depends(get_db)):
+    """
+    Primeiro acesso da coordenação. Só funciona ENQUANTO NÃO EXISTE nenhuma conta da coordenação (e ADMIN_EMAILS
+    está vazio) e exige a Chave de Acesso da Coordenação. Depois disso, novas contas da coordenação são criadas
+    por quem já é da coordenação, na aba Professores do painel.
+    """
+    if b.confirmar_senha is not None and b.confirmar_senha != b.senha:
+        raise HTTPException(422, "As senhas não conferem. Digite a mesma senha nos dois campos.")
+    ip = ip_cliente(request)
+    limitar_tentativas("chave:" + ip)  # mesmo freio da chave de professor
+    email = b.email.strip().lower()
+    if not email_permitido(email, "professor"):
+        raise HTTPException(403, "Use o e-mail institucional (" + " ou ".join(f"@{d}" for d in DOMINIOS_PROFESSORES) + ").")
+    if ADMIN_EMAILS or _contar(db, Professor, Professor.coordenacao.is_(True)) > 0:
+        raise HTTPException(403, "A coordenação já foi criada. Peça a alguém da coordenação para criar a sua conta "
+                                 "na aba Professores do painel.")
+    if not CHAVE_MASTER:
+        raise HTTPException(403, "Indisponível: a chave de acesso (CHAVE_MASTER) ainda não foi configurada no servidor.")
+    if not hmac.compare_digest(b.chave_master.encode(), CHAVE_MASTER.encode()):
+        raise HTTPException(403, "Chave de Acesso da Coordenação inválida.")
+    p = db.scalar(select(Professor).where(Professor.email == email))
+    if p:  # já tem conta de professor: vira coordenação se a senha confere
+        if p.ativo is False:
+            raise HTTPException(403, "Conta desativada.")
+        if not confere_senha(b.senha, p.senha_hash):
+            raise HTTPException(409, "Este e-mail já tem conta de professor com outra senha. Digite a senha dela.")
+        p.coordenacao = True
+    else:
+        p = Professor(nome=b.nome.strip(), email=email, senha_hash=hash_senha(b.senha),
+                      departamento="Coordenação", coordenacao=True)
+        db.add(p)
+    try:
+        db.flush()
+        log_seg(db, p.id, "criar_coordenacao", email, ip)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Este e-mail já possui cadastro. Use a opção Entrar.")
+    return _resposta_admin(p)
 
 
 def _pagina_admin():
+    """Endereço /coordenacao (e ADMIN_PATH): abre a mesma tela inicial, já na aba Coordenação."""
     html = _arquivo_index().read_text(encoding="utf-8")
     return HTMLResponse(html.replace("<!--ADMIN-->", "<script>window.GC_ADMIN=true</script>"),
-                        headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow"})
+                        headers={"Cache-Control": "no-store"})
 
 
-if ADMIN_EMAILS:
-    app.add_api_route("/" + ADMIN_PATH, _pagina_admin, methods=["GET"], include_in_schema=False)
-else:
-    print("AVISO: ADMIN_EMAILS vazio - a área da coordenação está desativada.")
+for _caminho in {"/" + ADMIN_PATH, "/coordenacao"}:
+    app.add_api_route(_caminho, _pagina_admin, methods=["GET"], include_in_schema=False)
 
 
 def _contar(db: Session, modelo, *cond) -> int:
@@ -1261,7 +1323,7 @@ def adm_professores(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
                       .group_by(Professor.id).order_by(Professor.nome)).all()
     return [{"id": p.id, "nome": p.nome, "email": p.email, "registro_funcional": p.registro_funcional,
              "departamento": p.departamento, "ativo": p.ativo is not False,
-             "aulas": n, "admin": p.email in ADMIN_EMAILS} for p, n in rows]
+             "aulas": n, "admin": eh_coordenacao(p), "fixo_env": p.email in ADMIN_EMAILS} for p, n in rows]
 
 
 @app.patch("/api/admin/professores/{prof_id}")
@@ -1281,20 +1343,44 @@ def adm_professor_ativo(prof_id: int, b: AtivoIn, request: Request, u: dict = De
 @app.post("/api/admin/professores")
 def adm_professor_novo(b: ProfessorIn, request: Request, u: dict = Depends(so_admin),
                        db: Session = Depends(get_db)):
-    """A coordenação cria a conta do professor (sem precisar da Chave) e informa a senha provisória."""
+    """A coordenação cria a conta do professor (ou de outra pessoa da coordenação) e informa a senha provisória."""
     email = b.email.strip().lower()
-    registro, depto = b.registro_funcional.strip(), b.departamento.strip()
+    coord = bool(b.coordenacao)
+    registro = (b.registro_funcional or "").strip()
+    depto = (b.departamento or "").strip() or ("Coordenação" if coord else "")
     if not email_permitido(email, "professor"):
         raise HTTPException(403, "Use um e-mail de professor: " + " ou ".join(f"@{d}" for d in DOMINIOS_PROFESSORES))
-    if not REGISTRO_RE.fullmatch(registro):
-        raise HTTPException(422, "Registro funcional inválido (ex.: DOC-2026-08).")
+    if registro or not coord:  # professor sempre precisa de registro; coordenação só se informar
+        if not REGISTRO_RE.fullmatch(registro):
+            raise HTTPException(422, "Registro funcional inválido (ex.: DOC-2026-08).")
+        if db.scalar(select(Professor.id).where(Professor.registro_funcional == registro)):
+            raise HTTPException(409, "Já existe um professor com esse registro funcional.")
+    if len(depto) < 2:
+        raise HTTPException(422, "Informe o departamento / área.")
     if db.scalar(select(Professor.id).where(Professor.email == email)):
         raise HTTPException(409, "Já existe um professor com esse e-mail.")
-    if db.scalar(select(Professor.id).where(Professor.registro_funcional == registro)):
-        raise HTTPException(409, "Já existe um professor com esse registro funcional.")
     db.add(Professor(nome=b.nome.strip(), email=email, senha_hash=hash_senha(b.senha),
-                     registro_funcional=registro, departamento=depto))
-    log_seg(db, u["id"], "criar_professor", f"{email}; registro={registro}", ip_cliente(request))
+                     registro_funcional=registro or None, departamento=depto, coordenacao=coord))
+    log_seg(db, u["id"], "criar_professor", f"{email}; registro={registro or '-'}; coordenacao={coord}", ip_cliente(request))
+    db.commit()
+    return {"ok": True}
+
+
+@app.patch("/api/admin/professores/{prof_id}/coordenacao")
+def adm_professor_coordenacao(prof_id: int, b: AtivoIn, request: Request, u: dict = Depends(so_admin),
+                              db: Session = Depends(get_db)):
+    """Promove um professor à coordenação (ativo=true) ou tira dela (ativo=false)."""
+    p = db.get(Professor, prof_id)
+    if not p:
+        raise HTTPException(404, "Professor não encontrado.")
+    if not b.ativo:
+        if p.id == u["id"]:
+            raise HTTPException(400, "Você não pode tirar a si mesmo da coordenação.")
+        if p.email in ADMIN_EMAILS:
+            raise HTTPException(400, "Essa conta está em ADMIN_EMAILS (configuração do servidor).")
+    p.coordenacao = b.ativo
+    log_seg(db, u["id"], "professor_coordenacao", f"{p.email}: {'coordenação' if b.ativo else 'professor'}",
+            ip_cliente(request))
     db.commit()
     return {"ok": True}
 
@@ -1308,8 +1394,8 @@ def adm_professor_excluir(prof_id: int, request: Request, u: dict = Depends(so_a
         raise HTTPException(404, "Professor não encontrado.")
     if p.id == u["id"]:
         raise HTTPException(400, "Você não pode excluir a própria conta.")
-    if p.email in ADMIN_EMAILS:
-        raise HTTPException(400, "Essa conta é da coordenação. Tire o e-mail de ADMIN_EMAILS antes de excluí-la.")
+    if eh_coordenacao(p):
+        raise HTTPException(400, "Essa conta é da coordenação. Tire-a da coordenação antes de excluí-la.")
     ids_aulas = select(Aula.id).where(Aula.professor_id == prof_id)
     db.execute(delete(Tentativa).where(Tentativa.aula_id.in_(ids_aulas)))
     db.execute(delete(Presenca).where(Presenca.aula_id.in_(ids_aulas)))
