@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import time
+import unicodedata
 import urllib.request
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -78,6 +79,13 @@ REGISTRO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/\-]{2,29}$")  # Registro Fun
 ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
 ADMIN_PATH = re.sub(r"[^A-Za-z0-9_\-]", "", os.getenv("ADMIN_PATH", "coordenacao")) or "coordenacao"
 ADMIN_TOKEN_HORAS = int(os.getenv("ADMIN_TOKEN_HORAS", "4"))
+
+# Conta PROVISÓRIA da coordenação: criada na inicialização SÓ se ainda não existir nenhuma conta da coordenação.
+# Serve para o primeiro acesso; a senha deve ser trocada logo na tela Resumo > "Trocar minha senha".
+# Para não deixar a senha no GitHub, defina COORD_SENHA na Render. COORD_PROVISORIA=0 desliga tudo isto.
+COORD_PROVISORIA = os.getenv("COORD_PROVISORIA", "1").strip().lower() not in ("0", "false", "nao", "não", "off")
+COORD_EMAIL = os.getenv("COORD_EMAIL", "coordenacao355@unicerrado.edu.br").strip().lower()
+COORD_SENHA = os.getenv("COORD_SENHA", "coordenacao4558")
 
 # Anti-VPN/Proxy (opcional): consulta o proxycheck.io. Sem PROXYCHECK_KEY a verificação fica desligada.
 PROXYCHECK_KEY = os.getenv("PROXYCHECK_KEY", "").strip()
@@ -335,6 +343,38 @@ def resetar_dados_de_teste():
     print("RESET_BANCO: dados de teste apagados (cursos mantidos).")
 
 
+def semear_coordenacao_provisoria():
+    """
+    Primeiro acesso garantido: se NÃO existe nenhuma conta da coordenação (marcada no cadastro ou listada em
+    ADMIN_EMAILS), cria a conta provisória COORD_EMAIL / COORD_SENHA. Nunca sobrescreve nada: se a conta já existe
+    (inclusive com a senha já trocada), não faz nada. Se outra conta da coordenação já existe, também não cria.
+    """
+    if not (COORD_PROVISORIA and COORD_EMAIL and COORD_SENHA):
+        return
+    with SessionLocal() as db:
+        if engine.dialect.name == "postgresql":  # vários workers subindo juntos: só um cria
+            db.execute(text("SELECT pg_advisory_xact_lock(727275)"))
+        cond = [Professor.coordenacao.is_(True)]
+        if ADMIN_EMAILS:
+            cond.append(Professor.email.in_(sorted(ADMIN_EMAILS)))
+        if _contar(db, Professor, or_(*cond)) > 0:
+            return
+        if db.scalar(select(Professor.id).where(Professor.email == COORD_EMAIL)):
+            print("Coordenação provisória: o e-mail", COORD_EMAIL, "já é uma conta de professor; nada foi criado.")
+            return
+        p = Professor(nome="Coordenação (conta provisória)", email=COORD_EMAIL, senha_hash=hash_senha(COORD_SENHA),
+                      departamento="Coordenação", coordenacao=True, ativo=True)
+        db.add(p)
+        try:
+            db.flush()
+            log_seg(db, p.id, "criar_coordenacao", COORD_EMAIL + " (provisória)", "inicializacao")
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            return
+    print("Coordenação provisória criada:", COORD_EMAIL, "(troque a senha no primeiro acesso)")
+
+
 def semear_cursos():
     nomes = CURSOS_PADRAO + [c.strip() for c in os.getenv("CURSOS_EXTRAS", "").split(",") if c.strip()]
     with SessionLocal() as db:
@@ -486,6 +526,29 @@ def confere_senha(senha: str, guardado: str) -> bool:
         return False
 
 
+def sem_acentos(s: str) -> str:
+    """'coordenação355' -> 'coordenacao355' (o e-mail é guardado sem acento)."""
+    return "".join(c for c in unicodedata.normalize("NFKD", s or "") if not unicodedata.combining(c))
+
+
+def _forma_simples(s: str) -> str:
+    """Sem acento, sem espaço, minúscula: 'Coordenação 4558' e 'coordenacao4558' ficam iguais."""
+    return re.sub(r"\s+", "", sem_acentos(s)).lower()
+
+
+def senha_provisoria_ativa(p: "Professor") -> bool:
+    """True enquanto a conta provisória da coordenação ainda usa a senha provisória (ou seja, ainda não foi trocada)."""
+    return bool(COORD_PROVISORIA and COORD_SENHA and p.email == COORD_EMAIL and confere_senha(COORD_SENHA, p.senha_hash))
+
+
+def senha_admin_confere(p: "Professor", senha: str) -> bool:
+    """Senha da coordenação. Na conta provisória, e só enquanto a senha não foi trocada, aceita variações
+    de acento, espaço e maiúscula ('Coordenação 4558'); depois da troca vale só a senha exata."""
+    if confere_senha(senha, p.senha_hash):
+        return True
+    return senha_provisoria_ativa(p) and _forma_simples(senha) == _forma_simples(COORD_SENHA)
+
+
 def resposta_token(u, perfil: str, curso: Optional[str] = None) -> dict:
     claims = {"sub": str(u.id), "role": perfil, "nome": u.nome, "exp": utcnow() + timedelta(hours=TOKEN_HORAS)}
     if perfil == "aluno":
@@ -602,6 +665,10 @@ async def lifespan(_: FastAPI):
         resetar_dados_de_teste()
     except Exception as exc:
         print("RESET_BANCO falhou (nada foi apagado):", exc)
+    try:
+        semear_coordenacao_provisoria()  # depois da limpeza, para a conta nova não ser apagada
+    except Exception as exc:
+        print("Coordenação provisória não foi criada:", exc)
     yield
 
 
@@ -1216,12 +1283,12 @@ def _resposta_admin(p: Professor) -> dict:
 
 @app.post("/api/admin/login")
 def admin_login(b: AdminLoginIn, request: Request, db: Session = Depends(get_db)):
-    email = b.email.strip().lower()
+    email = sem_acentos(b.email.strip().lower())
     ip = ip_cliente(request)
     limitar_tentativas("adm-ip:" + ip, 8, 600)
     limitar_tentativas("adm-em:" + email, 8, 600)
     p = db.scalar(select(Professor).where(Professor.email == email))
-    if not p or p.ativo is False or not eh_coordenacao(p) or not confere_senha(b.senha, p.senha_hash):
+    if not p or p.ativo is False or not eh_coordenacao(p) or not senha_admin_confere(p, b.senha):
         log_seg(db, None, "login_admin_falha", email, ip, commit=True)
         raise HTTPException(401, "E-mail ou senha incorretos.")  # mesma resposta para qualquer falha
     log_seg(db, p.id, "login_admin", "", ip, commit=True)
@@ -1325,7 +1392,9 @@ def adm_resumo(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
     por_curso = db.execute(select(Curso.nome, func.count(Aluno.id)).select_from(Curso)
                            .outerjoin(Aluno, Aluno.curso_id == Curso.id).group_by(Curso.id, Curso.nome)
                            .order_by(Curso.nome)).all()
-    return {"alunos": _contar(db, Aluno), "professores": _contar(db, Professor), "aulas": _contar(db, Aula),
+    eu = db.get(Professor, u["id"])
+    return {"senha_provisoria": bool(eu and senha_provisoria_ativa(eu)),
+            "alunos": _contar(db, Aluno), "professores": _contar(db, Professor), "aulas": _contar(db, Aula),
             "presencas": _contar(db, Presenca), "aulas_ativas": _contar(db, Aula, Aula.ativa.is_(True)),
             "alunos_sem_curso": _contar(db, Aluno, Aluno.curso_id.is_(None)),
             "alunos_inativos": _contar(db, Aluno, Aluno.status == "inativo"),
@@ -1512,6 +1581,32 @@ def adm_aluno_excluir(aluno_id: int, request: Request, u: dict = Depends(so_admi
                    .values(utilizada=False))
     db.execute(delete(Aluno).where(Aluno.id == aluno_id))
     log_seg(db, u["id"], "excluir_aluno", f"aluno={aluno_id}; matricula={a.matricula}", ip_cliente(request))
+    db.commit()
+    return {"ok": True}
+
+
+class MinhaSenhaIn(BaseModel):
+    senha_atual: str = Field(max_length=128)
+    nova_senha: str = Field(min_length=8, max_length=128)
+    confirmar_senha: Optional[str] = Field(None, max_length=128)
+
+
+@app.post("/api/admin/minha-senha")
+def adm_minha_senha(b: MinhaSenhaIn, request: Request, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+    """A coordenação troca a PRÓPRIA senha (por exemplo, logo depois de entrar com a senha provisória)."""
+    ip = ip_cliente(request)
+    limitar_tentativas("adm-ms:" + str(u["id"]), 8, 600)
+    if b.confirmar_senha is not None and b.confirmar_senha != b.nova_senha:
+        raise HTTPException(422, "As senhas novas não conferem. Digite a mesma senha nos dois campos.")
+    p = db.get(Professor, u["id"])
+    if not p or p.ativo is False or not eh_coordenacao(p):
+        raise HTTPException(403, "Acesso restrito à coordenação.")
+    if not senha_admin_confere(p, b.senha_atual):  # 400 (e não 401): 401 deslogaria a pessoa na tela
+        raise HTTPException(400, "A senha atual está incorreta.")
+    if COORD_SENHA and _forma_simples(b.nova_senha) == _forma_simples(COORD_SENHA):
+        raise HTTPException(422, "Escolha uma senha diferente da provisória.")
+    p.senha_hash = hash_senha(b.nova_senha)
+    log_seg(db, p.id, "trocar_senha_admin", "", ip)
     db.commit()
     return {"ok": True}
 

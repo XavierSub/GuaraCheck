@@ -378,7 +378,7 @@ $('#form-auth').onsubmit = async e => {
 
 function iniciar(){
   $('#user-nome').textContent = S.user.nome.split(' ')[0];
-  if (S.user.perfil === 'admin'){ show('admin'); admRender(); }
+  if (S.user.perfil === 'admin'){ Object.assign(ADM, {aba:'resumo', pag:1, q:'', curso:0}); show('admin'); admRender(); } // sempre abre no Resumo (onde fica o aviso da senha provisória)
   else if (S.user.perfil === 'aluno'){
     show('aluno'); carregarAulas(); carregarComprovantes();
     $('#aluno-info').textContent = (S.user.curso ? S.user.curso + ' · ' : '') + (S.user.periodo ? S.user.periodo + 'º período · ' : '') + 'Use o seu próprio celular e fique dentro da sala. O navegador vai pedir permissão para usar a localização.';
@@ -618,16 +618,18 @@ const pager = (total, sufixo) => { const n = Math.max(1, Math.ceil(total / 50));
 const ACAO = {exportar_chamada:'Exportou chamada (CSV)', excluir_aula:'Excluiu aula', excluir_todas_aulas:'Excluiu todas as aulas', excluir_aula_admin:'Coordenação excluiu aula',
   pedido_senha:'Pediu nova senha', login_admin:'Login da coordenação', login_admin_falha:'Falha de login da coordenação', cadastro_professor:'Professor se cadastrou', criar_professor:'Coordenação criou professor',
   excluir_professor:'Excluiu professor', criar_coordenacao:'Criou conta da coordenação', professor_coordenacao:'Mudou papel na coordenação', professor_ativo:'Ativou/desativou professor', criar_curso:'Criou curso', curso_ativo:'Ativou/desativou curso', editar_aluno:'Editou aluno',
-  excluir_aluno:'Excluiu aluno', redefinir_senha:'Redefiniu senha', importar_matriculas:'Importou matrículas', excluir_matricula:'Excluiu matrícula autorizada'};
+  excluir_aluno:'Excluiu aluno', redefinir_senha:'Redefiniu senha', trocar_senha_admin:'Coordenação trocou a própria senha', importar_matriculas:'Importou matrículas', excluir_matricula:'Excluiu matrícula autorizada'};
 const ADM_ABAS = {
   async resumo(){
     const r = await api('/admin/resumo');
     const aviso = !r.matricula_obrigatoria ? '<div class="msg">A lista de matrículas autorizadas está DESLIGADA por enquanto: qualquer matrícula numérica pode se cadastrar. Para ligar de novo, defina MATRICULA_OBRIGATORIA=1 na Render.</div>'
       : r.matriculas_autorizadas === 0 ? '<div class="msg err">Nenhuma matrícula autorizada ainda: alunos novos não conseguem criar conta. Importe a lista na aba Matrículas.</div>' : '';
     const pend = r.pedidos_senha_pendentes ? `<div class="msg err">${r.pedidos_senha_pendentes} pedido(s) de nova senha aguardando. Abra a aba Pedidos de senha.</div>` : '';
-    return aviso + pend + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
+    const prov = r.senha_provisoria ? '<div class="msg err">Você entrou com a senha PROVISÓRIA. Troque agora, logo abaixo: enquanto ela não for trocada, qualquer pessoa que a conheça entra como coordenação.</div>' : '';
+    const cardSenha = `<h3 style="margin-top:16px">Trocar minha senha</h3><div class="row"><input id="ms-atual" type="password" autocomplete="current-password" placeholder="Senha atual"><input id="ms-nova" type="password" autocomplete="new-password" placeholder="Nova senha (mín. 8)"><input id="ms-nova2" type="password" autocomplete="new-password" placeholder="Repita a nova senha"><button class="btn" data-act="minha-senha">Trocar senha</button></div>`;
+    return prov + (r.senha_provisoria ? cardSenha : '') + aviso + pend + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
       <h3 style="margin-top:16px">Alunos por curso</h3>` + tb(['Curso','Alunos'], r.por_curso.map(c => `<tr><td>${esc(c.curso)}</td><td>${c.alunos}</td></tr>`)) +
-      `<h3 style="margin-top:16px">Proteção contra VPN</h3><p class="mut">Confere se o servidor enxerga o seu IP corretamente e se a verificação de VPN está ativa.</p><button class="btn alt" data-act="vpn-test">Testar proteção contra VPN</button>`;
+      `<h3 style="margin-top:16px">Proteção contra VPN</h3><p class="mut">Confere se o servidor enxerga o seu IP corretamente e se a verificação de VPN está ativa.</p><button class="btn alt" data-act="vpn-test">Testar proteção contra VPN</button>` + (r.senha_provisoria ? '' : cardSenha);
   },
   async cursos(){
     const l = await api('/admin/cursos');
@@ -715,6 +717,15 @@ $('#adm-corpo').onclick = async e => {
     else if (act === 'vpn-test'){
       const d = await api('/meu-ip');
       return msg(m, `IP detectado: ${d.ip_detectado || '—'} · modo: ${d.vpn_modo} · verificação ${d.verificacao_ativa ? 'ativa' : 'DESLIGADA (falta PROXYCHECK_KEY)'} · este IP ${d.ip_e_vpn === true ? 'é VPN/proxy' : d.ip_e_vpn === false ? 'não é VPN/proxy' : 'não pôde ser verificado'}.`, 'ok');
+    }
+    else if (act === 'minha-senha'){
+      const atual = $('#ms-atual').value, nova = $('#ms-nova').value, nova2 = $('#ms-nova2').value;
+      if (!atual) return msg(m, 'Digite a senha atual.', 'err');
+      if (nova.length < 8) return msg(m, 'A nova senha precisa ter pelo menos 8 caracteres.', 'err');
+      if (nova !== nova2) return msg(m, 'As senhas novas não conferem. Digite a mesma senha nos dois campos.', 'err');
+      await api('/admin/minha-senha', {method:'POST', body:{senha_atual:atual, nova_senha:nova, confirmar_senha:nova2}});
+      await admRender();
+      return msg(m, 'Senha trocada. Use a nova senha no próximo acesso.', 'ok');
     }
     else if (act === 'senha'){
       const s = prompt('Nova senha (mínimo 8 caracteres):'); if (!s) return;
