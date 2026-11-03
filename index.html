@@ -85,12 +85,15 @@ textarea{min-height:110px;resize:vertical}
       <label id="f-mat" hidden>Número de matrícula<input id="mat" inputmode="numeric" autocomplete="off" placeholder="Ex.: 202610405"></label>
       <label id="f-registro" hidden>Registro Funcional / ID Docente<input id="registro" autocomplete="off" placeholder="Ex.: DOC-2026-08"></label>
       <label id="f-depto" hidden>Departamento / Área<input id="depto" autocomplete="off" placeholder="Ex.: Ciências Exatas e Tecnologia"></label>
-      <label>Senha<input id="senha" type="password" autocomplete="current-password" minlength="8" required></label>
+      <label id="f-ref" hidden><span id="ref-rot">Número de matrícula</span><input id="ref" autocomplete="off"></label>
+      <label id="f-senha">Senha<input id="senha" type="password" autocomplete="current-password" minlength="8" required></label>
+      <label id="f-senha2" hidden>Confirmar senha<input id="senha2" type="password" autocomplete="new-password" minlength="8"></label>
       <label id="f-chave" hidden>Chave de Acesso da Coordenação (fornecida pela coordenação)<input id="chave" type="password" autocomplete="off"></label>
       <div class="msg" id="msg-auth" hidden></div>
       <button class="btn big" id="btn-auth" type="submit">Entrar</button>
     </form>
-    <p style="text-align:center;margin:14px 0 0"><button class="link" id="toggle" type="button"></button></p>
+    <p id="p-esqueci" style="text-align:center;margin:14px 0 0"><button class="link" id="btn-esqueci" type="button">Esqueci minha senha</button></p>
+    <p style="text-align:center;margin:10px 0 0"><button class="link" id="toggle" type="button"></button></p>
   </div>
 </section>
 
@@ -202,7 +205,7 @@ textarea{min-height:110px;resize:vertical}
   <div class="atabs" id="adm-tabs">
     <button data-t="resumo" class="on">Resumo</button><button data-t="cursos">Cursos</button>
     <button data-t="professores">Professores</button><button data-t="alunos">Alunos</button>
-    <button data-t="matriculas">Matrículas</button><button data-t="aulas">Aulas</button><button data-t="alertas">Alertas</button><button data-t="auditoria">Auditoria</button>
+    <button data-t="matriculas">Matrículas</button><button data-t="pedidos">Pedidos de senha</button><button data-t="aulas">Aulas</button><button data-t="alertas">Alertas</button><button data-t="auditoria">Auditoria</button>
   </div>
   <div class="msg" id="msg-adm" hidden></div>
   <div class="card" id="adm-corpo"></div>
@@ -288,14 +291,19 @@ function renderAuth(){
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.p === S.perfil));
   $('#f-nome').hidden = !reg; $('#f-curso').hidden = !(reg && alu); $('#f-periodo').hidden = !(reg && alu); $('#f-mat').hidden = !(reg && alu);
   $('#f-registro').hidden = !(reg && !alu); $('#f-depto').hidden = !(reg && !alu); $('#f-chave').hidden = !(reg && !alu);
-  $('#btn-auth').textContent = reg ? 'Criar conta' : 'Entrar';
-  $('#toggle').textContent = reg ? 'Já tenho conta · Entrar' : 'Primeiro acesso · Criar conta';
+  const esq = S.modo === 'esqueci';
+  $('#f-senha').hidden = esq; $('#f-senha2').hidden = !reg; $('#f-ref').hidden = !esq; $('#p-esqueci').hidden = S.modo !== 'login';
+  $('#ref-rot').textContent = alu ? 'Número de matrícula' : 'Registro Funcional / ID Docente';
+  $('#ref').placeholder = alu ? 'Ex.: 202610405' : 'Ex.: DOC-2026-08';
+  $('#btn-auth').textContent = esq ? 'Enviar pedido à coordenação' : reg ? 'Criar conta' : 'Entrar';
+  $('#toggle').textContent = S.modo === 'login' ? 'Primeiro acesso · Criar conta' : 'Já tenho conta · Entrar';
   $('#senha').autocomplete = reg ? 'new-password' : 'current-password';
   $('#dica').textContent = alu ? 'Alunos: nome@' + S.cfg.dominio_aluno : 'Professores: nome@' + S.cfg.dominios_professor[0];
   msg($('#msg-auth'), '');
 }
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => { S.perfil = t.dataset.p; renderAuth(); });
-$('#toggle').onclick = () => { S.modo = S.modo === 'reg' ? 'login' : 'reg'; renderAuth(); };
+$('#toggle').onclick = () => { S.modo = S.modo === 'login' ? 'reg' : 'login'; renderAuth(); };
+$('#btn-esqueci').onclick = () => { S.modo = 'esqueci'; renderAuth(); };
 
 $('#form-auth').onsubmit = async e => {
   e.preventDefault();
@@ -304,10 +312,19 @@ $('#form-auth').onsubmit = async e => {
   if (alu ? dom !== S.cfg.dominio_aluno : !S.cfg.dominios_professor.includes(dom))
     return msg(m, alu ? 'Alunos devem usar o e-mail @' + S.cfg.dominio_aluno
                       : 'Professores devem usar o e-mail @' + S.cfg.dominios_professor.join(' ou @'), 'err');
+  if (S.modo === 'esqueci'){ // sem e-mail: o pedido vai para a coordenação, que define uma senha provisória
+    const ref = $('#ref').value.trim();
+    if (!ref) return msg(m, alu ? 'Informe o seu número de matrícula.' : 'Informe o seu Registro Funcional / ID Docente.', 'err');
+    const b = $('#btn-auth'); b.disabled = true;
+    try { const r = await api('/auth/esqueci-senha', {method:'POST', body:{perfil:S.perfil, email, referencia:ref}}); msg(m, r.mensagem, 'ok'); }
+    catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; }
+    return;
+  }
   if ($('#senha').value.length < 8) return msg(m, 'A senha precisa ter pelo menos 8 caracteres.', 'err');
+  if (reg && $('#senha2').value !== $('#senha').value) return msg(m, 'As senhas não conferem. Digite a mesma senha nos dois campos.', 'err');
   const body = {perfil:S.perfil, email, senha:$('#senha').value};
   if (reg){
-    body.nome = $('#nome').value.trim();
+    body.nome = $('#nome').value.trim(); body.confirmar_senha = $('#senha2').value;
     if (alu){
       if (!$('#curso').value) return msg(m, 'Selecione o seu curso.', 'err');
       if (!$('#periodo').value) return msg(m, 'Selecione o seu período (1º ao 10º).', 'err');
@@ -327,7 +344,7 @@ $('#form-auth').onsubmit = async e => {
   try {
     const r = await api(reg ? '/auth/registro' : '/auth/login', {method:'POST', body});
     S.token = r.token; S.user = r.usuario; store.set(KT, r.token); store.set(KU, JSON.stringify(r.usuario));
-    $('#senha').value = ''; $('#chave').value = ''; iniciar();
+    $('#senha').value = ''; $('#senha2').value = ''; $('#chave').value = ''; iniciar();
   } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; }
 };
 
@@ -559,7 +576,7 @@ const pager = (total, sufixo) => { const n = Math.max(1, Math.ceil(total / 50));
     <span class="mut">Página ${ADM.pag} de ${n} · ${total} ${sufixo}</span>
     <button class="btn alt" data-act="pag" data-v="1"${ADM.pag >= n ? ' disabled' : ''}>Próxima ›</button></div>`; };
 const ACAO = {exportar_chamada:'Exportou chamada (CSV)', excluir_aula:'Excluiu aula', excluir_todas_aulas:'Excluiu todas as aulas', excluir_aula_admin:'Coordenação excluiu aula',
-  login_admin:'Login da coordenação', login_admin_falha:'Falha de login da coordenação', cadastro_professor:'Professor se cadastrou', criar_professor:'Coordenação criou professor',
+  pedido_senha:'Pediu nova senha', login_admin:'Login da coordenação', login_admin_falha:'Falha de login da coordenação', cadastro_professor:'Professor se cadastrou', criar_professor:'Coordenação criou professor',
   excluir_professor:'Excluiu professor', professor_ativo:'Ativou/desativou professor', criar_curso:'Criou curso', curso_ativo:'Ativou/desativou curso', editar_aluno:'Editou aluno',
   excluir_aluno:'Excluiu aluno', redefinir_senha:'Redefiniu senha', importar_matriculas:'Importou matrículas', excluir_matricula:'Excluiu matrícula autorizada'};
 const ADM_ABAS = {
@@ -567,7 +584,8 @@ const ADM_ABAS = {
     const r = await api('/admin/resumo');
     const aviso = !r.matricula_obrigatoria ? '<div class="msg err">A conferência da lista de matrículas autorizadas está DESLIGADA (MATRICULA_OBRIGATORIA=0). Qualquer matrícula numérica é aceita.</div>'
       : r.matriculas_autorizadas === 0 ? '<div class="msg err">Nenhuma matrícula autorizada ainda: alunos novos não conseguem criar conta. Importe a lista na aba Matrículas.</div>' : '';
-    return aviso + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
+    const pend = r.pedidos_senha_pendentes ? `<div class="msg err">${r.pedidos_senha_pendentes} pedido(s) de nova senha aguardando. Abra a aba Pedidos de senha.</div>` : '';
+    return aviso + pend + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
       <h3 style="margin-top:16px">Alunos por curso</h3>` + tb(['Curso','Alunos'], r.por_curso.map(c => `<tr><td>${esc(c.curso)}</td><td>${c.alunos}</td></tr>`)) +
       `<h3 style="margin-top:16px">Proteção contra VPN</h3><p class="mut">Confere se o servidor enxerga o seu IP corretamente e se a verificação de VPN está ativa.</p><button class="btn alt" data-act="vpn-test">Testar proteção contra VPN</button>`;
   },
@@ -619,6 +637,12 @@ const ADM_ABAS = {
     return `<p class="mut">Check-ins aceitos, mas com sinais de risco. Os mais recentes aparecem primeiro.</p>` +
       tb(['Aluno','Aula','Alertas','Distância','IP','Hora'], l.map(a => `<tr><td>${esc(a.aluno)}<div class="mut">${esc(a.email)}</div></td><td>${esc(a.aula)}</td><td class="warn">${esc(a.alertas)}</td><td>${a.distancia_m} m</td><td>${esc(a.ip || '—')}</td><td>${dh(a.registrado_em)}</td></tr>`));
   },
+  async pedidos(){
+    const l = await api('/admin/pedidos-senha');
+    return `<p class="mut">Quem clicou em "Esqueci minha senha" (e acertou e-mail e matrícula/registro). Defina uma senha provisória e avise a pessoa; ela pode ser trocada depois.</p>` +
+      tb(['Quando','Perfil','Quem','Situação',''], l.map(p => `<tr><td>${dh(p.data_hora)}</td><td>${p.perfil === 'aluno' ? 'Aluno' : 'Professor'}</td><td class="warn">${esc(p.info)}</td><td>${p.atendido ? 'Atendido' : 'Pendente'}</td>
+        <td>${p.atendido || !p.usuario_id ? '' : `<button class="link" data-act="senha" data-perfil="${esc(p.perfil)}" data-id="${p.usuario_id}">Definir senha provisória</button>`}</td></tr>`));
+  },
   async auditoria(){
     const l = await api('/admin/auditoria');
     return `<p class="mut">Trilha de auditoria (LogSeguranca): exportações de dados, exclusões, mudanças feitas pela coordenação e logins. Os 150 registros mais recentes.</p>` +
@@ -652,6 +676,7 @@ $('#adm-corpo').onclick = async e => {
     else if (act === 'senha'){
       const s = prompt('Nova senha (mínimo 8 caracteres):'); if (!s) return;
       await api('/admin/senha', {method:'POST', body:{perfil, id:+id, nova_senha:s}});
+      await admRender();
       return msg(m, 'Senha redefinida. Informe a nova senha ao usuário.', 'ok');
     }
     else if (act === 'aluno-del'){ if (!confirm(`Excluir o aluno "${t}" e todas as presenças dele? A matrícula volta a ficar disponível. Não pode ser desfeito.`)) return; await api(`/admin/alunos/${id}`, {method:'DELETE'}); }

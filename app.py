@@ -488,6 +488,7 @@ class RegistroIn(BaseModel):
     nome: str = Field(min_length=3, max_length=120)
     email: str = Field(max_length=160)
     senha: str = Field(min_length=8, max_length=128)
+    confirmar_senha: Optional[str] = Field(None, max_length=128)
     matricula: Optional[str] = Field(None, max_length=30)
     curso_id: Optional[int] = None
     periodo: Optional[int] = Field(None, ge=1, le=10)
@@ -590,6 +591,8 @@ def listar_cursos(db: Session = Depends(get_db)):
 # ------------------------------ Auth ---------------------------------
 @app.post("/api/auth/registro")
 def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
+    if b.confirmar_senha is not None and b.confirmar_senha != b.senha:
+        raise HTTPException(422, "As senhas não conferem. Digite a mesma senha nos dois campos.")
     email = b.email.strip().lower()
     if not email_permitido(email, b.perfil):
         esperado = (f"@{DOMINIO_ALUNOS}" if b.perfil == "aluno"
@@ -658,6 +661,40 @@ def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
     if b.perfil == "professor":
         log_seg(db, u.id, "cadastro_professor", f"registro={registro}", ip_cliente(request), commit=True)
     return resposta_token(u, b.perfil, curso.nome if curso else None)
+
+
+class EsqueciIn(BaseModel):
+    perfil: Literal["aluno", "professor"]
+    email: str = Field(max_length=160)
+    referencia: str = Field(max_length=40)  # matrícula (aluno) ou registro funcional (professor)
+
+
+@app.post("/api/auth/esqueci-senha")
+def esqueci_senha(b: EsqueciIn, request: Request, db: Session = Depends(get_db)):
+    """
+    Pedido de nova senha. O sistema não envia e-mail: o pedido aparece na aba 'Pedidos de senha' da coordenação,
+    que define uma senha provisória e avisa a pessoa. A resposta é sempre a mesma, para não revelar quais
+    e-mails têm cadastro. Um pedido só é criado se e-mail e matrícula/registro conferem e não há outro pendente.
+    """
+    email, ref, ip = b.email.strip().lower(), b.referencia.strip(), ip_cliente(request)
+    limitar_tentativas("esq-ip:" + ip, 8, 900)
+    limitar_tentativas("esq-em:" + email, 3, 900)
+    if b.perfil == "aluno":
+        u = db.scalar(select(Aluno).where(Aluno.email == email))
+        confere = bool(u and u.matricula and u.matricula == ref)
+    else:
+        u = db.scalar(select(Professor).where(Professor.email == email))
+        confere = bool(u and u.registro_funcional and u.registro_funcional.lower() == ref.lower())
+    if confere:
+        chave = f"{b.perfil}={u.id}"
+        ultimo = db.scalar(select(func.max(LogSeguranca.id)).where(
+            LogSeguranca.acao == "pedido_senha", LogSeguranca.detalhe.like(chave + ";%")))
+        atendido = db.scalar(select(func.max(LogSeguranca.id)).where(
+            LogSeguranca.acao == "redefinir_senha", LogSeguranca.detalhe == chave))
+        if not ultimo or (atendido or 0) > ultimo:  # já existe um pedido pendente? então não duplica
+            log_seg(db, None, "pedido_senha", f"{chave}; {u.nome}; {email}; ref={ref}", ip, commit=True)
+    return {"ok": True, "mensagem": "Pedido enviado à coordenação. Ela vai definir uma senha provisória e avisar você. "
+                                    "Se os dados estiverem corretos, o pedido aparece lá em instantes."}
 
 
 @app.post("/api/auth/login")
@@ -1144,6 +1181,33 @@ def _contar(db: Session, modelo, *cond) -> int:
     return db.scalar(select(func.count()).select_from(modelo).where(*cond)) or 0
 
 
+def _pedidos_senha(db: Session, limite: int = 100) -> list:
+    """Pedidos de nova senha (LogSeguranca 'pedido_senha'). Atendido = a coordenação redefiniu a senha depois do pedido."""
+    pedidos = db.scalars(select(LogSeguranca).where(LogSeguranca.acao == "pedido_senha")
+                         .order_by(LogSeguranca.id.desc()).limit(limite)).all()
+    if not pedidos:
+        return []
+    menor = pedidos[-1].id
+    feitos = {}
+    for lid, det in db.execute(select(LogSeguranca.id, LogSeguranca.detalhe)
+                               .where(LogSeguranca.acao == "redefinir_senha", LogSeguranca.id > menor)):
+        feitos[det] = max(feitos.get(det, 0), lid)
+    itens = []
+    for p in pedidos:
+        partes = (p.detalhe or "").split(";", 1)
+        chave = partes[0].strip()
+        perfil, _, uid = chave.partition("=")
+        itens.append({"id": p.id, "perfil": perfil, "usuario_id": int(uid) if uid.isdigit() else None,
+                      "info": partes[1].strip() if len(partes) > 1 else "", "ip": p.ip,
+                      "data_hora": iso(p.data_hora), "atendido": feitos.get(chave, 0) > p.id})
+    return itens
+
+
+@app.get("/api/admin/pedidos-senha")
+def adm_pedidos_senha(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+    return _pedidos_senha(db)
+
+
 @app.get("/api/admin/resumo")
 def adm_resumo(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
     por_curso = db.execute(select(Curso.nome, func.count(Aluno.id)).select_from(Curso)
@@ -1156,6 +1220,7 @@ def adm_resumo(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
             "matriculas_autorizadas": _contar(db, MatriculasAutorizadas),
             "matriculas_utilizadas": _contar(db, MatriculasAutorizadas, MatriculasAutorizadas.utilizada.is_(True)),
             "matricula_obrigatoria": MATRICULA_OBRIGATORIA,
+            "pedidos_senha_pendentes": sum(1 for p in _pedidos_senha(db) if not p["atendido"]),
             "por_curso": [{"curso": n, "alunos": c} for n, c in por_curso]}
 
 
