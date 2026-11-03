@@ -25,7 +25,7 @@ from typing import List, Literal, Optional
 import jwt
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import (Boolean, DateTime, Float, ForeignKey, Index, Integer, String,
                         UniqueConstraint, create_engine, delete, event, func, inspect,
@@ -59,6 +59,14 @@ RISCO_MAX = int(os.getenv("RISCO_MAX", "3"))                # pontuação de sus
 VELOCIDADE_MAX_MS = float(os.getenv("VELOCIDADE_MAX_MS", "70"))  # ~250 km/h entre dois check-ins
 LIMITE_PRESENCAS_POR_CONSULTA = 2000
 
+# Matrícula (Pasta 1): formato numérico + lista pré-aprovada (tabela MatriculasAutorizadas)
+try:
+    MATRICULA_RE = re.compile(os.getenv("MATRICULA_REGEX", r"^\d{6,12}$"))
+except re.error:
+    MATRICULA_RE = re.compile(r"^\d{6,12}$")
+MATRICULA_OBRIGATORIA = os.getenv("MATRICULA_OBRIGATORIA", "1").strip() != "0"  # 0 = desliga a lista (só para testes)
+REGISTRO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/\-]{2,29}$")  # Registro Funcional / ID Docente (ex.: DOC-2026-08)
+
 # Coordenação (área administrativa escondida): só contas de PROFESSOR cujo e-mail esteja em ADMIN_EMAILS.
 ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
 ADMIN_PATH = re.sub(r"[^A-Za-z0-9_\-]", "", os.getenv("ADMIN_PATH", "coordenacao")) or "coordenacao"
@@ -78,7 +86,7 @@ for _r in os.getenv("IPS_PERMITIDOS", "").split(","):
 
 CURSOS_PADRAO = ["Administração", "Ciências Contábeis", "Direito", "Educação Física", "Enfermagem",
                  "Engenharia Civil", "Engenharia de Software", "Fisioterapia", "Gestão da TI",
-                 "Pedagogia", "Psicologia"]  # ajuste com CURSOS_EXTRAS="Curso A,Curso B"
+                 "Medicina", "Pedagogia", "Psicologia"]  # ajuste com CURSOS_EXTRAS="Curso A,Curso B"
 
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{(BASE_DIR / 'geocheckin.db').as_posix()}")
 if DATABASE_URL.startswith("postgres://"):
@@ -128,6 +136,7 @@ class Curso(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     nome: Mapped[str] = mapped_column(String(100), unique=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    departamento: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
 
 class Aluno(Base):
@@ -138,6 +147,8 @@ class Aluno(Base):
     matricula: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     # nullable no banco só para aceitar contas criadas na V1; a API exige o curso no cadastro
     curso_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cursos.id"), nullable=True, index=True)
+    periodo: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)                 # 1 a 10
+    status: Mapped[Optional[str]] = mapped_column(String(10), default="ativo")             # ativo | inativo (interno)
     senha_hash: Mapped[str] = mapped_column(String(200))
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -146,6 +157,8 @@ class Professor(Base):
     __tablename__ = "professores"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     ativo: Mapped[Optional[bool]] = mapped_column(Boolean, default=True)  # a coordenação pode desativar
+    registro_funcional: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # ex.: DOC-2026-08
+    departamento: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     nome: Mapped[str] = mapped_column(String(120))
     email: Mapped[str] = mapped_column(String(160), unique=True, index=True)
     senha_hash: Mapped[str] = mapped_column(String(200))
@@ -164,6 +177,8 @@ class Aula(Base):
     local_tipo: Mapped[str] = mapped_column(String(10), default="dentro")    # dentro | fora da faculdade
     local_descricao: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
     curso_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cursos.id"), nullable=True)  # None = todos os cursos
+    periodo: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)                   # None = todos os períodos
+    disciplina: Mapped[Optional[str]] = mapped_column(String(140), nullable=True)
     ativa: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     aberta_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     encerrada_em: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -177,7 +192,7 @@ class Presenca(Base):
     """
     __tablename__ = "presencas"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    aula_id: Mapped[int] = mapped_column(ForeignKey("aulas.id"))
+    aula_id: Mapped[int] = mapped_column(ForeignKey("aulas.id", ondelete="CASCADE"))
     aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), index=True)
     latitude: Mapped[float] = mapped_column(Float)
     longitude: Mapped[float] = mapped_column(Float)
@@ -202,7 +217,7 @@ class Tentativa(Base):
     """
     __tablename__ = "tentativas"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    aula_id: Mapped[int] = mapped_column(ForeignKey("aulas.id"))
+    aula_id: Mapped[int] = mapped_column(ForeignKey("aulas.id", ondelete="CASCADE"))
     aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), index=True)
     motivo: Mapped[str] = mapped_column(String(20))
     detalhe: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
@@ -220,6 +235,26 @@ class Tentativa(Base):
     )
 
 
+class MatriculasAutorizadas(Base):
+    """Lista pré-aprovada pela coordenação. O aluno só se cadastra com uma matrícula daqui e ainda não utilizada."""
+    __tablename__ = "matriculas_autorizadas"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    matricula: Mapped[str] = mapped_column(String(30), unique=True, index=True)
+    curso_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cursos.id"), nullable=True)
+    utilizada: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+
+class LogSeguranca(Base):
+    """Trilha de auditoria: exportações de dados, exclusões em massa, ações da coordenação, logins de admin."""
+    __tablename__ = "logs_seguranca"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    usuario_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    acao: Mapped[str] = mapped_column(String(40))
+    detalhe: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    data_hora: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+
 def get_db():
     with SessionLocal() as db:
         yield db
@@ -228,10 +263,14 @@ def get_db():
 def migrar_esquema():
     """create_all não altera tabelas já existentes: adiciona as colunas novas da V2 em bancos da V1."""
     novas = {
-        "alunos": [("curso_id", "INTEGER REFERENCES cursos (id)")],
-        "professores": [("ativo", "BOOLEAN DEFAULT TRUE")],
+        "cursos": [("departamento", "VARCHAR(100)")],
+        "alunos": [("curso_id", "INTEGER REFERENCES cursos (id)"), ("periodo", "INTEGER"),
+                   ("status", "VARCHAR(10) DEFAULT 'ativo'")],
+        "professores": [("ativo", "BOOLEAN DEFAULT TRUE"), ("registro_funcional", "VARCHAR(30)"),
+                        ("departamento", "VARCHAR(100)")],
         "aulas": [("tipo", "VARCHAR(20) DEFAULT 'aula'"), ("local_tipo", "VARCHAR(10) DEFAULT 'dentro'"),
-                  ("local_descricao", "VARCHAR(160)"), ("curso_id", "INTEGER REFERENCES cursos (id)")],
+                  ("local_descricao", "VARCHAR(160)"), ("curso_id", "INTEGER REFERENCES cursos (id)"),
+                  ("periodo", "INTEGER"), ("disciplina", "VARCHAR(140)")],
         "presencas": [("device_id", "VARCHAR(64)"), ("fp_hash", "VARCHAR(64)"),
                       ("ip", "VARCHAR(64)"), ("alertas", "VARCHAR(200)")],
     }
@@ -360,6 +399,23 @@ def limitar_tentativas(chave: str, maximo: int = 5, janela: int = 600):
 EMAIL_RE = re.compile(r"^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$")
 
 
+def matricula_valida(m: str) -> bool:
+    return bool(MATRICULA_RE.fullmatch(m or ""))
+
+
+def log_seg(db: Session, usuario_id: Optional[int], acao: str, detalhe: str = "", ip: Optional[str] = None,
+            commit: bool = False):
+    """Grava uma linha em LogSeguranca. Com commit=True nunca derruba a requisição se o log falhar."""
+    try:
+        db.add(LogSeguranca(usuario_id=usuario_id, acao=acao[:40], detalhe=(detalhe or "")[:300] or None,
+                            ip=(ip or "")[:64] or None))
+        if commit:
+            db.commit()
+    except Exception:
+        if commit:
+            db.rollback()
+
+
 def email_permitido(email: str, perfil: str) -> bool:
     """Compara o domínio por igualdade exata: um e-mail de aluno nunca vale como professor."""
     if not EMAIL_RE.match(email):
@@ -386,9 +442,11 @@ def resposta_token(u, perfil: str, curso: Optional[str] = None) -> dict:
     claims = {"sub": str(u.id), "role": perfil, "nome": u.nome, "exp": utcnow() + timedelta(hours=TOKEN_HORAS)}
     if perfil == "aluno":
         claims["cid"] = u.curso_id
+        claims["per"] = u.periodo
     token = jwt.encode(claims, SECRET_KEY, algorithm="HS256")
-    return {"token": token, "usuario": {"id": u.id, "nome": u.nome, "email": u.email,
-                                        "perfil": perfil, "curso": curso}}
+    return {"token": token, "usuario": {"id": u.id, "nome": u.nome, "email": u.email, "perfil": perfil,
+                                        "curso": curso, "periodo": getattr(u, "periodo", None),
+                                        "matricula": getattr(u, "matricula", None)}}
 
 
 def usuario_atual(authorization: Optional[str] = Header(None)) -> dict:
@@ -397,7 +455,8 @@ def usuario_atual(authorization: Optional[str] = Header(None)) -> dict:
     try:
         p = jwt.decode(authorization[7:], SECRET_KEY, algorithms=["HS256"])
         return {"id": int(p["sub"]), "role": p["role"], "nome": p.get("nome", ""),
-                "cid": p.get("cid"), "tem_cid": "cid" in p}
+                "cid": p.get("cid"), "tem_cid": "cid" in p,
+                "per": p.get("per"), "tem_per": "per" in p}
     except (jwt.PyJWTError, KeyError, ValueError):
         raise HTTPException(401, "Sessão expirada. Entre novamente.")
 
@@ -414,6 +473,13 @@ def so_professor(u: dict = Depends(usuario_atual)) -> dict:
     return u
 
 
+def _prof_ou_admin(u: dict = Depends(usuario_atual)) -> dict:
+    """RBAC da exportação: só PROFESSOR ou ADMIN (coordenação)."""
+    if u["role"] not in ("professor", "admin"):
+        raise HTTPException(403, "Acesso negado.")
+    return u
+
+
 # =====================================================================
 # SCHEMAS
 # =====================================================================
@@ -424,7 +490,10 @@ class RegistroIn(BaseModel):
     senha: str = Field(min_length=8, max_length=128)
     matricula: Optional[str] = Field(None, max_length=30)
     curso_id: Optional[int] = None
-    chave_master: Optional[str] = Field(None, max_length=100)
+    periodo: Optional[int] = Field(None, ge=1, le=10)
+    registro_funcional: Optional[str] = Field(None, max_length=30)
+    departamento: Optional[str] = Field(None, max_length=100)
+    chave_master: Optional[str] = Field(None, max_length=100)  # Chave de Acesso da Coordenação
 
 
 class LoginIn(BaseModel):
@@ -442,6 +511,8 @@ class AulaIn(BaseModel):
     local_tipo: Literal["dentro", "fora"] = "dentro"
     local_descricao: Optional[str] = Field(None, max_length=160)
     curso_id: Optional[int] = None  # None = aberto a todos os cursos
+    periodo: Optional[int] = Field(None, ge=1, le=10)  # None = todos os períodos
+    disciplina: Optional[str] = Field(None, max_length=140)
 
 
 class PresencaIn(BaseModel):
@@ -460,7 +531,7 @@ def aula_dict(a: Aula, total: Optional[int] = None, curso: Optional[str] = None)
     d = {"id": a.id, "titulo": a.titulo, "latitude": a.latitude, "longitude": a.longitude,
          "raio_metros": a.raio_metros, "ativa": a.ativa, "tipo": a.tipo or "aula",
          "local_tipo": a.local_tipo or "dentro", "local_descricao": a.local_descricao,
-         "curso_id": a.curso_id, "curso": curso,
+         "curso_id": a.curso_id, "curso": curso, "periodo": a.periodo, "disciplina": a.disciplina,
          "aberta_em": iso(a.aberta_em), "encerrada_em": iso(a.encerrada_em)}
     if total is not None:
         d["total"] = total
@@ -506,7 +577,8 @@ def health(db: Session = Depends(get_db)):
 
 @app.get("/api/config")
 def config():
-    return {"dominio_aluno": DOMINIO_ALUNOS, "dominios_professor": DOMINIOS_PROFESSORES}
+    return {"dominio_aluno": DOMINIO_ALUNOS, "dominios_professor": DOMINIOS_PROFESSORES,
+            "matricula_regex": MATRICULA_RE.pattern}
 
 
 @app.get("/api/cursos")
@@ -530,25 +602,61 @@ def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
         if not CHAVE_MASTER:
             raise HTTPException(403, "Cadastro de professores indisponível: a coordenação ainda não configurou a chave.")
         if not hmac.compare_digest((b.chave_master or "").encode(), CHAVE_MASTER.encode()):
-            raise HTTPException(403, "Chave de Acesso Master inválida. Solicite à coordenação.")
+            raise HTTPException(403, "Chave de Acesso da Coordenação inválida. Solicite à coordenação.")
+        registro = (b.registro_funcional or "").strip()
+        depto = (b.departamento or "").strip()
+        if not REGISTRO_RE.fullmatch(registro):
+            raise HTTPException(422, "Informe o Registro Funcional / ID Docente (ex.: DOC-2026-08).")
+        if len(depto) < 2:
+            raise HTTPException(422, "Informe o seu departamento ou área.")
+        if db.scalar(select(Professor.id).where(Professor.registro_funcional == registro)):
+            raise HTTPException(409, "Este registro funcional já está cadastrado. Procure a coordenação.")
     else:
         curso = db.get(Curso, b.curso_id) if b.curso_id else None
         if not curso or not curso.ativo:
             raise HTTPException(422, "Selecione o seu curso.")
+        if not b.periodo:
+            raise HTTPException(422, "Selecione o seu período (1º ao 10º).")
+        mat = (b.matricula or "").strip()
+        if not matricula_valida(mat):
+            raise HTTPException(422, "Matrícula inválida. Digite só os números da sua matrícula (ex.: 202610405).")
+        dono = db.scalar(select(Aluno.email).where(Aluno.matricula == mat))
+        if dono and dono != email:
+            raise HTTPException(409, "Esta matrícula já está vinculada a outro e-mail. Procure a coordenação.")
+        if MATRICULA_OBRIGATORIA:
+            aut = db.scalar(select(MatriculasAutorizadas).where(MatriculasAutorizadas.matricula == mat))
+            if not aut:
+                raise HTTPException(403, "Matrícula não encontrada na lista autorizada. Confira o número "
+                                         "ou procure a coordenação.")
+            if aut.utilizada and dono != email:
+                raise HTTPException(409, "Esta matrícula já está vinculada a outro e-mail. Procure a coordenação.")
+            if aut.curso_id is not None and aut.curso_id != curso.id:
+                raise HTTPException(422, "Esta matrícula pertence a outro curso. Confira o curso selecionado.")
 
     Model = Aluno if b.perfil == "aluno" else Professor
     if db.scalar(select(Model.id).where(Model.email == email)):
         raise HTTPException(409, "Este e-mail já possui cadastro. Use a opção Entrar.")
     u = Model(nome=b.nome.strip(), email=email, senha_hash=hash_senha(b.senha))
     if b.perfil == "aluno":
-        u.matricula = (b.matricula or "").strip() or None
-        u.curso_id = curso.id
+        u.matricula, u.curso_id, u.periodo, u.status = mat, curso.id, b.periodo, "ativo"
+        if MATRICULA_OBRIGATORIA:
+            # reserva atômica: se dois cadastros disputam a mesma matrícula, só um UPDATE acerta a linha
+            r = db.execute(update(MatriculasAutorizadas)
+                           .where(MatriculasAutorizadas.matricula == mat, MatriculasAutorizadas.utilizada.is_(False))
+                           .values(utilizada=True))
+            if r.rowcount != 1:
+                db.rollback()
+                raise HTTPException(409, "Esta matrícula já está vinculada a outro e-mail. Procure a coordenação.")
+    else:
+        u.registro_funcional, u.departamento = registro, depto
     db.add(u)
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, "Este e-mail já possui cadastro. Use a opção Entrar.")
+    if b.perfil == "professor":
+        log_seg(db, u.id, "cadastro_professor", f"registro={registro}", ip_cliente(request), commit=True)
     return resposta_token(u, b.perfil, curso.nome if curso else None)
 
 
@@ -563,6 +671,8 @@ def login(b: LoginIn, db: Session = Depends(get_db)):
         raise HTTPException(401, "E-mail ou senha incorretos.")
     if b.perfil == "professor" and u.ativo is False:
         raise HTTPException(403, "Conta desativada. Procure a coordenação.")
+    if b.perfil == "aluno" and u.status == "inativo":
+        raise HTTPException(403, "Matrícula inativa. Procure a coordenação.")
     curso = db.scalar(select(Curso.nome).where(Curso.id == u.curso_id)) if b.perfil == "aluno" and u.curso_id else None
     return resposta_token(u, b.perfil, curso)
 
@@ -599,7 +709,8 @@ def abrir_aula(b: AulaIn, u: dict = Depends(so_professor), db: Session = Depends
                .values(ativa=False, encerrada_em=utcnow()))
     a = Aula(professor_id=u["id"], titulo=b.titulo.strip(), latitude=b.latitude, longitude=b.longitude,
              raio_metros=b.raio_metros, tipo=b.tipo, local_tipo=b.local_tipo,
-             local_descricao=(b.local_descricao or "").strip() or None, curso_id=b.curso_id)
+             local_descricao=(b.local_descricao or "").strip() or None, curso_id=b.curso_id,
+             periodo=b.periodo, disciplina=(b.disciplina or "").strip() or None)
     db.add(a)
     db.commit()
     _cache_ativas["t"] = 0
@@ -617,15 +728,33 @@ def encerrar_aula(aula_id: int, u: dict = Depends(so_professor), db: Session = D
 
 
 @app.delete("/api/aulas/{aula_id}")
-def excluir_aula(aula_id: int, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
+def excluir_aula(aula_id: int, request: Request, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
     """Exclui a aula e, em cascata, todas as presenças dela (na mesma transação)."""
-    _aula_do_professor(db, aula_id, u["id"])
+    a = _aula_do_professor(db, aula_id, u["id"])
     db.execute(delete(Tentativa).where(Tentativa.aula_id == aula_id))
     removidas = db.execute(delete(Presenca).where(Presenca.aula_id == aula_id)).rowcount
     db.execute(delete(Aula).where(Aula.id == aula_id))
+    log_seg(db, u["id"], "excluir_aula", f"aula={aula_id}; titulo={a.titulo}; presencas={removidas}", ip_cliente(request))
     db.commit()
     _cache_ativas["t"] = 0
     return {"ok": True, "presencas_removidas": removidas}
+
+
+@app.delete("/api/aulas")
+def excluir_todas_as_aulas(request: Request, confirmar: str = "", u: dict = Depends(so_professor),
+                           db: Session = Depends(get_db)):
+    """Exclusão de emergência: apaga TODAS as aulas do professor e, em cascata, as presenças delas."""
+    if confirmar != "EXCLUIR":
+        raise HTTPException(400, "Confirmação ausente. Envie confirmar=EXCLUIR.")
+    ids = select(Aula.id).where(Aula.professor_id == u["id"])
+    n_aulas = _contar(db, Aula, Aula.professor_id == u["id"])
+    db.execute(delete(Tentativa).where(Tentativa.aula_id.in_(ids)))
+    removidas = db.execute(delete(Presenca).where(Presenca.aula_id.in_(ids))).rowcount
+    db.execute(delete(Aula).where(Aula.professor_id == u["id"]))
+    log_seg(db, u["id"], "excluir_todas_aulas", f"aulas={n_aulas}; presencas={removidas}", ip_cliente(request))
+    db.commit()
+    _cache_ativas["t"] = 0
+    return {"ok": True, "aulas_removidas": n_aulas, "presencas_removidas": removidas}
 
 
 @app.get("/api/professor/aulas")
@@ -643,7 +772,7 @@ def presencas_da_aula(aula_id: int, apos_id: int = 0, u: dict = Depends(so_profe
     a = _aula_do_professor(db, aula_id, u["id"])
     total = db.scalar(select(func.count()).select_from(Presenca).where(Presenca.aula_id == aula_id))
     rows = db.execute(
-        select(Presenca.id, Aluno.nome, Aluno.matricula, Aluno.email, Curso.nome.label("curso"),
+        select(Presenca.id, Aluno.nome, Aluno.matricula, Aluno.email, Curso.nome.label("curso"), Aluno.periodo,
                Presenca.distancia_m, Presenca.registrado_em, Presenca.alertas)
         .select_from(Presenca).join(Aluno, Aluno.id == Presenca.aluno_id)
         .outerjoin(Curso, Curso.id == Aluno.curso_id)
@@ -651,7 +780,7 @@ def presencas_da_aula(aula_id: int, apos_id: int = 0, u: dict = Depends(so_profe
         .order_by(Presenca.id).limit(LIMITE_PRESENCAS_POR_CONSULTA)).all()
     return {"ativa": a.ativa, "total": total, "limite": LIMITE_PRESENCAS_POR_CONSULTA,
             "presencas": [{"id": r.id, "nome": r.nome, "matricula": r.matricula, "email": r.email,
-                           "curso": r.curso, "distancia_m": round(r.distancia_m, 1),
+                           "curso": r.curso, "periodo": r.periodo, "distancia_m": round(r.distancia_m, 1),
                            "registrado_em": iso(r.registrado_em), "alertas": r.alertas} for r in rows]}
 
 
@@ -659,7 +788,7 @@ def presencas_da_aula(aula_id: int, apos_id: int = 0, u: dict = Depends(so_profe
 def tentativas_da_aula(aula_id: int, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
     """Alunos que TENTARAM registrar e foram recusados (separado de quem conseguiu)."""
     _aula_do_professor(db, aula_id, u["id"])
-    registrou = exists().where(Presenca.aula_id == Tentativa.aula_id, Presenca.aluno_id == Tentativa.aluno_id)
+    registrou = Tentativa.aluno_id.in_(select(Presenca.aluno_id).where(Presenca.aula_id == aula_id))
     rows = db.execute(
         select(Tentativa.id, Aluno.nome, Aluno.matricula, Curso.nome.label("curso"), Tentativa.motivo,
                Tentativa.detalhe, Tentativa.distancia_m, Tentativa.quantidade, Tentativa.ultima_em,
@@ -679,30 +808,101 @@ def _seguro(v) -> str:
     return "'" + v if v[:1] in ("=", "+", "-", "@") else v
 
 
-@app.get("/api/aulas/{aula_id}/exportar")
-def exportar_chamada(aula_id: int, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
-    _aula_do_professor(db, aula_id, u["id"])
-    rows = db.execute(
-        select(Aluno.nome, Aluno.email, Curso.nome.label("curso"), Presenca.registrado_em, Presenca.distancia_m)
-        .select_from(Presenca).join(Aluno, Aluno.id == Presenca.aluno_id)
-        .outerjoin(Curso, Curso.id == Aluno.curso_id)
-        .where(Presenca.aula_id == aula_id).order_by(Aluno.nome)).all()
+def _cond_ausentes(aula_id: int, curso_id: int, periodo: Optional[int]) -> list:
+    """Alunos ATIVOS matriculados no curso (e período, se a chamada tiver um) que não registraram presença."""
+    cond = [Aluno.curso_id == curso_id,
+            or_(Aluno.status.is_(None), Aluno.status != "inativo"),
+            Aluno.id.not_in(select(Presenca.aluno_id).where(Presenca.aula_id == aula_id))]
+    if periodo is not None:
+        cond.append(Aluno.periodo == periodo)
+    return cond
+
+
+@app.get("/api/aulas/{aula_id}/ausentes")
+def ausentes_da_aula(aula_id: int, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
+    """Aba 'Ausentes / Faltantes': cruza os alunos do curso/período da chamada com as presenças validadas."""
+    a = _aula_do_professor(db, aula_id, u["id"])
+    if a.curso_id is None:
+        return {"disponivel": False, "total": 0, "itens": [],
+                "motivo": "Esta chamada está aberta para todos os cursos. Para ver os ausentes, "
+                          "abra a chamada para um curso específico."}
+    cond = _cond_ausentes(a.id, a.curso_id, a.periodo)
+    total = _contar(db, Aluno, *cond)
+    rows = db.execute(select(Aluno.nome, Aluno.matricula, Aluno.email, Aluno.periodo)
+                      .where(*cond).order_by(Aluno.nome).limit(500)).all()
+    return {"disponivel": True, "total": total, "limite": 500,
+            "itens": [{"nome": r.nome, "matricula": r.matricula, "email": r.email, "periodo": r.periodo}
+                      for r in rows]}
+
+
+EXPORT_CABECALHO = ["Matrícula", "Nome do Aluno", "E-mail", "Curso", "Período", "Status",
+                    "Data/Hora do Check-in", "Distância (m)"]
+
+
+def _gerar_csv(aula_id: int, curso_id: Optional[int], periodo: Optional[int]):
+    """
+    Gerador de CSV em lotes (HTTP streaming): lê o banco em blocos de 500 linhas e envia cada bloco
+    assim que fica pronto, então relatórios com milhares de alunos não ocupam memória do servidor.
+    Usa uma sessão própria porque o StreamingResponse continua depois que a rota retorna.
+    """
     fuso = timezone(timedelta(hours=FUSO_HORAS))
-    buf = io.StringIO()
-    w = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_ALL)
-    w.writerow(["Nome do Aluno", "E-mail", "Curso", "Horário do Check-in", "Distância (m)"])
-    for r in rows:
-        w.writerow([_seguro(r.nome), _seguro(r.email), _seguro(r.curso),
-                    aware(r.registrado_em).astimezone(fuso).strftime("%d/%m/%Y %H:%M:%S"),
-                    f"{r.distancia_m:.1f}".replace(".", ",")])
-    return Response("\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": f'attachment; filename="chamada-{aula_id}.csv"'})
+
+    def pacote(linhas) -> str:
+        buf = io.StringIO()
+        csv.writer(buf, delimiter=";", quoting=csv.QUOTE_ALL).writerows(linhas)
+        return buf.getvalue()
+
+    yield "﻿" + pacote([EXPORT_CABECALHO])
+    with SessionLocal() as db:
+        presentes = (select(Aluno.matricula, Aluno.nome, Aluno.email, Curso.nome.label("curso"), Aluno.periodo,
+                            Presenca.registrado_em, Presenca.distancia_m)
+                     .select_from(Presenca).join(Aluno, Aluno.id == Presenca.aluno_id)
+                     .outerjoin(Curso, Curso.id == Aluno.curso_id)
+                     .where(Presenca.aula_id == aula_id).order_by(Aluno.nome))
+        lote = []
+        for mat, nome, email, curso, per, quando, dist in db.execute(presentes.execution_options(yield_per=500)):
+            lote.append([_seguro(mat), _seguro(nome), _seguro(email), _seguro(curso), f"{per}º" if per else "",
+                         "Presente", aware(quando).astimezone(fuso).strftime("%d/%m/%Y %H:%M:%S"),
+                         f"{dist:.1f}".replace(".", ",")])
+            if len(lote) >= 500:
+                yield pacote(lote)
+                lote = []
+        if lote:
+            yield pacote(lote)
+        if curso_id is not None:  # só dá para listar ausentes quando a chamada é de um curso específico
+            ausentes = (select(Aluno.matricula, Aluno.nome, Aluno.email, Curso.nome.label("curso"), Aluno.periodo)
+                        .select_from(Aluno).outerjoin(Curso, Curso.id == Aluno.curso_id)
+                        .where(*_cond_ausentes(aula_id, curso_id, periodo)).order_by(Aluno.nome))
+            lote = []
+            for mat, nome, email, curso, per in db.execute(ausentes.execution_options(yield_per=500)):
+                lote.append([_seguro(mat), _seguro(nome), _seguro(email), _seguro(curso),
+                             f"{per}º" if per else "", "Ausente", "", ""])
+                if len(lote) >= 500:
+                    yield pacote(lote)
+                    lote = []
+            if lote:
+                yield pacote(lote)
 
 
-def _prof_ou_admin(u: dict = Depends(usuario_atual)) -> dict:
-    if u["role"] not in ("professor", "admin"):
-        raise HTTPException(403, "Acesso negado.")
-    return u
+@app.get("/api/v1/export/chamada")
+def export_chamada(request: Request, aula_id: int, u: dict = Depends(_prof_ou_admin),
+                   db: Session = Depends(get_db)):
+    """Relatório da chamada (Presentes + Ausentes) em CSV com streaming. Só PROFESSOR (dono da aula) ou ADMIN."""
+    a = db.get(Aula, aula_id)
+    if not a or (u["role"] == "professor" and a.professor_id != u["id"]):
+        raise HTTPException(404, "Aula não encontrada.")
+    log_seg(db, u["id"], "exportar_chamada", f"perfil={u['role']}; aula={aula_id}; titulo={a.titulo}",
+            ip_cliente(request), commit=True)
+    return StreamingResponse(_gerar_csv(a.id, a.curso_id, a.periodo), media_type="text/csv; charset=utf-8",
+                             headers={"Content-Disposition": f'attachment; filename="chamada-{aula_id}.csv"',
+                                      "Cache-Control": "no-store"})
+
+
+@app.get("/api/aulas/{aula_id}/exportar")
+def exportar_chamada(aula_id: int, request: Request, u: dict = Depends(so_professor),
+                     db: Session = Depends(get_db)):
+    """Rota antiga, mantida por compatibilidade: usa o mesmo gerador em lotes."""
+    return export_chamada(request, aula_id, u, db)
 
 
 @app.get("/api/meu-ip")
@@ -740,36 +940,43 @@ def registrar_tentativa(db: Session, aula_id: int, aluno_id: int, motivo: str, d
 @app.get("/api/me")
 def meu_perfil(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
     """Dados do aluno para o comprovante (sem CPF: o sistema não coleta esse dado)."""
-    r = db.execute(select(Aluno.nome, Aluno.matricula, Aluno.email, Curso.nome.label("curso"))
+    r = db.execute(select(Aluno.nome, Aluno.matricula, Aluno.email, Aluno.periodo, Curso.nome.label("curso"))
                    .outerjoin(Curso, Curso.id == Aluno.curso_id).where(Aluno.id == u["id"])).first()
     if not r:
         raise HTTPException(404, "Aluno não encontrado.")
-    return {"nome": r.nome, "matricula": r.matricula, "email": r.email, "curso": r.curso}
+    return {"nome": r.nome, "matricula": r.matricula, "email": r.email, "curso": r.curso, "periodo": r.periodo}
 
 
 @app.get("/api/aluno/presencas")
 def minhas_presencas(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
     """Comprovantes: as 20 últimas presenças do aluno (continuam visíveis depois que a chamada fecha)."""
     rows = db.execute(
-        select(Presenca.id, Presenca.registrado_em, Aula.titulo, Aula.tipo, Aula.local_tipo,
-               Professor.nome.label("professor"))
+        select(Presenca.id, Presenca.registrado_em, Aula.titulo, Aula.tipo, Aula.local_tipo, Aula.disciplina,
+               Aula.periodo, Professor.nome.label("professor"))
         .select_from(Presenca).join(Aula, Aula.id == Presenca.aula_id)
         .join(Professor, Professor.id == Aula.professor_id)
         .where(Presenca.aluno_id == u["id"]).order_by(Presenca.id.desc()).limit(20)).all()
     return [{"id": r.id, "registrado_em": iso(r.registrado_em), "titulo": r.titulo, "tipo": r.tipo or "aula",
-             "local_tipo": r.local_tipo or "dentro", "professor": r.professor} for r in rows]
+             "local_tipo": r.local_tipo or "dentro", "disciplina": r.disciplina, "periodo": r.periodo,
+             "professor": r.professor} for r in rows]
 
 
 @app.get("/api/aulas/ativas")
 def aulas_ativas(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
-    cid = u["cid"] if u.get("tem_cid") else db.scalar(select(Aluno.curso_id).where(Aluno.id == u["id"]))
-    ativas = [a for a in _aulas_ativas(db) if a["curso_id"] in (None, cid)]
+    if u.get("tem_cid") and u.get("tem_per"):
+        cid, per = u["cid"], u["per"]
+    else:  # token de antes da V2: consulta o banco uma vez
+        row = db.execute(select(Aluno.curso_id, Aluno.periodo).where(Aluno.id == u["id"])).first()
+        cid, per = (row[0], row[1]) if row else (None, None)
+    ativas = [a for a in _aulas_ativas(db)
+              if a["curso_id"] in (None, cid) and a["periodo"] in (None, per)]
     ids = [a["id"] for a in ativas]
     ja = set(db.scalars(select(Presenca.aula_id).where(Presenca.aluno_id == u["id"],
                                                        Presenca.aula_id.in_(ids)))) if ids else set()
     # coordenadas da sala não vão para o aluno (dificulta falsificar a posição)
     return [{"id": a["id"], "titulo": a["titulo"], "professor": a["professor"], "tipo": a["tipo"],
              "local_tipo": a["local_tipo"], "local_descricao": a["local_descricao"], "curso": a["curso"],
+             "periodo": a["periodo"], "disciplina": a["disciplina"],
              "raio_metros": a["raio_metros"], "aberta_em": a["aberta_em"],
              "ja_registrou": a["id"] in ja} for a in ativas]
 
@@ -782,9 +989,16 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
         raise HTTPException(404, "Aula não encontrada.")
     if not aula.ativa:
         raise HTTPException(409, "Esta chamada já foi encerrada.")
-    if aula.curso_id is not None and db.scalar(select(Aluno.curso_id).where(Aluno.id == u["id"])) != aula.curso_id:
+    al = db.execute(select(Aluno.curso_id, Aluno.periodo, Aluno.status).where(Aluno.id == u["id"])).first()
+    if not al:
+        raise HTTPException(404, "Conta de aluno não encontrada. Entre novamente.")
+    if al.status == "inativo":
+        raise HTTPException(403, "Matrícula inativa. Procure a coordenação.")
+    if aula.curso_id is not None and al.curso_id != aula.curso_id:
         nome = db.scalar(select(Curso.nome).where(Curso.id == aula.curso_id))
         raise HTTPException(403, f"Este evento é exclusivo para alunos de {nome}.")
+    if aula.periodo is not None and al.periodo != aula.periodo:
+        raise HTTPException(403, f"Este evento é exclusivo para alunos do {aula.periodo}º período.")
 
     # 1) qualidade e coerência da leitura de GPS (barato, sem banco)
     if b.precisao_m is not None and b.precisao_m > PRECISAO_MAX_M:
@@ -805,7 +1019,7 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
     if dist > aula.raio_metros:
         registrar_tentativa(db, aula_id, u["id"], "fora_raio",
                             f"A {round(dist)} m da sala (limite de {round(aula.raio_metros)} m)", b, dist, ip)
-        raise HTTPException(403, f"Você está a {round(dist)} m da sala; o limite desta aula é "
+        raise HTTPException(400, f"Você está a {round(dist)} m da sala; o limite desta aula é "
                                  f"{round(aula.raio_metros)} m. Aproxime-se e tente novamente.")
 
     # 3) deslocamento impossível em relação ao último check-in do aluno
@@ -851,6 +1065,7 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
 # COORDENAÇÃO (área administrativa escondida)
 # Acesso = conta de PROFESSOR cujo e-mail está em ADMIN_EMAILS + senha. A URL escondida só evita
 # curiosos; a proteção real é este login (com limite de tentativas) e a checagem do papel "admin" em toda rota.
+# Ações sensíveis ficam registradas em LogSeguranca (aba "Auditoria").
 # =====================================================================
 def so_admin(u: dict = Depends(usuario_atual)) -> dict:
     if u["role"] != "admin" or not ADMIN_EMAILS:
@@ -865,14 +1080,17 @@ class AdminLoginIn(BaseModel):
 
 class CursoIn(BaseModel):
     nome: str = Field(min_length=2, max_length=100)
+    departamento: Optional[str] = Field(None, max_length=100)
 
 
 class AtivoIn(BaseModel):
     ativo: bool
 
 
-class AlunoCursoIn(BaseModel):
-    curso_id: int
+class AlunoEdicaoIn(BaseModel):
+    curso_id: Optional[int] = None
+    periodo: Optional[int] = Field(None, ge=1, le=10)
+    status: Optional[Literal["ativo", "inativo"]] = None
 
 
 class SenhaIn(BaseModel):
@@ -881,17 +1099,30 @@ class SenhaIn(BaseModel):
     nova_senha: str = Field(min_length=8, max_length=128)
 
 
+class ProfessorIn(BaseModel):
+    nome: str = Field(min_length=3, max_length=120)
+    email: str = Field(max_length=160)
+    senha: str = Field(min_length=8, max_length=128)
+    registro_funcional: str = Field(min_length=3, max_length=30)
+    departamento: str = Field(min_length=2, max_length=100)
+
+
+class MatriculasIn(BaseModel):
+    texto: str = Field(max_length=1_000_000)  # uma matrícula por linha, ou "matrícula;nome do curso"
+    curso_id: Optional[int] = None
+
+
 @app.post("/api/admin/login")
 def admin_login(b: AdminLoginIn, request: Request, db: Session = Depends(get_db)):
     email = b.email.strip().lower()
-    limitar_tentativas("adm-ip:" + ip_cliente(request), 8, 600)
+    ip = ip_cliente(request)
+    limitar_tentativas("adm-ip:" + ip, 8, 600)
     limitar_tentativas("adm-em:" + email, 8, 600)
-    erro = HTTPException(401, "E-mail ou senha incorretos.")  # mesma resposta para qualquer falha
-    if email not in ADMIN_EMAILS:
-        raise erro
-    p = db.scalar(select(Professor).where(Professor.email == email))
+    p = db.scalar(select(Professor).where(Professor.email == email)) if email in ADMIN_EMAILS else None
     if not p or p.ativo is False or not confere_senha(b.senha, p.senha_hash):
-        raise erro
+        log_seg(db, None, "login_admin_falha", email, ip, commit=True)
+        raise HTTPException(401, "E-mail ou senha incorretos.")  # mesma resposta para qualquer falha
+    log_seg(db, p.id, "login_admin", "", ip, commit=True)
     token = jwt.encode({"sub": str(p.id), "role": "admin", "nome": p.nome,
                         "exp": utcnow() + timedelta(hours=ADMIN_TOKEN_HORAS)}, SECRET_KEY, algorithm="HS256")
     return {"token": token, "usuario": {"id": p.id, "nome": p.nome, "email": p.email, "perfil": "admin", "curso": None}}
@@ -921,6 +1152,10 @@ def adm_resumo(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
     return {"alunos": _contar(db, Aluno), "professores": _contar(db, Professor), "aulas": _contar(db, Aula),
             "presencas": _contar(db, Presenca), "aulas_ativas": _contar(db, Aula, Aula.ativa.is_(True)),
             "alunos_sem_curso": _contar(db, Aluno, Aluno.curso_id.is_(None)),
+            "alunos_inativos": _contar(db, Aluno, Aluno.status == "inativo"),
+            "matriculas_autorizadas": _contar(db, MatriculasAutorizadas),
+            "matriculas_utilizadas": _contar(db, MatriculasAutorizadas, MatriculasAutorizadas.utilizada.is_(True)),
+            "matricula_obrigatoria": MATRICULA_OBRIGATORIA,
             "por_curso": [{"curso": n, "alunos": c} for n, c in por_curso]}
 
 
@@ -928,25 +1163,29 @@ def adm_resumo(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
 def adm_cursos(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
     rows = db.execute(select(Curso, func.count(Aluno.id)).outerjoin(Aluno, Aluno.curso_id == Curso.id)
                       .group_by(Curso.id).order_by(Curso.nome)).all()
-    return [{"id": c.id, "nome": c.nome, "ativo": c.ativo, "alunos": n} for c, n in rows]
+    return [{"id": c.id, "nome": c.nome, "departamento": c.departamento, "ativo": c.ativo, "alunos": n}
+            for c, n in rows]
 
 
 @app.post("/api/admin/cursos")
-def adm_curso_novo(b: CursoIn, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+def adm_curso_novo(b: CursoIn, request: Request, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
     nome = b.nome.strip()
     if db.scalar(select(Curso.id).where(func.lower(Curso.nome) == nome.lower())):
         raise HTTPException(409, "Já existe um curso com esse nome.")
-    db.add(Curso(nome=nome))
+    db.add(Curso(nome=nome, departamento=(b.departamento or "").strip() or None))
+    log_seg(db, u["id"], "criar_curso", nome, ip_cliente(request))
     db.commit()
     return {"ok": True}
 
 
 @app.patch("/api/admin/cursos/{curso_id}")
-def adm_curso_ativo(curso_id: int, b: AtivoIn, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+def adm_curso_ativo(curso_id: int, b: AtivoIn, request: Request, u: dict = Depends(so_admin),
+                    db: Session = Depends(get_db)):
     c = db.get(Curso, curso_id)
     if not c:
         raise HTTPException(404, "Curso não encontrado.")
     c.ativo = b.ativo
+    log_seg(db, u["id"], "curso_ativo", f"{c.nome}: {'ativo' if b.ativo else 'inativo'}", ip_cliente(request))
     db.commit()
     return {"ok": True}
 
@@ -955,43 +1194,49 @@ def adm_curso_ativo(curso_id: int, b: AtivoIn, u: dict = Depends(so_admin), db: 
 def adm_professores(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
     rows = db.execute(select(Professor, func.count(Aula.id)).outerjoin(Aula, Aula.professor_id == Professor.id)
                       .group_by(Professor.id).order_by(Professor.nome)).all()
-    return [{"id": p.id, "nome": p.nome, "email": p.email, "ativo": p.ativo is not False,
+    return [{"id": p.id, "nome": p.nome, "email": p.email, "registro_funcional": p.registro_funcional,
+             "departamento": p.departamento, "ativo": p.ativo is not False,
              "aulas": n, "admin": p.email in ADMIN_EMAILS} for p, n in rows]
 
 
 @app.patch("/api/admin/professores/{prof_id}")
-def adm_professor_ativo(prof_id: int, b: AtivoIn, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+def adm_professor_ativo(prof_id: int, b: AtivoIn, request: Request, u: dict = Depends(so_admin),
+                        db: Session = Depends(get_db)):
     p = db.get(Professor, prof_id)
     if not p:
         raise HTTPException(404, "Professor não encontrado.")
     if p.id == u["id"] and not b.ativo:
         raise HTTPException(400, "Você não pode desativar a própria conta.")
     p.ativo = b.ativo
+    log_seg(db, u["id"], "professor_ativo", f"{p.email}: {'ativo' if b.ativo else 'desativado'}", ip_cliente(request))
     db.commit()
     return {"ok": True}
 
 
-class ProfessorIn(BaseModel):
-    nome: str = Field(min_length=3, max_length=120)
-    email: str = Field(max_length=160)
-    senha: str = Field(min_length=8, max_length=128)
-
-
 @app.post("/api/admin/professores")
-def adm_professor_novo(b: ProfessorIn, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
-    """A coordenação cria a conta do professor (sem precisar da Chave Master) e informa a senha provisória."""
+def adm_professor_novo(b: ProfessorIn, request: Request, u: dict = Depends(so_admin),
+                       db: Session = Depends(get_db)):
+    """A coordenação cria a conta do professor (sem precisar da Chave) e informa a senha provisória."""
     email = b.email.strip().lower()
+    registro, depto = b.registro_funcional.strip(), b.departamento.strip()
     if not email_permitido(email, "professor"):
         raise HTTPException(403, "Use um e-mail de professor: " + " ou ".join(f"@{d}" for d in DOMINIOS_PROFESSORES))
+    if not REGISTRO_RE.fullmatch(registro):
+        raise HTTPException(422, "Registro funcional inválido (ex.: DOC-2026-08).")
     if db.scalar(select(Professor.id).where(Professor.email == email)):
         raise HTTPException(409, "Já existe um professor com esse e-mail.")
-    db.add(Professor(nome=b.nome.strip(), email=email, senha_hash=hash_senha(b.senha)))
+    if db.scalar(select(Professor.id).where(Professor.registro_funcional == registro)):
+        raise HTTPException(409, "Já existe um professor com esse registro funcional.")
+    db.add(Professor(nome=b.nome.strip(), email=email, senha_hash=hash_senha(b.senha),
+                     registro_funcional=registro, departamento=depto))
+    log_seg(db, u["id"], "criar_professor", f"{email}; registro={registro}", ip_cliente(request))
     db.commit()
     return {"ok": True}
 
 
 @app.delete("/api/admin/professores/{prof_id}")
-def adm_professor_excluir(prof_id: int, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+def adm_professor_excluir(prof_id: int, request: Request, u: dict = Depends(so_admin),
+                          db: Session = Depends(get_db)):
     """Exclui o professor, as aulas dele e as presenças dessas aulas (tudo na mesma transação)."""
     p = db.get(Professor, prof_id)
     if not p:
@@ -1005,6 +1250,7 @@ def adm_professor_excluir(prof_id: int, u: dict = Depends(so_admin), db: Session
     db.execute(delete(Presenca).where(Presenca.aula_id.in_(ids_aulas)))
     db.execute(delete(Aula).where(Aula.professor_id == prof_id))
     db.execute(delete(Professor).where(Professor.id == prof_id))
+    log_seg(db, u["id"], "excluir_professor", p.email, ip_cliente(request))
     db.commit()
     _cache_ativas["t"] = 0
     return {"ok": True}
@@ -1023,41 +1269,140 @@ def adm_alunos(q: str = "", curso_id: int = 0, pagina: int = 1,
     rows = db.execute(select(Aluno, Curso.nome).outerjoin(Curso, Curso.id == Aluno.curso_id).where(*cond)
                       .order_by(Aluno.nome).limit(50).offset((max(pagina, 1) - 1) * 50)).all()
     return {"total": total, "itens": [{"id": a.id, "nome": a.nome, "email": a.email, "matricula": a.matricula,
-                                       "curso_id": a.curso_id, "curso": c} for a, c in rows]}
+                                       "curso_id": a.curso_id, "curso": c, "periodo": a.periodo,
+                                       "status": a.status or "ativo"} for a, c in rows]}
 
 
 @app.patch("/api/admin/alunos/{aluno_id}")
-def adm_aluno_curso(aluno_id: int, b: AlunoCursoIn, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
-    a, c = db.get(Aluno, aluno_id), db.get(Curso, b.curso_id)
-    if not a or not c:
-        raise HTTPException(404, "Aluno ou curso não encontrado.")
-    a.curso_id = c.id
+def adm_aluno_editar(aluno_id: int, b: AlunoEdicaoIn, request: Request, u: dict = Depends(so_admin),
+                     db: Session = Depends(get_db)):
+    a = db.get(Aluno, aluno_id)
+    if not a:
+        raise HTTPException(404, "Aluno não encontrado.")
+    mudancas = []
+    if b.curso_id is not None:
+        c = db.get(Curso, b.curso_id)
+        if not c:
+            raise HTTPException(404, "Curso não encontrado.")
+        a.curso_id = c.id
+        mudancas.append(f"curso={c.nome}")
+    if b.periodo is not None:
+        a.periodo = b.periodo
+        mudancas.append(f"periodo={b.periodo}")
+    if b.status is not None:
+        a.status = b.status
+        mudancas.append(f"status={b.status}")
+    if not mudancas:
+        raise HTTPException(422, "Nada para alterar.")
+    log_seg(db, u["id"], "editar_aluno", f"aluno={aluno_id}; " + "; ".join(mudancas), ip_cliente(request))
     db.commit()
     return {"ok": True}
 
 
 @app.delete("/api/admin/alunos/{aluno_id}")
-def adm_aluno_excluir(aluno_id: int, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
-    if not db.get(Aluno, aluno_id):
+def adm_aluno_excluir(aluno_id: int, request: Request, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+    a = db.get(Aluno, aluno_id)
+    if not a:
         raise HTTPException(404, "Aluno não encontrado.")
     db.execute(delete(Tentativa).where(Tentativa.aluno_id == aluno_id))
     db.execute(delete(Presenca).where(Presenca.aluno_id == aluno_id))
+    if a.matricula:  # libera a matrícula na lista autorizada para um novo cadastro
+        db.execute(update(MatriculasAutorizadas).where(MatriculasAutorizadas.matricula == a.matricula)
+                   .values(utilizada=False))
     db.execute(delete(Aluno).where(Aluno.id == aluno_id))
+    log_seg(db, u["id"], "excluir_aluno", f"aluno={aluno_id}; matricula={a.matricula}", ip_cliente(request))
     db.commit()
     return {"ok": True}
 
 
 @app.post("/api/admin/senha")
-def adm_senha(b: SenhaIn, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+def adm_senha(b: SenhaIn, request: Request, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
     """Não existe 'esqueci a senha' por e-mail: a coordenação redefine e informa a nova senha ao usuário."""
     alvo = db.get(Aluno if b.perfil == "aluno" else Professor, b.id)
     if not alvo:
         raise HTTPException(404, "Usuário não encontrado.")
     alvo.senha_hash = hash_senha(b.nova_senha)
+    log_seg(db, u["id"], "redefinir_senha", f"{b.perfil}={b.id}", ip_cliente(request))
     db.commit()
     return {"ok": True}
 
 
+# ---- Matrículas autorizadas (lista pré-aprovada) ----
+@app.get("/api/admin/matriculas")
+def adm_matriculas(q: str = "", pagina: int = 1, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+    M = MatriculasAutorizadas
+    cond = [M.matricula.like(f"%{q.strip()}%")] if q.strip() else []
+    rows = db.execute(select(M, Curso.nome).outerjoin(Curso, Curso.id == M.curso_id).where(*cond)
+                      .order_by(M.matricula).limit(50).offset((max(pagina, 1) - 1) * 50)).all()
+    return {"total": _contar(db, M, *cond), "total_geral": _contar(db, M),
+            "utilizadas": _contar(db, M, M.utilizada.is_(True)),
+            "itens": [{"id": m.id, "matricula": m.matricula, "curso": c, "utilizada": m.utilizada} for m, c in rows]}
+
+
+@app.post("/api/admin/matriculas/importar")
+def adm_matriculas_importar(b: MatriculasIn, request: Request, u: dict = Depends(so_admin),
+                            db: Session = Depends(get_db)):
+    """Importa várias matrículas de uma vez. Linha = '202610405' ou '202610405;Gestão da TI' (curso opcional)."""
+    padrao = None
+    if b.curso_id is not None:
+        if not db.get(Curso, b.curso_id):
+            raise HTTPException(422, "Curso inválido.")
+        padrao = b.curso_id
+    cursos = {c.nome.lower(): c.id for c in db.scalars(select(Curso))}
+    linhas = [l.strip() for l in b.texto.splitlines() if l.strip()]
+    if len(linhas) > 20000:
+        raise HTTPException(413, "Importe no máximo 20.000 linhas por vez.")
+    novas, invalidas = {}, []
+    for i, linha in enumerate(linhas, 1):
+        partes = [p.strip() for p in re.split(r"[;,\t]", linha)]
+        mat, cid = partes[0], padrao
+        if not matricula_valida(mat):
+            invalidas.append(f"linha {i}: matrícula inválida ({mat[:20]})")
+            continue
+        if len(partes) > 1 and partes[1]:
+            cid = cursos.get(partes[1].lower())
+            if cid is None:
+                invalidas.append(f"linha {i}: curso '{partes[1][:40]}' não existe")
+                continue
+        novas.setdefault(mat, cid)
+    chaves = list(novas)
+    existentes, com_aluno = set(), set()
+    for i in range(0, len(chaves), 500):
+        bloco = chaves[i:i + 500]
+        existentes.update(db.scalars(select(MatriculasAutorizadas.matricula)
+                                     .where(MatriculasAutorizadas.matricula.in_(bloco))))
+        com_aluno.update(db.scalars(select(Aluno.matricula).where(Aluno.matricula.in_(bloco))))
+    adicionadas = 0
+    for mat, cid in novas.items():
+        if mat not in existentes:
+            # se já existe aluno com essa matrícula, ela entra como utilizada (não permite um 2º cadastro)
+            db.add(MatriculasAutorizadas(matricula=mat, curso_id=cid, utilizada=mat in com_aluno))
+            adicionadas += 1
+    log_seg(db, u["id"], "importar_matriculas",
+            f"{adicionadas} nova(s); {len(existentes)} já existiam; {len(invalidas)} inválida(s)", ip_cliente(request))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Outra importação estava em andamento. Tente de novo.")
+    return {"adicionadas": adicionadas, "ja_existiam": len(existentes), "invalidas": len(invalidas),
+            "exemplos_invalidas": invalidas[:15]}
+
+
+@app.delete("/api/admin/matriculas/{mid}")
+def adm_matricula_excluir(mid: int, request: Request, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+    m = db.get(MatriculasAutorizadas, mid)
+    if not m:
+        raise HTTPException(404, "Matrícula não encontrada.")
+    if m.utilizada:
+        raise HTTPException(409, "Esta matrícula já está vinculada a um aluno. Exclua ou edite o aluno primeiro.")
+    db.execute(delete(MatriculasAutorizadas).where(MatriculasAutorizadas.id == mid))
+    log_seg(db, u["id"], "excluir_matricula", m.matricula, ip_cliente(request))
+    db.commit()
+    return {"ok": True}
+
+
+# ---- Aulas, alertas e auditoria ----
 @app.get("/api/admin/aulas")
 def adm_aulas(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
     rows = db.execute(select(Aula, Professor.nome, func.count(Presenca.id), Curso.nome)
@@ -1081,12 +1426,15 @@ def adm_aula_encerrar(aula_id: int, u: dict = Depends(so_admin), db: Session = D
 
 
 @app.delete("/api/admin/aulas/{aula_id}")
-def adm_aula_excluir(aula_id: int, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
-    if not db.get(Aula, aula_id):
+def adm_aula_excluir(aula_id: int, request: Request, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+    a = db.get(Aula, aula_id)
+    if not a:
         raise HTTPException(404, "Aula não encontrada.")
     db.execute(delete(Tentativa).where(Tentativa.aula_id == aula_id))
     removidas = db.execute(delete(Presenca).where(Presenca.aula_id == aula_id)).rowcount
     db.execute(delete(Aula).where(Aula.id == aula_id))
+    log_seg(db, u["id"], "excluir_aula_admin", f"aula={aula_id}; titulo={a.titulo}; presencas={removidas}",
+            ip_cliente(request))
     db.commit()
     _cache_ativas["t"] = 0
     return {"ok": True, "presencas_removidas": removidas}
@@ -1101,6 +1449,16 @@ def adm_alertas(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
                       .where(Presenca.alertas.is_not(None)).order_by(Presenca.id.desc()).limit(100)).all()
     return [{"id": r.id, "aluno": r.nome, "email": r.email, "aula": r.titulo, "alertas": r.alertas, "ip": r.ip,
              "distancia_m": round(r.distancia_m, 1), "registrado_em": iso(r.registrado_em)} for r in rows]
+
+
+@app.get("/api/admin/auditoria")
+def adm_auditoria(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+    """Trilha de auditoria (LogSeguranca): quem fez o quê, quando e de qual IP. Últimos 150 registros."""
+    rows = db.execute(select(LogSeguranca, Professor.nome)
+                      .outerjoin(Professor, Professor.id == LogSeguranca.usuario_id)
+                      .order_by(LogSeguranca.id.desc()).limit(150)).all()
+    return [{"id": l.id, "usuario_id": l.usuario_id, "usuario": nome, "acao": l.acao, "detalhe": l.detalhe,
+             "ip": l.ip, "data_hora": iso(l.data_hora)} for l, nome in rows]
 
 
 if __name__ == "__main__":
