@@ -195,6 +195,7 @@ class Aula(Base):
     curso_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cursos.id"), nullable=True)  # None = todos os cursos
     periodo: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)                   # None = todos os períodos
     disciplina: Mapped[Optional[str]] = mapped_column(String(140), nullable=True)
+    codigo_validacao: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)       # impresso no PDF do aluno
     ativa: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     aberta_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     encerrada_em: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -294,7 +295,8 @@ def migrar_esquema():
                         ("departamento", "VARCHAR(100)")],
         "aulas": [("tipo", "VARCHAR(20) DEFAULT 'aula'"), ("local_tipo", "VARCHAR(10) DEFAULT 'dentro'"),
                   ("local_descricao", "VARCHAR(160)"), ("curso_id", "INTEGER REFERENCES cursos (id)"),
-                  ("periodo", "INTEGER"), ("disciplina", "VARCHAR(140)")],
+                  ("periodo", "INTEGER"), ("disciplina", "VARCHAR(140)"),
+                  ("codigo_validacao", "VARCHAR(16)")],
         "presencas": [("device_id", "VARCHAR(64)"), ("fp_hash", "VARCHAR(64)"),
                       ("ip", "VARCHAR(64)"), ("alertas", "VARCHAR(200)")],
     }
@@ -625,6 +627,7 @@ class AulaIn(BaseModel):
     curso_id: Optional[int] = None  # None = aberto a todos os cursos
     periodo: Optional[int] = Field(None, ge=1, le=10)  # None = todos os períodos
     disciplina: Optional[str] = Field(None, max_length=140)
+    codigo_validacao: Optional[str] = Field(None, max_length=32)  # em branco = o sistema gera um
 
 
 class PresencaIn(BaseModel):
@@ -639,7 +642,7 @@ class PresencaIn(BaseModel):
     fp_hash: Optional[str] = Field(None, pattern=r"^[a-f0-9]{8,64}$")
 
 
-def aula_dict(a: Aula, total: Optional[int] = None, curso: Optional[str] = None) -> dict:
+def aula_dict(a: Aula, total: Optional[int] = None, curso: Optional[str] = None, com_codigo: bool = False) -> dict:
     d = {"id": a.id, "titulo": a.titulo, "latitude": a.latitude, "longitude": a.longitude,
          "raio_metros": a.raio_metros, "ativa": a.ativa, "tipo": a.tipo or "aula",
          "local_tipo": a.local_tipo or "dentro", "local_descricao": a.local_descricao,
@@ -647,7 +650,156 @@ def aula_dict(a: Aula, total: Optional[int] = None, curso: Optional[str] = None)
          "aberta_em": iso(a.aberta_em), "encerrada_em": iso(a.encerrada_em)}
     if total is not None:
         d["total"] = total
+    if com_codigo:  # só para o professor dono do evento: o aluno só vê o código dentro do PDF da própria presença
+        d["codigo_validacao"] = a.codigo_validacao
     return d
+
+
+# ---------------------------------------------------------------------
+# Código de validação do evento + comprovante em PDF
+# ---------------------------------------------------------------------
+CODIGO_RE = re.compile(r"^[A-Z0-9]{3,12}$")
+BRT = timezone(timedelta(hours=-3))  # o Brasil não tem horário de verão desde 2019
+
+
+def normalizar_codigo(s: Optional[str]) -> Optional[str]:
+    """' 08 1 ' -> '081'; 'abc12' -> 'ABC12'; vazio -> None; fora do padrão (3 a 12 letras/números) -> ValueError."""
+    c = re.sub(r"\s+", "", sem_acentos(s or "")).upper()
+    if not c:
+        return None
+    if not CODIGO_RE.match(c):
+        raise ValueError(c)
+    return c
+
+
+def gerar_codigo() -> str:
+    return f"{secrets.randbelow(10000):04d}"
+
+
+def assinatura_presenca(p: "Presenca", a: "Aula") -> str:
+    """Autenticação do comprovante: HMAC (chave do servidor) de presença, aluno, evento, hora e código do evento.
+    Quem falsifica um PDF não consegue gerar esta parte, e o professor confere no painel."""
+    base = f"{p.id}|{p.aluno_id}|{a.id}|{int(aware(p.registrado_em).timestamp())}|{a.codigo_validacao or ''}"
+    return hmac.new(SECRET_KEY.encode(), base.encode(), hashlib.sha256).hexdigest()[:10].upper()
+
+
+def _l1(s) -> str:
+    """Texto seguro para as fontes padrão do PDF (cp1252): o que não couber vira '?'."""
+    return str("" if s is None else s).encode("cp1252", "replace").decode("cp1252")
+
+
+def gerar_pdf_comprovante(d: dict) -> bytes:
+    """Comprovante de presença em PDF, uma página A4. O reportlab é importado aqui para o app subir mesmo sem ele."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import simpleSplit
+    from reportlab.pdfgen import canvas
+
+    W, H = A4
+    M = 48
+    verde, cinza, escuro = colors.HexColor("#1d6b47"), colors.HexColor("#5b6670"), colors.HexColor("#14202b")
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.setTitle(_l1(f"Comprovante de presença nº {d['protocolo']}"))
+    c.setAuthor("GeoCheckIn - UniCerrado")
+    c.setSubject("Comprovante de presença")
+
+    c.setFillColor(verde)
+    c.rect(0, H - 86, W, 86, stroke=0, fill=1)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 22)
+    c.drawString(M, H - 42, "GeoCheckIn")
+    c.setFont("Helvetica", 12)
+    c.drawString(M, H - 62, _l1("Comprovante de presença · Centro Universitário de Goiatuba (UniCerrado)"))
+
+    y = H - 124
+    c.setFillColor(verde)
+    c.setFont("Helvetica-Bold", 15)
+    c.drawString(M, y, _l1("PRESENÇA REGISTRADA"))
+    y -= 30
+
+    def campo(rotulo: str, valor: str):
+        nonlocal y
+        c.setFillColor(cinza)
+        c.setFont("Helvetica", 8.5)
+        c.drawString(M, y, _l1(rotulo.upper()))
+        y -= 14
+        c.setFillColor(escuro)
+        c.setFont("Helvetica-Bold", 12)
+        for lin in simpleSplit(_l1(valor), "Helvetica-Bold", 12, W - 2 * M):
+            c.drawString(M, y, lin)
+            y -= 15
+        y -= 7
+
+    campo("Aluno", d["nome"])
+    campo("Matrícula", d["matricula"] or "—")
+    campo("Curso e período", f"{d['curso'] or '—'}" + (f" · {d['periodo']}º período" if d.get("periodo") else ""))
+    campo("Evento", f"{'Palestra' if d['tipo'] == 'palestra' else 'Aula'} · {d['titulo']}"
+                    + (f" (disciplina {d['disciplina']})" if d.get("disciplina") else ""))
+    campo("Local", ("Fora da faculdade" if d["local_tipo"] == "fora" else "Dentro da faculdade")
+                   + (f" · {d['local_descricao']}" if d.get("local_descricao") else ""))
+    campo("Professor(a)", d["professor"])
+    campo("Data e hora do registro (horário de Brasília)", d["registrado_em"].astimezone(BRT).strftime("%d/%m/%Y às %H:%M:%S"))
+    campo("Protocolo nº", str(d["protocolo"]))
+
+    y -= 2
+    h = 104
+    c.setStrokeColor(verde)
+    c.setLineWidth(2.2)
+    c.setFillColor(colors.HexColor("#eef7f1"))
+    c.roundRect(M, y - h, W - 2 * M, h, 10, stroke=1, fill=1)
+    c.setFillColor(cinza)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawCentredString(W / 2, y - 25, _l1("CÓDIGO DE VALIDAÇÃO DA AULA"))
+    c.setFillColor(verde)
+    c.setFont("Courier-Bold", 50)
+    c.drawCentredString(W / 2, y - 78, _l1(d["codigo"]))
+    y -= h + 24
+
+    c.setFillColor(cinza)
+    c.setFont("Helvetica", 8.5)
+    c.drawString(M, y, _l1("AUTENTICAÇÃO DO COMPROVANTE"))
+    y -= 17
+    c.setFillColor(escuro)
+    c.setFont("Courier-Bold", 14)
+    c.drawString(M, y, _l1(d["autenticacao"]))
+    y -= 28
+
+    quando = d["registrado_em"].astimezone(BRT)
+    frase = (f"Eu, {d['nome']}, matrícula {d['matricula'] or '—'}"
+             + (f", do curso de {d['curso']}" if d.get("curso") else "")
+             + f", registrei presença no evento \"{d['titulo']}\""
+             + (f", disciplina {d['disciplina']}" if d.get("disciplina") else "")
+             + f", em {quando.strftime('%d/%m/%Y')} às {quando.strftime('%H:%M')}.")
+    linhas = simpleSplit(_l1(frase), "Helvetica", 10.5, W - 2 * M - 16)
+    alt = len(linhas) * 14 + 12
+    c.setFillColor(colors.HexColor("#f3f6f4"))
+    c.rect(M, y - alt + 12, W - 2 * M, alt, stroke=0, fill=1)
+    c.setFillColor(verde)
+    c.rect(M, y - alt + 12, 3.5, alt, stroke=0, fill=1)
+    c.setFillColor(escuro)
+    c.setFont("Helvetica", 10.5)
+    yy = y - 4
+    for lin in linhas:
+        c.drawString(M + 14, yy, lin)
+        yy -= 14
+
+    c.setStrokeColor(colors.HexColor("#cfd8d3"))
+    c.setLineWidth(0.8)
+    c.line(M, 74, W - M, 74)
+    c.setFillColor(cinza)
+    c.setFont("Helvetica", 8)
+    rodape = (f"Como conferir: o código de validação acima deve ser igual ao definido pelo professor no cadastro do evento, "
+              f"e a autenticação pode ser conferida no painel do professor (Conferir comprovante). "
+              f"Documento gerado em {d['emitido_em'].astimezone(BRT).strftime('%d/%m/%Y %H:%M')} (horário de Brasília). "
+              f"Este comprovante não contém CPF nem coordenadas de localização.")
+    yy = 62
+    for lin in simpleSplit(_l1(rodape), "Helvetica", 8, W - 2 * M):
+        c.drawString(M, yy, lin)
+        yy -= 10
+    c.showPage()
+    c.save()
+    return buf.getvalue()
 
 
 # =====================================================================
@@ -862,16 +1014,21 @@ def abrir_aula(b: AulaIn, u: dict = Depends(so_professor), db: Session = Depends
         curso = db.get(Curso, b.curso_id)
         if not curso or not curso.ativo:
             raise HTTPException(422, "Curso inválido.")
+    try:  # validado antes de encerrar a chamada anterior, para um erro de digitação não fechar a aula aberta
+        codigo = normalizar_codigo(b.codigo_validacao)
+    except ValueError:
+        raise HTTPException(422, "O código de validação deve ter de 3 a 12 letras ou números, sem símbolos (ex.: 081).")
     db.execute(update(Aula).where(Aula.professor_id == u["id"], Aula.ativa.is_(True))
                .values(ativa=False, encerrada_em=utcnow()))
     a = Aula(professor_id=u["id"], titulo=b.titulo.strip(), latitude=b.latitude, longitude=b.longitude,
              raio_metros=b.raio_metros, tipo=b.tipo, local_tipo=b.local_tipo,
              local_descricao=(b.local_descricao or "").strip() or None, curso_id=b.curso_id,
-             periodo=b.periodo, disciplina=(b.disciplina or "").strip() or None)
+             periodo=b.periodo, disciplina=(b.disciplina or "").strip() or None,
+             codigo_validacao=codigo or gerar_codigo())
     db.add(a)
     db.commit()
     _cache_ativas["t"] = 0
-    return aula_dict(a, 0, curso.nome if curso else None)
+    return aula_dict(a, 0, curso.nome if curso else None, com_codigo=True)
 
 
 @app.post("/api/aulas/{aula_id}/encerrar")
@@ -920,7 +1077,26 @@ def minhas_aulas(u: dict = Depends(so_professor), db: Session = Depends(get_db))
                       .outerjoin(Presenca, Presenca.aula_id == Aula.id).outerjoin(Curso, Curso.id == Aula.curso_id)
                       .where(Aula.professor_id == u["id"]).group_by(Aula.id, Curso.nome)
                       .order_by(Aula.id.desc()).limit(30)).all()
-    return [aula_dict(a, n, cn) for a, n, cn in rows]
+    return [aula_dict(a, n, cn, com_codigo=True) for a, n, cn in rows]
+
+
+@app.get("/api/aulas/{aula_id}/conferir")
+def conferir_comprovante(aula_id: int, codigo: str = "", u: dict = Depends(so_professor),
+                         db: Session = Depends(get_db)):
+    """O professor cola a 'Autenticação do comprovante' que está no PDF do aluno e vê se ela é verdadeira."""
+    a = _aula_do_professor(db, aula_id, u["id"])
+    limitar_tentativas("conf:" + str(u["id"]), 60, 600)
+    m = re.fullmatch(r"\s*(\d{1,12})\s*-\s*([0-9A-Fa-f]{10})\s*", codigo or "")
+    if not m:
+        raise HTTPException(422, "Formato inválido. Cole a autenticação do PDF, como 1042-9F3A7C21B4.")
+    row = db.execute(select(Presenca, Aluno.nome, Aluno.matricula, Curso.nome.label("curso"))
+                     .select_from(Presenca).join(Aluno, Aluno.id == Presenca.aluno_id)
+                     .outerjoin(Curso, Curso.id == Aluno.curso_id)
+                     .where(Presenca.id == int(m.group(1)), Presenca.aula_id == aula_id)).first()
+    if not row or not hmac.compare_digest(assinatura_presenca(row[0], a), m.group(2).upper()):
+        return {"valido": False}
+    return {"valido": True, "nome": row[1], "matricula": row[2], "curso": row[3],
+            "registrado_em": iso(row[0].registrado_em), "codigo_validacao": a.codigo_validacao}
 
 
 @app.get("/api/aulas/{aula_id}/presencas")
@@ -1118,6 +1294,37 @@ def minhas_presencas(u: dict = Depends(so_aluno), db: Session = Depends(get_db))
              "professor": r.professor} for r in rows]
 
 
+@app.get("/api/aluno/presencas/{presenca_id}/pdf")
+def comprovante_pdf(presenca_id: int, u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """PDF da própria presença, com o código de validação do evento e a autenticação do comprovante."""
+    limitar_tentativas("pdf:" + str(u["id"]), 30, 600)
+    row = db.execute(
+        select(Presenca, Aula, Professor.nome, Aluno.nome, Aluno.matricula, Aluno.periodo, Curso.nome)
+        .select_from(Presenca).join(Aula, Aula.id == Presenca.aula_id)
+        .join(Professor, Professor.id == Aula.professor_id).join(Aluno, Aluno.id == Presenca.aluno_id)
+        .outerjoin(Curso, Curso.id == Aluno.curso_id)
+        .where(Presenca.id == presenca_id, Presenca.aluno_id == u["id"])).first()  # só a PRÓPRIA presença
+    if not row:
+        raise HTTPException(404, "Comprovante não encontrado.")
+    p, a, prof, nome, matricula, periodo, curso = row
+    if not a.codigo_validacao:  # evento criado antes do código existir: gera uma vez (sem corrida entre alunos)
+        db.execute(update(Aula).where(Aula.id == a.id, Aula.codigo_validacao.is_(None))
+                   .values(codigo_validacao=gerar_codigo()))
+        db.commit()
+        db.refresh(a)
+    try:
+        pdf = gerar_pdf_comprovante({
+            "nome": nome, "matricula": matricula, "curso": curso, "periodo": periodo, "titulo": a.titulo,
+            "tipo": a.tipo or "aula", "local_tipo": a.local_tipo or "dentro", "local_descricao": a.local_descricao,
+            "disciplina": a.disciplina, "professor": prof, "registrado_em": aware(p.registrado_em),
+            "protocolo": p.id, "codigo": a.codigo_validacao, "emitido_em": utcnow(),
+            "autenticacao": f"{p.id}-{assinatura_presenca(p, a)}"})
+    except ImportError:
+        raise HTTPException(503, "A geração de PDF não está disponível no servidor. Avise a coordenação.")
+    return Response(pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="comprovante-presenca-{p.id}.pdf"', "Cache-Control": "no-store"})
+
+
 @app.get("/api/aulas/ativas")
 def aulas_ativas(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
     if u.get("tem_cid") and u.get("tem_per"):
@@ -1130,10 +1337,12 @@ def aulas_ativas(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
     ids = [a["id"] for a in ativas]
     ja = set(db.scalars(select(Presenca.aula_id).where(Presenca.aluno_id == u["id"],
                                                        Presenca.aula_id.in_(ids)))) if ids else set()
-    # coordenadas da sala não vão para o aluno (dificulta falsificar a posição)
+    # latitude/longitude vão para o aluno só para o navegador travar o botão fora da zona; quem manda é o servidor,
+    # que recalcula a distância no check-in (HTTP 400 fora do raio). O código de validação NUNCA vai aqui.
     return [{"id": a["id"], "titulo": a["titulo"], "professor": a["professor"], "tipo": a["tipo"],
              "local_tipo": a["local_tipo"], "local_descricao": a["local_descricao"], "curso": a["curso"],
              "periodo": a["periodo"], "disciplina": a["disciplina"],
+             "latitude": a["latitude"], "longitude": a["longitude"],
              "raio_metros": a["raio_metros"], "aberta_em": a["aberta_em"],
              "ja_registrou": a["id"] in ja} for a in ativas]
 

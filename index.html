@@ -26,6 +26,8 @@ input,select,textarea{width:100%;padding:11px 12px;border:1px solid var(--line);
 input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid var(--ring);outline-offset:1px}
 .btn{border:0;border-radius:8px;background:var(--pri);color:var(--pri-ink);font:inherit;font-weight:600;padding:11px 18px;cursor:pointer}
 .btn:disabled{opacity:.55;cursor:wait}
+.btn.fora:disabled{background:var(--line);color:var(--mut);opacity:1;cursor:not-allowed}
+.zona{margin:8px 0 0;font-size:14px;color:var(--mut)}.zona.dentro{color:var(--ok);font-weight:600}.zona.longe{color:var(--err);font-weight:600}
 .btn.big{width:100%;padding:16px;font-size:18px;margin-top:10px}
 .btn.alt{background:transparent;color:var(--ink);border:1px solid var(--line)}
 .btn.stop{background:var(--err);color:#fff}
@@ -107,11 +109,11 @@ textarea{min-height:110px;resize:vertical}
 <!-- ============ ALUNO ============ -->
 <section id="v-aluno" hidden>
   <h2>Aulas com chamada aberta</h2>
-  <p class="mut" id="aluno-info">Ao registrar, o navegador vai pedir permissão para usar sua localização. Use o seu próprio celular e fique dentro da sala.</p>
+  <p class="mut" id="aluno-info">O navegador vai pedir permissão para usar sua localização. O botão Registrar Presença só libera quando você está dentro da área da aula. Use o seu próprio celular.</p>
   <div class="msg" id="msg-aluno" hidden></div>
   <div id="aulas"></div>
   <h2 style="margin-top:22px">Meus comprovantes</h2>
-  <p class="mut">Para provar ao professor que você fez a chamada, toque em <b>Mostrar ao professor</b>: o comprovante abre em tela cheia, com seus dados, o evento, o horário e um relógio ao vivo.</p>
+  <p class="mut">Para provar ao professor que você fez a chamada, toque em <b>Mostrar ao professor</b>: o comprovante abre em tela cheia, com seus dados, o evento, o horário e um relógio ao vivo. Toque em <b>Baixar PDF</b> para salvar o comprovante com o código de validação da aula.</p>
   <div id="comprov"></div>
 </section>
 
@@ -127,6 +129,7 @@ textarea{min-height:110px;resize:vertical}
         <label>Turma / curso<select id="aula-curso"><option value="">Todos os cursos</option></select></label>
         <label>Período<select id="aula-periodo"><option value="">Todos os períodos</option></select></label>
         <label>Disciplina<input id="disciplina" placeholder="Ex.: Cálculo II" maxlength="140"></label>
+        <label>Código de validação do PDF<input id="codigo" maxlength="12" autocomplete="off" autocapitalize="characters" placeholder="Ex.: 081 (vazio = gerar um)"></label>
         <label>Descrição do local (opcional)<input id="local-desc" placeholder="Ex.: Auditório, Bloco B, sala 4"></label>
       </div>
       <div class="grid">
@@ -138,7 +141,7 @@ textarea{min-height:110px;resize:vertical}
         <button class="btn alt" id="btn-gps" type="button">Usar minha localização atual</button>
         <button class="btn" type="submit">Abrir chamada</button>
       </div>
-      <p class="mut">Estando na sala, use sua localização atual ou clique no mapa. Prefira raios de 30 m ou mais: o GPS dentro de prédios oscila. Para acompanhar os alunos ausentes, escolha um curso específico (e o período, se quiser).</p>
+      <p class="mut">Estando na sala, use sua localização atual ou clique no mapa. Prefira raios de 30 m ou mais: o GPS dentro de prédios oscila. Para acompanhar os alunos ausentes, escolha um curso específico (e o período, se quiser). O código de validação (3 a 12 letras ou números) aparece só no PDF que o aluno baixa depois de registrar presença: use-o para conferir os comprovantes.</p>
       <div id="mapa"></div>
     </form>
     <div class="msg" id="msg-prof" hidden></div>
@@ -146,7 +149,7 @@ textarea{min-height:110px;resize:vertical}
 
   <div class="card" id="painel" hidden>
     <div class="top">
-      <div><h3 id="p-titulo"></h3><div class="mut" id="p-info"></div><div class="live" id="p-estado"></div></div>
+      <div><h3 id="p-titulo"></h3><div class="mut" id="p-info"></div><div class="live" id="p-estado"></div><div id="p-cod" style="font-weight:700;margin-top:4px"></div></div>
       <div style="text-align:right"><div class="count" id="p-total">0</div><div class="mut">presenças</div></div>
     </div>
     <div class="acoes">
@@ -154,6 +157,8 @@ textarea{min-height:110px;resize:vertical}
       <button class="btn alt" id="btn-csv" type="button">Exportar Chamada (CSV)</button>
       <button class="btn alt" id="btn-del" type="button" style="color:var(--err)">Excluir Aula/Evento</button>
     </div>
+    <div class="row" id="conf-box"><input id="conf-cod" maxlength="40" autocomplete="off" placeholder="Autenticação do PDF do aluno (ex.: 1042-9F3A7C21B4)"><button class="btn alt" id="btn-conf" type="button">Conferir comprovante</button></div>
+    <div class="msg" id="conf-res" hidden></div>
     <div class="atabs" id="p-tabs">
       <button data-pt="presentes" class="on">Alunos Presentes (<span id="n-pres">0</span>)</button>
       <button data-pt="ausentes">Alunos Ausentes / Faltantes (<span id="n-aus">–</span>)</button>
@@ -218,6 +223,8 @@ textarea{min-height:110px;resize:vertical}
     <div class="mut">Hora agora neste celular</div>
     <div class="m-rel" id="m-rel"></div>
     <p class="mut">O professor confere o protocolo na coluna "Nº" da lista de presentes.</p>
+    <div class="msg" id="m-msg" hidden></div>
+    <button class="btn big" id="m-pdf" type="button">Baixar PDF do comprovante</button>
     <button class="btn alt big" id="m-fechar" type="button">Fechar</button>
   </div>
 </div>
@@ -228,7 +235,7 @@ textarea{min-height:110px;resize:vertical}
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const S = {token:null, user:null, perfil:'aluno', modo:'login', aula:null, rows:[], ultimo:0, hist:[], poll:null, timer:null,
-           map:null, marker:null, circle:null, cursos:[], cfg:{dominio_aluno:'alunos.unicerrado.edu.br', dominios_professor:['unicerrado.edu.br'], matricula_regex:'^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$', coordenacao_aberta:false}, tick:0};
+           map:null, marker:null, circle:null, geo:{pos:null, erro:null, id:null}, cursos:[], cfg:{dominio_aluno:'alunos.unicerrado.edu.br', dominios_professor:['unicerrado.edu.br'], matricula_regex:'^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$', coordenacao_aberta:false}, tick:0};
 const store = {get:k=>{try{return localStorage.getItem(k)}catch{return null}}, set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}, del:k=>{try{localStorage.removeItem(k)}catch{}}};
 
 const KT = 'gc_token', KU = 'gc_user';
@@ -386,7 +393,7 @@ function iniciar(){
   } else { show('prof'); initMapa(); recarregarHist(true); }
 }
 function sair(aviso){
-  clearInterval(S.timer); clearInterval(S.poll);
+  clearInterval(S.timer); clearInterval(S.poll); geoDesligar(); S.geo.pos = S.geo.erro = null;
   S.token = S.user = S.aula = null; store.del(KT); store.del(KU);
   $('#painel').hidden = true; S.modo = 'login';
   fecharMostrar(); renderAuth(); show('auth'); if (aviso) msg($('#msg-auth'), aviso, 'err');
@@ -401,13 +408,53 @@ async function carregarAulas(){
       <div class="mut">${esc(rotulo(a))}${a.local_descricao ? ' · ' + esc(a.local_descricao) : ''}</div>
       <div class="mut">${a.disciplina ? 'Disciplina: ' + esc(a.disciplina) + ' · ' : ''}Prof. ${esc(a.professor)} · raio de ${Math.round(a.raio_metros)} m</div>
       ${a.ja_registrou ? '<div class="ok-badge">✓ Presença registrada</div>'
-                       : `<button class="btn big" data-id="${a.id}">Registrar Presença</button>`}</article>`).join('')
+                       : `<button class="btn big fora" data-id="${a.id}" data-lat="${a.latitude}" data-lon="${a.longitude}" data-raio="${a.raio_metros}" disabled>Verificando sua localização…</button><div class="zona"></div>`}</article>`).join('')
       : '<div class="card vazio mut">Nenhuma chamada aberta agora. Esta tela atualiza sozinha quando o professor abrir a chamada.</div>';
+    atualizarZona();
+    if (l.some(a => !a.ja_registrou)) geoLigar(); else geoDesligar();  // GPS ligado só enquanto há presença a registrar
   } catch (x) { msg($('#msg-aluno'), x.message, 'err'); }
 }
+
+/* Posição ao vivo + trava do botão: fora do raio da aula o botão fica cinza e desabilitado. O navegador só avisa;
+   quem decide é o servidor, que recalcula a distância no check-in e responde 400 fora do raio. */
+function geoLigar(){
+  if (S.geo.id != null || document.hidden) return;
+  if (!navigator.geolocation){ S.geo.erro = 'Seu navegador não suporta geolocalização.'; return atualizarZona(); }
+  S.geo.id = navigator.geolocation.watchPosition(
+    p => { S.geo.pos = {lat:p.coords.latitude, lon:p.coords.longitude, acc:p.coords.accuracy, ts:p.timestamp}; S.geo.erro = null; atualizarZona(); },
+    e => { S.geo.erro = erroGeo(e.code); if (e.code === 1) geoDesligar(); atualizarZona(); },
+    {enableHighAccuracy:true, maximumAge:5000, timeout:30000});
+}
+function geoDesligar(){ if (S.geo.id != null){ navigator.geolocation.clearWatch(S.geo.id); S.geo.id = null; } }
+function geoReiniciar(){ geoDesligar(); S.geo.erro = null; atualizarZona(); geoLigar(); }
+document.addEventListener('visibilitychange', () => {
+  if (!S.user || S.user.perfil !== 'aluno') return;
+  if (document.hidden) geoDesligar(); else if ($('#aulas button[data-id]')) geoLigar();
+});
+function atualizarZona(){
+  document.querySelectorAll('#aulas button[data-id]').forEach(b => {
+    if (b.dataset.ocupado) return;  // enviando a presença agora
+    const g = S.geo, z = b.parentElement.querySelector('.zona');
+    let liberar = false, rot = 'Registrar Presença', txt = '', cls = '';
+    if (g.erro){ rot = 'Localização indisponível'; txt = g.erro; cls = 'longe'; }
+    else if (!g.pos){ rot = 'Obtendo localização…'; txt = 'Permita o acesso à localização quando o navegador perguntar.'; }
+    else {
+      const d = dist({lat:g.pos.lat, lon:g.pos.lon}, {lat:+b.dataset.lat, lon:+b.dataset.lon}), r = +b.dataset.raio;
+      const prec = g.pos.acc > 50 ? ` Precisão do GPS baixa (±${Math.round(g.pos.acc)} m): vá para um local aberto.` : '';
+      if (d <= r){ liberar = true; cls = 'dentro'; txt = `✓ Você está na área da aula (a ${Math.round(d)} m do ponto do evento; limite de ${Math.round(r)} m).${prec}`; }
+      else { rot = 'Fora da área da aula'; cls = 'longe'; txt = `Você está a ${Math.round(d)} m do local do evento (limite de ${Math.round(r)} m). Aproxime-se para liberar o botão.${prec}`; }
+    }
+    b.disabled = !liberar; b.classList.toggle('fora', !liberar); b.textContent = rot;
+    if (z){
+      z.className = 'zona ' + cls; z.textContent = txt;
+      if (g.erro){ const t = document.createElement('button'); t.type = 'button'; t.className = 'link'; t.dataset.geo = '1'; t.textContent = 'Tentar de novo'; z.append(' ', t); }
+    }
+  });
+}
 $('#aulas').onclick = async e => {
-  const b = e.target.closest('button[data-id]'); if (!b) return;
-  const m = $('#msg-aluno'), rotulo = b.textContent; msg(m, ''); b.disabled = true;
+  if (e.target.closest('button[data-geo]')) return geoReiniciar();
+  const b = e.target.closest('button[data-id]'); if (!b || b.disabled) return;
+  const m = $('#msg-aluno'); msg(m, ''); b.disabled = true; b.dataset.ocupado = '1';
   try {
     b.textContent = 'Obtendo localização…';
     const c = await amostrar();
@@ -418,8 +465,24 @@ $('#aulas').onclick = async e => {
     msg(m, `Presença registrada em "${r.aula}"! Seu comprovante está logo abaixo.`, 'ok');
     await carregarComprovantes(true);
     carregarAulas();
-  } catch (x) { msg(m, x.message, 'err'); b.disabled = false; b.textContent = rotulo; }
+  } catch (x) { msg(m, x.message, 'err'); delete b.dataset.ocupado; atualizarZona(); }
 };
+
+/* PDF do comprovante: o servidor gera (com o código de validação do evento e a autenticação) e o navegador baixa. */
+async function baixarPDF(id, btn, aviso){
+  msg(aviso, ''); const rot = btn.textContent; btn.disabled = true; btn.textContent = 'Gerando PDF…';
+  try {
+    const r = await fetch(`/api/aluno/presencas/${id}/pdf`, {headers:{Authorization:'Bearer ' + S.token}});
+    if (!r.ok){
+      let d = null; try { d = await r.json(); } catch {}
+      if (r.status === 401) return sair('Sessão expirada. Entre novamente.');
+      throw new Error(typeof d?.detail === 'string' ? d.detail : 'Não foi possível gerar o PDF agora. Tente de novo.');
+    }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = `comprovante-presenca-${id}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  } catch (x) { msg(aviso, x.name === 'TypeError' ? 'Sem conexão com o servidor. Verifique sua internet.' : x.message, 'err'); }
+  finally { btn.disabled = false; btn.textContent = rot; }
+}
 
 async function carregarComprovantes(destacar){
   const box = $('#comprov');
@@ -429,7 +492,7 @@ async function carregarComprovantes(destacar){
     box.innerHTML = l.length ? l.map((p, i) => `<article class="card comp${destacar && i === 0 ? ' novo' : ''}">
       <h3>✓ Presença registrada · Protocolo nº ${p.id}</h3>
       <p>O aluno <b>${esc(me.nome)}</b>${me.matricula ? `, matrícula <b>${esc(me.matricula)}</b>` : ''}${me.curso ? `, do curso de ${esc(me.curso)}` : ''}${me.periodo ? `, ${me.periodo}º período` : ''}, registrou presença em <b>${esc(p.titulo)}</b>${p.disciplina ? ` (disciplina ${esc(p.disciplina)})` : ''} (${p.tipo === 'palestra' ? 'palestra' : 'aula'} · ${p.local_tipo === 'fora' ? 'fora da faculdade' : 'dentro da faculdade'}), com o(a) prof. ${esc(p.professor)}, em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.</p>
-      <button class="btn" type="button" data-m="${i}">Mostrar ao professor</button>
+      <div class="acoes"><button class="btn" type="button" data-m="${i}">Mostrar ao professor</button><button class="btn alt" type="button" data-pdf="${p.id}">Baixar PDF</button></div>
     </article>`).join('') : '<div class="card vazio mut">Você ainda não registrou nenhuma presença.</div>';
     if (destacar) box.scrollIntoView({behavior:'smooth', block:'start'});
   } catch (x) { box.innerHTML = `<div class="msg err">${esc(x.message)}</div>`; }
@@ -447,12 +510,17 @@ function mostrarAoProfessor(i){
   $('#m-frase').textContent = `Eu, ${me.nome}, matrícula ${me.matricula || '—'}${me.curso ? ', do curso de ' + me.curso : ''}${me.periodo ? ' (' + me.periodo + 'º período)' : ''}, registrei presença no evento "${p.titulo}"${p.disciplina ? ', disciplina ' + p.disciplina : ''}, em ${data} às ${hora}.`;
   const tic = () => { $('#m-rel').textContent = new Date().toLocaleTimeString('pt-BR'); }; tic();
   clearInterval(S.relogio); S.relogio = setInterval(tic, 1000);
+  $('#m-pdf').dataset.id = p.id; msg($('#m-msg'), '');
   $('#mostrar').hidden = false; document.body.style.overflow = 'hidden';
 }
 function fecharMostrar(){ clearInterval(S.relogio); $('#mostrar').hidden = true; document.body.style.overflow = ''; }
 $('#m-fechar').onclick = fecharMostrar;
 document.addEventListener('keydown', e => { if (e.key === 'Escape') fecharMostrar(); });
-$('#comprov').addEventListener('click', e => { const b = e.target.closest('button[data-m]'); if (b) mostrarAoProfessor(+b.dataset.m); });
+$('#comprov').addEventListener('click', e => {
+  const b = e.target.closest('button[data-m]'); if (b) mostrarAoProfessor(+b.dataset.m);
+  const p = e.target.closest('button[data-pdf]'); if (p) baixarPDF(+p.dataset.pdf, p, $('#msg-aluno'));
+});
+$('#m-pdf').onclick = () => baixarPDF(+$('#m-pdf').dataset.id, $('#m-pdf'), $('#m-msg'));
 
 /* ---------------- Professor: mapa e abertura ---------------- */
 function initMapa(){
@@ -486,8 +554,9 @@ $('#form-aula').onsubmit = async e => {
       latitude:parseFloat($('#lat').value.replace(',', '.')), longitude:parseFloat($('#lon').value.replace(',', '.')), raio_metros:parseFloat($('#raio').value),
       tipo:$('#tipo').value, local_tipo:$('#local-tipo').value, local_descricao:$('#local-desc').value.trim() || null,
       curso_id:$('#aula-curso').value ? +$('#aula-curso').value : null,
-      periodo:$('#aula-periodo').value ? +$('#aula-periodo').value : null, disciplina:$('#disciplina').value.trim() || null}});
-    abrirAula(a); recarregarHist();
+      periodo:$('#aula-periodo').value ? +$('#aula-periodo').value : null, disciplina:$('#disciplina').value.trim() || null,
+      codigo_validacao:$('#codigo').value.trim() || null}});
+    $('#codigo').value = ''; abrirAula(a); recarregarHist();
   } catch (x) { msg(m, x.message, 'err'); }
 };
 
@@ -497,6 +566,8 @@ function abrirAula(a){
   $('#painel').hidden = false; $('#p-titulo').textContent = a.titulo; $('#p-total').textContent = a.total ?? 0;
   $('#p-info').textContent = `${a.disciplina ? a.disciplina + ' · ' : ''}${rotulo(a)}${a.local_descricao ? ' · ' + a.local_descricao : ''} · raio de ${Math.round(a.raio_metros)} m`;
   $('#btn-fim').hidden = !a.ativa;
+  $('#p-cod').textContent = a.codigo_validacao ? 'Código de validação do PDF: ' + a.codigo_validacao : '';
+  $('#conf-cod').value = ''; msg($('#conf-res'), '');
   renderRows(); $('#tb-burla').innerHTML = $('#tb-fora').innerHTML = $('#tb-aus').innerHTML = ''; $('#n-tent').textContent = '0'; $('#n-aus').textContent = '–'; $('#aus-aviso').textContent = ''; S.tick = 0; clearInterval(S.poll); buscar(); S.poll = setInterval(buscar, 3000);
   $('#painel').scrollIntoView({behavior:'smooth', block:'start'});
 }
@@ -537,6 +608,18 @@ async function baixarCSV(aulaId, falhar){
   } catch (x) { falhar(x.message); }
 }
 $('#btn-csv').onclick = () => { if (S.aula) baixarCSV(S.aula.id, t => msg($('#msg-prof'), t, 'err')); };
+/* Conferir comprovante: o professor cola a "Autenticação" do PDF do aluno; o servidor confirma se é verdadeira. */
+$('#btn-conf').onclick = async () => {
+  const r = $('#conf-res'), v = $('#conf-cod').value.trim(); msg(r, '');
+  if (!S.aula) return;
+  if (!v) return msg(r, 'Cole a autenticação que aparece no PDF do aluno.', 'err');
+  try {
+    const d = await api(`/aulas/${S.aula.id}/conferir?codigo=${encodeURIComponent(v)}`);
+    if (d.valido) msg(r, `✓ Comprovante AUTÊNTICO: ${d.nome}, matrícula ${d.matricula || '—'}${d.curso ? ', ' + d.curso : ''}, presença registrada em ${new Date(d.registrado_em).toLocaleString('pt-BR')}. O código de validação deste evento é ${d.codigo_validacao}: confira se é o mesmo que está no PDF.`, 'ok');
+    else msg(r, 'Comprovante NÃO confere: a autenticação é falsa, foi alterada ou é de outro evento.', 'err');
+  } catch (x) { msg(r, x.message, 'err'); }
+};
+$('#conf-cod').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); $('#btn-conf').click(); } });
 async function excluirAula(id, titulo, total){
   if (!confirm(`Excluir "${titulo}"?\n\nIsso apaga também ${total} presença(s) registrada(s) e não pode ser desfeito.`)) return;
   try {
@@ -561,7 +644,7 @@ async function recarregarHist(retomar){
   try {
     S.hist = await api('/professor/aulas');
     $('#hist').innerHTML = S.hist.map(a => `<li><span><button class="link" data-i="${a.id}">${esc(a.titulo)}</button>
-      <span class="mut"> · ${a.disciplina ? esc(a.disciplina) + ' · ' : ''}${esc(rotulo(a))} · ${new Date(a.aberta_em).toLocaleString('pt-BR')} · ${a.total} presença(s)${a.ativa ? ' · aberta' : ''}</span></span>
+      <span class="mut"> · ${a.disciplina ? esc(a.disciplina) + ' · ' : ''}${esc(rotulo(a))} · ${new Date(a.aberta_em).toLocaleString('pt-BR')} · ${a.total} presença(s)${a.codigo_validacao ? ' · código ' + esc(a.codigo_validacao) : ''}${a.ativa ? ' · aberta' : ''}</span></span>
       <button class="link del" data-x="${a.id}">Excluir</button></li>`).join('')
       || '<li class="mut">Você ainda não abriu nenhuma chamada.</li>';
     const aberta = retomar && S.hist.find(a => a.ativa); if (aberta) abrirAula(aberta);
