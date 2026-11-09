@@ -4,52 +4,62 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GeoCheckIn · UniCerrado</title>
+<meta name="theme-color" content="#2f7d40">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="apple-touch-icon" href="assets/icone-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
-:root{--bg:#f2f4ee;--card:#fff;--ink:#1b2a22;--mut:#5d6b63;--line:#d9dfd3;--pri:#1d6b47;--pri-ink:#fff;--ok:#1d6b47;--okbg:#e2f1e8;--err:#a3281f;--errbg:#fbe7e4;--ring:#e0a526;--warn:#8a5a00}
-@media(prefers-color-scheme:dark){:root{--bg:#121a15;--card:#1b261f;--ink:#e8efe9;--mut:#9fb0a5;--line:#2f3f35;--pri:#4fb583;--pri-ink:#0e1a13;--ok:#7fd6a6;--okbg:#17301f;--err:#ff9b90;--errbg:#3a1d1a;--warn:#f0c05a}}
+/* Paleta da UniCerrado: Folha (verde da marca), Azul (títulos e números), Lima (destaque), Névoa (fundo). Para mudar o visual, mude só estas cores. */
+:root{--bg:#f5f7ed;--card:#fff;--ink:#182830;--mut:#5b6b64;--line:#dfe5d3;--pri:#2f7d40;--pri-ink:#fff;--azul:#23589a;--azulbg:#e3ecf8;--lima:#a7c758;--ok:#2b7a3d;--okbg:#e7f2df;--err:#a3281f;--errbg:#fbe7e4;--ring:#23589a;--warn:#8a5a00;--sombra:0 1px 2px rgba(24,40,48,.05),0 12px 30px -16px rgba(24,40,48,.22)}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1a16;--card:#17241f;--ink:#e9f0ea;--mut:#9db0a5;--line:#2a3b33;--pri:#6dbb78;--pri-ink:#0b1a11;--azul:#8db8f0;--azulbg:#1c3252;--lima:#a7c758;--ok:#8fd69b;--okbg:#172f21;--err:#ff9b90;--errbg:#3a1d1a;--ring:#8db8f0;--warn:#f0c05a;--sombra:none}}
 *{box-sizing:border-box}[hidden]{display:none!important}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 'Bricolage Grotesque',system-ui,sans-serif}
-header{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--card)}
-.logo{width:30px;height:30px;border-radius:50%;border:3px solid var(--pri);display:grid;place-items:center;flex:none}
-.logo::after{content:"";width:10px;height:10px;border-radius:50%;background:var(--ring)}
-header b{font-size:19px;font-weight:800;letter-spacing:-.3px}header small{color:var(--mut)}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.55 'Poppins',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+header{background:var(--card);border-bottom:3px solid var(--lima)}
+.topo{max-width:1080px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:10px 20px;flex-wrap:wrap}
+.marcas{display:flex;align-items:center;gap:14px;padding:6px 14px;background:#fff;border:1px solid var(--line);border-radius:14px}
+.marcas img{height:46px;width:auto;display:block}
+.marcas img.curso{width:46px;border-radius:12px}
+.marcas i{width:1px;height:32px;background:#d9dfcd}
+.produto{display:flex;align-items:center;gap:8px;font-size:19px;font-weight:700;color:var(--azul);letter-spacing:-.01em}
+.ver{font-size:12px;font-weight:600;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:1px 9px;letter-spacing:0}
 #user{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:14px}
-main{max-width:980px;margin:0 auto;padding:20px}
-h2{font-size:22px;margin:0 0 6px;line-height:1.2}h3{font-size:18px;margin:0 0 6px}
+main{max-width:1080px;margin:0 auto;padding:28px 20px 48px}
+h1{font-size:clamp(28px,4.6vw,40px);line-height:1.12;letter-spacing:-.025em;font-weight:700;color:var(--azul);margin:0 0 14px}
+h2{font-size:22px;margin:0 0 6px;line-height:1.25;letter-spacing:-.015em;font-weight:700;color:var(--azul)}h3{font-size:17px;margin:0 0 6px;font-weight:600}
 .mut{color:var(--mut);font-size:14px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
-label{display:block;font-size:14px;font-weight:600;margin:12px 0 4px}
-input,select,textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;margin-bottom:16px;box-shadow:var(--sombra)}
+label{display:block;font-size:13.5px;font-weight:600;margin:14px 0 5px}
+input,select,textarea{width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);font:inherit}
 input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid var(--ring);outline-offset:1px}
-.btn{border:0;border-radius:8px;background:var(--pri);color:var(--pri-ink);font:inherit;font-weight:600;padding:11px 18px;cursor:pointer}
+.btn{border:0;border-radius:999px;background:var(--pri);color:var(--pri-ink);font:inherit;font-weight:600;padding:11px 22px;cursor:pointer;transition:filter .15s}.btn:hover:not(:disabled){filter:brightness(1.08)}
 .btn:disabled{opacity:.55;cursor:wait}
 .btn.fora:disabled{background:var(--line);color:var(--mut);opacity:1;cursor:not-allowed}
 .zona{margin:8px 0 0;font-size:14px;color:var(--mut)}.zona.dentro{color:var(--ok);font-weight:600}.zona.longe{color:var(--err);font-weight:600}
-.btn.big{width:100%;padding:16px;font-size:18px;margin-top:10px}
-.btn.alt{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn.big{width:100%;padding:15px;font-size:17px;margin-top:12px}
+.btn.alt{background:transparent;color:var(--pri);border:1.5px solid var(--pri)}
 .btn.stop{background:var(--err);color:#fff}
 .link{background:none;border:0;color:var(--pri);font:inherit;font-weight:600;cursor:pointer;padding:0;text-align:left}
 .link.del{color:var(--err);font-weight:400;font-size:14px}
-.tabs{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:6px}
-.tab{padding:11px 4px;border:0;background:transparent;color:var(--mut);font:inherit;font-size:15px;font-weight:600;cursor:pointer}
-.tab.on{background:var(--pri);color:var(--pri-ink)}
-.msg{padding:10px 12px;border-radius:8px;margin:12px 0;font-size:15px}
+.tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0 4px}
+.tab{display:flex;flex-direction:column;align-items:center;gap:1px;padding:12px 4px;border:1.5px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink);font:inherit;cursor:pointer;text-align:center;transition:border-color .15s,background .15s}.tab:hover{border-color:var(--lima)}
+.tab svg{width:22px;height:22px;margin-bottom:3px;fill:none;stroke:var(--azul);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.tab b{font-size:14px;font-weight:600}.tab small{font-size:11.5px;line-height:1.25;color:var(--mut)}
+.tab.on{border-color:var(--pri);background:var(--okbg);box-shadow:inset 0 0 0 1px var(--pri)}.tab.on svg{stroke:var(--pri)}
+.msg{padding:11px 14px;border-radius:12px;margin:12px 0;font-size:14.5px}
 .msg.err{background:var(--errbg);color:var(--err)}.msg.ok{background:var(--okbg);color:var(--ok)}
-.ok-badge{margin-top:10px;padding:12px;border-radius:8px;background:var(--okbg);color:var(--ok);font-weight:600;text-align:center}
+.ok-badge{margin-top:10px;padding:12px;border-radius:12px;background:var(--okbg);color:var(--ok);font-weight:600;text-align:center}
 .vazio{text-align:center;padding:30px 10px}.comp{border-left:4px solid var(--pri)}.comp.novo{background:var(--okbg)}.comp p{margin:6px 0}
-.auth{max-width:420px;margin:24px auto}
+.auth-card{margin:0}
 .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 14px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
-#mapa{height:340px;border-radius:10px;margin-top:12px;border:1px solid var(--line)}
+#mapa{height:340px;border-radius:14px;margin-top:12px;border:1px solid var(--line)}
 #gps-info{margin-bottom:0}
 /* o estilo geral de label/input do site distorce o seletor de camadas do mapa: aqui volta ao tamanho normal */
 #mapa .leaflet-control-layers label{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:14px;font-weight:600;color:var(--ink)}
 #mapa .leaflet-control-layers input{width:auto;padding:0;margin:0;border:0;background:none}
 #mapa .leaflet-control-layers-list{padding:4px 8px}
 .top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
-.count{font-size:46px;font-weight:800;line-height:1;color:var(--pri)}
+.count{font-size:46px;font-weight:700;line-height:1;color:var(--azul)}
 .live{color:var(--ok);font-weight:600;font-size:14px}.live.off{color:var(--mut)}
 .acoes{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
 .scroll{overflow:auto;max-height:420px;margin-top:10px}
@@ -59,36 +69,85 @@ th{position:sticky;top:0;background:var(--card);color:var(--mut);font-weight:600
 td.warn{color:var(--warn);white-space:normal;min-width:140px}
 ul{list-style:none;margin:0;padding:0}
 li{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
-.atabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.atabs button{padding:8px 14px;border:1px solid var(--line);border-radius:20px;background:transparent;color:var(--ink);font:inherit;cursor:pointer}.atabs button.on{background:var(--pri);color:var(--pri-ink);border-color:var(--pri)}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}.stat{border:1px solid var(--line);border-radius:10px;padding:12px;font-size:14px;color:var(--mut)}.stat b{display:block;font-size:28px;color:var(--pri)}
+.atabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.atabs button{padding:8px 16px;border:1.5px solid var(--line);border-radius:999px;background:transparent;color:var(--ink);font:inherit;cursor:pointer}.atabs button.on{background:var(--pri);color:var(--pri-ink);border-color:var(--pri)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}.stat{border:1px solid var(--line);border-radius:14px;padding:14px;font-size:14px;color:var(--mut);background:var(--card)}.stat b{display:block;font-size:28px;font-weight:700;color:var(--azul)}
 textarea{min-height:110px;resize:vertical}
 .overlay{position:fixed;inset:0;z-index:50;background:var(--bg);overflow:auto;padding:16px;display:flex;justify-content:center;align-items:flex-start}
-.overlay-box{width:100%;max-width:560px;background:var(--card);border:2px solid var(--pri);border-radius:14px;padding:20px}
+.overlay-box{width:100%;max-width:560px;background:var(--card);border:2px solid var(--pri);border-radius:20px;padding:22px}
 .m-nome{font-size:28px;font-weight:800;line-height:1.15;margin:14px 0 4px}
 .m-lin{margin:6px 0;font-size:17px}
 .m-frase{margin:14px 0;padding:12px;border-left:4px solid var(--pri);background:var(--okbg);border-radius:6px;font-size:16px}
 .m-rel{font-size:30px;font-weight:800;color:var(--pri);font-variant-numeric:tabular-nums}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}.row input,.row select{width:auto;flex:1;min-width:140px}td select{width:auto;padding:6px}
-@media(max-width:560px){.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}}
+/* tela de entrada */
+.entrada{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:56px;align-items:center;padding:12px 0}
+.hero p{font-size:17px;color:var(--mut);max-width:38ch;margin:0 0 22px}
+.geo{display:block;width:100%;max-width:380px;height:auto}
+.geo .fundo{fill:var(--card);stroke:var(--line)}.geo .malha{stroke:var(--ink);stroke-opacity:.07;fill:none}
+.geo .area{fill:var(--lima);fill-opacity:.24;stroke:var(--pri);stroke-width:2;stroke-dasharray:6 6}
+.geo .lider{fill:none;stroke:var(--pri);stroke-width:1.5;stroke-opacity:.55}.geo .sala{fill:var(--azul)}.geo .dentro{fill:var(--pri);stroke:var(--card);stroke-width:3}.geo .fora{fill:#9aa8a0;stroke:var(--card);stroke-width:3}
+.geo .selo{fill:var(--card);stroke:var(--line);filter:drop-shadow(0 4px 8px rgba(24,40,48,.12))}.geo text{font:600 11.5px 'Poppins',system-ui,sans-serif;fill:var(--ink)}.geo text.ok{fill:var(--ok)}.geo text.no{fill:var(--mut)}
+/* aviso de status (ligar/desligar em SITE.aviso, no começo do script) */
+.aviso{display:flex;align-items:center;gap:14px 18px;flex-wrap:wrap;margin:0 0 22px;padding:16px 20px;border-radius:18px;background:#23589a;color:#fff;box-shadow:var(--sombra)}
+.aviso .selo{background:var(--lima);color:#182830;font-weight:700;font-size:13px;border-radius:999px;padding:4px 14px;white-space:nowrap}
+.aviso .txt{flex:1;min-width:220px}.aviso b{display:block;font-size:16px;line-height:1.3}.aviso span{font-size:14px;opacity:.9}
+.aviso a{color:#fff;font-weight:600;text-decoration:underline;text-underline-offset:3px}
+@media(prefers-color-scheme:dark){.aviso{background:#1d3c63}}
+/* professores e coordenação em cartões */
+.pessoas{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px;margin-top:12px}
+.pessoa{display:flex;flex-direction:column;gap:12px;padding:16px;border:1px solid var(--line);border-radius:18px;background:var(--card);box-shadow:var(--sombra)}
+.pessoa.off{background:var(--bg)}.pessoa.off .avatar{background:#9aa8a0}
+.pessoa-topo{display:flex;align-items:center;gap:12px}.pessoa-topo>div{min-width:0}
+.pessoa b{display:block;line-height:1.3}.pessoa .mut{overflow-wrap:anywhere}
+.avatar{flex:none;width:44px;height:44px;border-radius:50%;background:var(--azul);color:#fff;display:grid;place-items:center;font-weight:600;font-size:15px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}.chip{font-size:12px;font-weight:600;padding:2px 11px;border-radius:999px;background:var(--okbg);color:var(--ok)}.chip.azul{background:var(--azulbg);color:var(--azul)}.chip.cinza{background:var(--line);color:var(--mut)}
+.pessoa dl{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0;font-size:13.5px}.pessoa dt{color:var(--mut)}.pessoa dd{margin:0;overflow-wrap:anywhere}
+.pessoa-acoes{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:auto;padding-top:12px;border-top:1px solid var(--line);font-size:14px}
+@media(max-width:860px){.entrada{grid-template-columns:1fr;gap:20px}.geo{display:none}.hero p{margin-bottom:6px}}
+@media(max-width:560px){.row input,.row select{min-width:100%}.atabs button{padding:7px 13px}.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}main{padding:20px 16px 40px}.topo{padding:10px 16px}.marcas{gap:10px;padding:6px 10px}.marcas img{height:34px}.marcas img.curso{width:34px}.card{padding:18px}}
 </style>
 </head>
 <body>
 <header>
-  <div class="logo" aria-hidden="true"></div>
-  <div><b>GeoCheckIn</b> <small id="marca">UniCerrado</small></div>
-  <div id="user" hidden><span id="user-nome"></span><button class="btn alt" id="btn-sair">Sair</button></div>
+  <div class="topo">
+    <!-- LOGOS: troque o arquivo na pasta assets/ mantendo o mesmo nome (ou mude o src abaixo) -->
+    <div class="marcas">
+      <img src="assets/logo-unicerrado.png" alt="UniCerrado, Centro Universitário de Goiatuba">
+      <i aria-hidden="true"></i>
+      <img class="curso" src="assets/logo-curso.png" alt="Gestão da Tecnologia da Informação">
+      <i aria-hidden="true"></i>
+      <img src="assets/logo-fesg.png" alt="FESG, Fundação de Ensino Superior de Goiatuba">
+    </div>
+    <div class="produto">GeoCheckIn <span class="ver" id="versao">v2.0</span></div>
+    <div id="user" hidden><span id="user-nome"></span><button class="btn alt" id="btn-sair">Sair</button></div>
+  </div>
 </header>
 
 <main>
+<div class="aviso" id="aviso" hidden></div>
 <!-- ============ LOGIN / CADASTRO ============ -->
-<section id="v-auth" class="auth" hidden>
-  <div class="card">
-    <h2>Registre sua presença pelo celular</h2>
-    <p class="mut">Entre com seu e-mail institucional.</p>
+<section id="v-auth" class="entrada" hidden>
+  <div class="hero">
+    <h1>Registre sua presença na aula, pelo celular</h1>
+    <p>O GeoCheckIn confirma pelo GPS que você está na sala. Entre com seu e-mail institucional para começar.</p>
+    <svg class="geo" viewBox="0 0 360 290" role="img" aria-label="Mapa: o aluno dentro da área da aula pode registrar a presença; o aluno fora da área não pode">
+      <defs><pattern id="malha" width="30" height="30" patternUnits="userSpaceOnUse"><path class="malha" d="M30 0H0V30"/></pattern></defs>
+      <rect class="fundo" x=".5" y=".5" width="359" height="289" rx="22"/><rect width="360" height="290" rx="22" fill="url(#malha)"/>
+      <circle class="area" cx="150" cy="138" r="84"/>
+      <path class="lider" d="M100 50C108 84 150 96 170 111"/>
+      <circle class="sala" cx="150" cy="138" r="6"/>
+      <circle class="dentro" cx="178" cy="118" r="10"/>
+      <circle class="fora" cx="312" cy="224" r="10"/>
+      <g transform="translate(18 20)"><rect class="selo" x="0" y="0" width="150" height="30" rx="15"/><text class="ok" x="75" y="19.5" text-anchor="middle">Dentro da área · 12 m</text></g>
+      <g transform="translate(168 240)"><rect class="selo" x="0" y="0" width="154" height="30" rx="15"/><text class="no" x="77" y="19.5" text-anchor="middle">Fora da área · 180 m</text></g>
+    </svg>
+  </div>
+  <div class="card auth-card">
+    <h2>Entrar como</h2>
     <div class="tabs">
-      <button class="tab on" data-p="aluno" type="button">Aluno</button>
-      <button class="tab" data-p="professor" type="button">Professor</button>
-      <button class="tab" data-p="admin" type="button">Coordenação</button>
+      <button class="tab on" data-p="aluno" type="button" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c.8-3.6 3.6-5.4 7-5.4s6.2 1.8 7 5.4"/></svg><b>Aluno</b><small>Presença</small></button>
+      <button class="tab" data-p="professor" type="button" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><b>Professor</b><small>Chamada</small></button>
+      <button class="tab" data-p="admin" type="button" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><b>Coordenação</b><small>Gestão</small></button>
     </div>
     <form id="form-auth" novalidate>
       <label id="f-nome" hidden>Nome completo<input id="nome" autocomplete="name"></label>
@@ -238,6 +297,14 @@ textarea{min-height:110px;resize:vertical}
 <!--ADMIN-->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
+/* ===== PERSONALIZAÇÃO RÁPIDA =====
+   versao: aparece ao lado do nome no topo.
+   aviso: faixa azul de status no topo de todas as telas. Para ligar, troque ativo para true e edite os textos.
+   (link é opcional: deixe '' para não mostrar.) */
+const SITE = {
+  versao: 'v2.0',
+  aviso: {ativo: false, selo: 'Turma encerrada', titulo: 'As inscrições desta turma estão encerradas', texto: 'A próxima turma será divulgada pelo portal da UniCerrado.', link: '', rotuloLink: 'Ver portal'}
+};
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const S = {token:null, user:null, perfil:'aluno', modo:'login', aula:null, rows:[], ultimo:0, hist:[], poll:null, timer:null,
@@ -247,6 +314,13 @@ const store = {get:k=>{try{return localStorage.getItem(k)}catch{return null}}, s
 const KT = 'gc_token', KU = 'gc_user';
 const PERIODOS = Array.from({length:10}, (_, i) => i + 1);
 const rotulo = a => `${a.tipo === 'palestra' ? 'Palestra' : 'Aula'} · ${a.local_tipo === 'fora' ? 'Fora da faculdade' : 'Dentro da faculdade'} · ${a.curso || 'Todos os cursos'}${a.periodo ? ' · ' + a.periodo + 'º período' : ''}`;
+function renderSite(){
+  $('#versao').textContent = SITE.versao;
+  const a = SITE.aviso, el = $('#aviso');
+  el.hidden = !a.ativo;
+  el.innerHTML = a.ativo ? `<span class="selo">${esc(a.selo)}</span><div class="txt"><b>${esc(a.titulo)}</b><span>${esc(a.texto)}${a.link ? ` <a href="${esc(a.link)}" target="_blank" rel="noopener">${esc(a.rotuloLink)}</a>` : ''}</span></div>` : '';
+}
+renderSite();
 function msg(el, txt, tipo){ el.textContent = txt || ''; el.className = 'msg ' + (tipo || ''); el.hidden = !txt; }
 function show(v){ ['auth','aluno','prof','admin'].forEach(x => $('#v-'+x).hidden = x !== v); $('#user').hidden = v === 'auth'; }
 
@@ -312,7 +386,7 @@ async function fpHash(){
 function renderAuth(){
   const reg = S.modo === 'reg', esq = S.modo === 'esqueci', alu = S.perfil === 'aluno', prof = S.perfil === 'professor', adm = S.perfil === 'admin';
   const dp = '@' + S.cfg.dominios_professor[0];
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.p === S.perfil));
+  document.querySelectorAll('.tab').forEach(t => { t.classList.toggle('on', t.dataset.p === S.perfil); t.setAttribute('aria-pressed', t.dataset.p === S.perfil); });
   $('#f-nome').hidden = !reg; $('#f-curso').hidden = !(reg && alu); $('#f-periodo').hidden = !(reg && alu); $('#f-mat').hidden = !(reg && alu);
   $('#f-registro').hidden = !(reg && prof); $('#f-depto').hidden = !(reg && prof); $('#f-chave').hidden = !(reg && !alu);
   $('#f-senha').hidden = esq; $('#f-senha2').hidden = !reg; $('#f-ref').hidden = !esq; $('#p-esqueci').hidden = S.modo !== 'login' || adm;
@@ -741,6 +815,17 @@ $('#p-tabs').onclick = e => {
 
 /* ---------------- Coordenação ---------------- */
 const ADM = {aba:'resumo', pag:1, q:'', curso:0};
+const iniciais = n => String(n || '?').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(w => (w.match(/\p{L}/u) || ['?'])[0]).join('').toUpperCase();
+const cartaoProf = p => `<article class="pessoa${p.ativo ? '' : ' off'}">
+  <div class="pessoa-topo"><span class="avatar" aria-hidden="true">${esc(iniciais(p.nome))}</span><div><b>${esc(p.nome)}</b><span class="mut">${esc(p.email)}</span></div></div>
+  <div class="chips">${p.admin ? '<span class="chip azul">Coordenação</span>' : '<span class="chip">Professor</span>'}${p.ativo ? '<span class="chip">Ativo</span>' : '<span class="chip cinza">Desativado</span>'}</div>
+  <dl><dt>Registro</dt><dd>${esc(p.registro_funcional || '—')}</dd><dt>Área</dt><dd>${esc(p.departamento || '—')}</dd><dt>Aulas</dt><dd>${p.aulas}</dd></dl>
+  <div class="pessoa-acoes">
+    <button class="link" data-act="prof-tog" data-id="${p.id}" data-v="${p.ativo ? 0 : 1}">${p.ativo ? 'Desativar' : 'Reativar'}</button>
+    ${p.fixo_env ? '' : `<button class="link" data-act="prof-coord" data-id="${p.id}" data-v="${p.admin ? 0 : 1}">${p.admin ? 'Tirar da coordenação' : 'Tornar coordenação'}</button>`}
+    <button class="link" data-act="senha" data-perfil="professor" data-id="${p.id}">Redefinir senha</button>
+    <button class="link del" data-act="prof-del" data-id="${p.id}" data-t="${esc(p.nome)}" data-n="${p.aulas}">Excluir</button>
+  </div></article>`;
 const tb = (cab, linhas) => `<div class="scroll"><table><thead><tr>${cab.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${linhas.join('') || `<tr><td colspan="${cab.length}" class="mut">Nada por aqui.</td></tr>`}</tbody></table></div>`;
 const dh = d => d ? new Date(d).toLocaleString('pt-BR') : '—';
 const opcCursos = (cs, sel) => cs.map(c => `<option value="${c.id}"${c.id === sel ? ' selected' : ''}>${esc(c.nome)}</option>`).join('');
@@ -774,11 +859,7 @@ const ADM_ABAS = {
     const l = await api('/admin/professores');
     return `<h3>Criar conta de professor ou da coordenação</h3><div class="row"><input id="np-nome" placeholder="Nome completo"><input id="np-email" type="email" placeholder="nome@unicerrado.edu.br"></div>
       <div class="row"><input id="np-reg" placeholder="Registro funcional (DOC-2026-08)"><input id="np-depto" placeholder="Departamento / Área"><input id="np-senha" type="password" placeholder="Senha provisória (mín. 8)"><label class="mut" style="margin:0;display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" id="np-coord" style="width:auto;flex:none;min-width:0"> Conta da coordenação</label><button class="btn" data-act="prof-add">Criar conta</button></div>
-      <h3 style="margin-top:16px">Professores</h3>` + tb(['Nome','E-mail','Registro','Departamento','Aulas','Situação',''], l.map(p => `<tr><td>${esc(p.nome)}${p.admin ? ' <span class="mut">(coordenação)</span>' : ''}</td><td>${esc(p.email)}</td><td>${esc(p.registro_funcional || '—')}</td><td>${esc(p.departamento || '—')}</td><td>${p.aulas}</td><td>${p.ativo ? 'Ativo' : 'Desativado'}</td>
-      <td><button class="link" data-act="prof-tog" data-id="${p.id}" data-v="${p.ativo ? 0 : 1}">${p.ativo ? 'Desativar' : 'Reativar'}</button> ·
-      ${p.fixo_env ? '' : `<button class="link" data-act="prof-coord" data-id="${p.id}" data-v="${p.admin ? 0 : 1}">${p.admin ? 'Tirar da coordenação' : 'Tornar coordenação'}</button> ·`}
-      <button class="link" data-act="senha" data-perfil="professor" data-id="${p.id}">Redefinir senha</button> ·
-      <button class="link del" data-act="prof-del" data-id="${p.id}" data-t="${esc(p.nome)}" data-n="${p.aulas}">Excluir</button></td></tr>`));
+      <h3 style="margin-top:20px">Professores e coordenação</h3>` + (l.length ? `<div class="pessoas">${l.map(cartaoProf).join('')}</div>` : '<p class="mut">Nenhum professor cadastrado ainda.</p>');
   },
   async alunos(){
     const [cs, r] = await Promise.all([api('/cursos'), api(`/admin/alunos?q=${encodeURIComponent(ADM.q)}&curso_id=${ADM.curso}&pagina=${ADM.pag}`)]);

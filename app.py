@@ -841,6 +841,20 @@ def index():
     return FileResponse(_arquivo_index())
 
 
+ASSET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(png|jpg|jpeg|webp|svg|ico)$", re.I)
+
+
+@app.get("/assets/{nome}")
+def asset(nome: str):
+    """Logos e ícones do site: pasta assets/ ao lado do index.html (web/assets ou assets). Só nomes simples, sem subpastas."""
+    if ASSET_RE.fullmatch(nome):
+        for pasta in (BASE_DIR / "web" / "assets", BASE_DIR / "assets"):
+            arq = pasta / nome
+            if arq.is_file():
+                return FileResponse(arq, headers={"Cache-Control": "public, max-age=3600"})
+    raise HTTPException(404, "Arquivo não encontrado")
+
+
 @app.get("/api/health")
 def health(db: Session = Depends(get_db)):
     db.execute(text("SELECT 1"))
