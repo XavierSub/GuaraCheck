@@ -42,7 +42,12 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid v
 .vazio{text-align:center;padding:30px 10px}.comp{border-left:4px solid var(--pri)}.comp.novo{background:var(--okbg)}.comp p{margin:6px 0}
 .auth{max-width:420px;margin:24px auto}
 .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 14px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
-#mapa{height:260px;border-radius:10px;margin-top:12px;border:1px solid var(--line)}
+#mapa{height:340px;border-radius:10px;margin-top:12px;border:1px solid var(--line)}
+#gps-info{margin-bottom:0}
+/* o estilo geral de label/input do site distorce o seletor de camadas do mapa: aqui volta ao tamanho normal */
+#mapa .leaflet-control-layers label{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:14px;font-weight:600;color:var(--ink)}
+#mapa .leaflet-control-layers input{width:auto;padding:0;margin:0;border:0;background:none}
+#mapa .leaflet-control-layers-list{padding:4px 8px}
 .top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .count{font-size:46px;font-weight:800;line-height:1;color:var(--pri)}
 .live{color:var(--ok);font-weight:600;font-size:14px}.live.off{color:var(--mut)}
@@ -141,7 +146,8 @@ textarea{min-height:110px;resize:vertical}
         <button class="btn alt" id="btn-gps" type="button">Usar minha localização atual</button>
         <button class="btn" type="submit">Abrir chamada</button>
       </div>
-      <p class="mut">Estando na sala, use sua localização atual ou clique no mapa. Prefira raios de 30 m ou mais: o GPS dentro de prédios oscila. Para acompanhar os alunos ausentes, escolha um curso específico (e o período, se quiser). O código de validação (3 a 12 letras ou números) aparece só no PDF que o aluno baixa depois de registrar presença: use-o para conferir os comprovantes.</p>
+      <p class="mut">Estando na sala, use sua localização atual (no celular, ao ar livre ou perto de uma janela, é mais precisa) ou toque no mapa; depois arraste o marcador para acertar o ponto exato. Troque entre Satélite e Mapa no canto do mapa. Prefira raios de 30 m ou mais: o GPS dentro de prédios oscila. Para acompanhar os alunos ausentes, escolha um curso específico (e o período, se quiser). O código de validação (3 a 12 letras ou números) aparece só no PDF que o aluno baixa depois de registrar presença: use-o para conferir os comprovantes.</p>
+      <div class="msg" id="gps-info" hidden></div>
       <div id="mapa"></div>
     </form>
     <div class="msg" id="msg-prof" hidden></div>
@@ -526,25 +532,61 @@ $('#m-pdf').onclick = () => baixarPDF(+$('#m-pdf').dataset.id, $('#m-pdf'), $('#
 function initMapa(){
   if (S.map) return S.map.invalidateSize();
   if (!window.L){ $('#mapa').hidden = true; return; }
-  S.map = L.map('mapa').setView([-18.0119, -49.3561], 15);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'}).addTo(S.map);
+  S.map = L.map('mapa', {maxZoom:21}).setView([-18.0119, -49.3561], 15);
+  // Satélite por padrão: dá para ver o telhado do prédio e acertar a sala. "Mapa" (ruas) fica no seletor do canto.
+  const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom:21, maxNativeZoom:19, attribution:'Imagens © Esri, Maxar, Earthstar Geographics'});
+  const rua = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:21, maxNativeZoom:19, attribution:'© OpenStreetMap'});
+  sat.addTo(S.map);
+  L.control.layers({'Satélite':sat, 'Mapa':rua}, null, {collapsed:false}).addTo(S.map);
   S.map.on('click', e => setPonto(e.latlng.lat, e.latlng.lng, true));
 }
-function setPonto(lat, lon, doMapa){
-  $('#lat').value = lat.toFixed(6); $('#lon').value = lon.toFixed(6); desenhar();
-  if (S.map && !doMapa) S.map.setView([lat, lon], 18);
+/* acc (metros) só vem da leitura do GPS: desenha a área de incerteza e avisa quando a leitura está imprecisa.
+   Ao clicar no mapa, arrastar o marcador ou digitar as coordenadas, o ponto passa a ser o escolhido à mão e o aviso some. */
+function limparPrecisao(){ if (S.acc){ S.acc.remove(); S.acc = null; } msg($('#gps-info'), ''); }
+function setPonto(lat, lon, doMapa, acc){
+  $('#lat').value = lat.toFixed(6); $('#lon').value = lon.toFixed(6); desenhar(); limparPrecisao();
+  if (acc != null){
+    if (S.map) S.acc = L.circle([lat, lon], {radius:acc, color:'#6b7a70', weight:1, dashArray:'4 4', fillOpacity:.12, interactive:false}).addTo(S.map);
+    const bom = acc <= 20;
+    msg($('#gps-info'), bom ? `Localização marcada com precisão de cerca de ±${Math.round(acc)} m. Se o ponto não estiver sobre a sala, arraste o marcador.`
+      : `O GPS informou precisão de apenas ±${Math.round(acc)} m (o círculo cinza mostra a incerteza). No computador, a localização costuma ser aproximada: use o celular ao ar livre ou arraste o marcador até a sala no mapa.`, bom ? 'ok' : 'err');
+  }
+  if (S.map && !doMapa) S.acc ? S.map.fitBounds(S.acc.getBounds(), {maxZoom:19, padding:[24, 24]}) : S.map.setView([lat, lon], 19);
 }
 function desenhar(){
   if (!S.map) return;
   const lat = parseFloat($('#lat').value), lon = parseFloat($('#lon').value), r = parseFloat($('#raio').value) || 50;
   if (isNaN(lat) || isNaN(lon)) return;
   if (S.marker){ S.marker.setLatLng([lat, lon]); S.circle.setLatLng([lat, lon]).setRadius(r); }
-  else { S.marker = L.marker([lat, lon]).addTo(S.map); S.circle = L.circle([lat, lon], {radius:r, color:'#1d6b47'}).addTo(S.map); }
+  else {
+    S.marker = L.marker([lat, lon], {draggable:true}).addTo(S.map); S.circle = L.circle([lat, lon], {radius:r, color:'#1d6b47'}).addTo(S.map);
+    S.marker.on('dragend', () => { const p = S.marker.getLatLng(); setPonto(p.lat, p.lng, true); });
+  }
 }
+['lat','lon'].forEach(id => $('#'+id).addEventListener('input', limparPrecisao));
 ['lat','lon','raio'].forEach(id => $('#'+id).addEventListener('input', desenhar));
+/* Para marcar a sala o GPS precisa "assentar": fica até ~15 s ouvindo e guarda a leitura mais precisa (para assim que chegar a ±15 m). */
+function melhorPosicao(alvo, limiteMs, prog){
+  return new Promise((ok, no) => {
+    if (!navigator.geolocation) return no(new Error('Seu navegador não suporta geolocalização.'));
+    let best = null, fim = false, id, t;
+    const fin = () => { if (fim) return; fim = true; navigator.geolocation.clearWatch(id); clearTimeout(t); best ? ok(best) : no(new Error(erroGeo(2))); };
+    id = navigator.geolocation.watchPosition(p => {
+      const c = {latitude:p.coords.latitude, longitude:p.coords.longitude, accuracy:p.coords.accuracy};
+      if (!best || c.accuracy < best.accuracy) best = c;
+      if (prog) prog(best);
+      if (best.accuracy <= alvo) fin();
+    }, e => { if (best) fin(); else if (!fim){ fim = true; navigator.geolocation.clearWatch(id); clearTimeout(t); no(new Error(erroGeo(e.code))); } },
+    {enableHighAccuracy:true, timeout:20000, maximumAge:0});
+    t = setTimeout(fin, limiteMs);
+  });
+}
 $('#btn-gps').onclick = async () => {
-  const m = $('#msg-prof'), b = $('#btn-gps'); msg(m, ''); b.disabled = true;
-  try { const c = await pos(); setPonto(c.latitude, c.longitude); } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; }
+  const m = $('#msg-prof'), b = $('#btn-gps'), rot = b.textContent; msg(m, ''); b.disabled = true; b.textContent = 'Buscando GPS…';
+  try {
+    const c = await melhorPosicao(15, 15000, x => { b.textContent = `Buscando GPS… ±${Math.round(x.accuracy)} m`; });
+    setPonto(c.latitude, c.longitude, false, c.accuracy);
+  } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; b.textContent = rot; }
 };
 $('#form-aula').onsubmit = async e => {
   e.preventDefault(); const m = $('#msg-prof'); msg(m, '');
