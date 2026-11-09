@@ -542,14 +542,15 @@ function initMapa(){
 }
 /* acc (metros) só vem da leitura do GPS: desenha a área de incerteza e avisa quando a leitura está imprecisa.
    Ao clicar no mapa, arrastar o marcador ou digitar as coordenadas, o ponto passa a ser o escolhido à mão e o aviso some. */
+const fmtPrec = a => a >= 1000 ? `${Math.round(a / 1000)} km` : `${Math.round(a)} m`;
 function limparPrecisao(){ if (S.acc){ S.acc.remove(); S.acc = null; } msg($('#gps-info'), ''); }
 function setPonto(lat, lon, doMapa, acc){
   $('#lat').value = lat.toFixed(6); $('#lon').value = lon.toFixed(6); desenhar(); limparPrecisao();
   if (acc != null){
     if (S.map) S.acc = L.circle([lat, lon], {radius:acc, color:'#6b7a70', weight:1, dashArray:'4 4', fillOpacity:.12, interactive:false}).addTo(S.map);
     const bom = acc <= 20;
-    msg($('#gps-info'), bom ? `Localização marcada com precisão de cerca de ±${Math.round(acc)} m. Se o ponto não estiver sobre a sala, arraste o marcador.`
-      : `O GPS informou precisão de apenas ±${Math.round(acc)} m (o círculo cinza mostra a incerteza). No computador, a localização costuma ser aproximada: use o celular ao ar livre ou arraste o marcador até a sala no mapa.`, bom ? 'ok' : 'err');
+    msg($('#gps-info'), bom ? `Localização marcada com precisão de cerca de ±${fmtPrec(acc)}. Se o ponto não estiver sobre a sala, arraste o marcador.`
+      : `O GPS informou precisão de apenas ±${fmtPrec(acc)} (o círculo cinza mostra a incerteza). No computador, a localização costuma ser aproximada: use o celular ao ar livre ou arraste o marcador até a sala no mapa.`, bom ? 'ok' : 'err');
   }
   if (S.map && !doMapa) S.acc ? S.map.fitBounds(S.acc.getBounds(), {maxZoom:19, padding:[24, 24]}) : S.map.setView([lat, lon], 19);
 }
@@ -584,7 +585,14 @@ function melhorPosicao(alvo, limiteMs, prog){
 $('#btn-gps').onclick = async () => {
   const m = $('#msg-prof'), b = $('#btn-gps'), rot = b.textContent; msg(m, ''); b.disabled = true; b.textContent = 'Buscando GPS…';
   try {
-    const c = await melhorPosicao(15, 15000, x => { b.textContent = `Buscando GPS… ±${Math.round(x.accuracy)} m`; });
+    const c = await melhorPosicao(15, 15000, x => { b.textContent = `Buscando GPS… ±${fmtPrec(x.accuracy)}`; });
+    if (c.accuracy > 1000){
+      // ±1 km ou mais é localização por rede/IP (pode cair em outra cidade): não preenche nada, para não gravar uma sala no lugar errado
+      limparPrecisao();
+      msg($('#gps-info'), `O aparelho só conseguiu uma localização aproximada (±${fmtPrec(c.accuracy)}), que não serve para marcar a sala, então não foi usada. Ligue o GPS e a "localização precisa" para este navegador (Android: Configurações > Localização; iPhone: Ajustes > Privacidade > Serviços de Localização > Safari/Chrome > Localização Precisa) e tente de novo, de preferência no celular. Ou toque no mapa e arraste o marcador até a sala.`, 'err');
+      $('#gps-info').scrollIntoView({block:'nearest', behavior:'smooth'});
+      return;
+    }
     setPonto(c.latitude, c.longitude, false, c.accuracy);
   } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; b.textContent = rot; }
 };
