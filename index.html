@@ -14,16 +14,15 @@
 /* Paleta da UniCerrado: Folha (verde da marca), Azul (títulos e números), Lima (destaque), Névoa (fundo). Para mudar o visual, mude só estas cores. */
 :root{--bg:#f5f7ed;--card:#fff;--ink:#182830;--mut:#5b6b64;--line:#dfe5d3;--pri:#2f7d40;--pri-ink:#fff;--azul:#23589a;--azulbg:#e3ecf8;--lima:#a7c758;--ok:#2b7a3d;--okbg:#e7f2df;--err:#a3281f;--errbg:#fbe7e4;--ring:#23589a;--warn:#8a5a00;--sombra:0 1px 2px rgba(24,40,48,.05),0 12px 30px -16px rgba(24,40,48,.22)}
 @media(prefers-color-scheme:dark){:root{--bg:#0f1a16;--card:#17241f;--ink:#e9f0ea;--mut:#9db0a5;--line:#2a3b33;--pri:#6dbb78;--pri-ink:#0b1a11;--azul:#8db8f0;--azulbg:#1c3252;--lima:#a7c758;--ok:#8fd69b;--okbg:#172f21;--err:#ff9b90;--errbg:#3a1d1a;--ring:#8db8f0;--warn:#f0c05a;--sombra:none}}
+/* Telas grandes: --k aumenta a tela de entrada e o cabeçalho; --larg é a largura útil do site. Para aumentar mais ou menos, mude só estes números. */
+:root{--k:1;--larg:1080px}
+@media(min-width:1280px){:root{--k:1.15;--larg:1240px}}
+@media(min-width:1600px){:root{--k:1.3;--larg:1400px}}
+@media(min-width:1920px){:root{--k:1.4;--larg:1512px}}
 *{box-sizing:border-box}[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.55 'Poppins',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
-/* Marca d'água do curso (Sistemáticos): logo grande no fundo, do lado esquerdo, translúcida e sem cor (cinza), atrás de todo o conteúdo.
-   Para ajustar: opacity (quanto aparece), --marca-h (tamanho; a largura acompanha), left/bottom (posição; para o lado direito troque
-   left por right) e grayscale (tire o filtro para voltar às cores). Para tirar a marca, apague este bloco. */
-body::before{--marca-h:min(96vh,120vw);content:"";position:fixed;left:2vw;bottom:2vh;height:var(--marca-h);width:calc(var(--marca-h) * .8264);background:url(assets/logo-sistematicos.png) center/contain no-repeat;opacity:.09;filter:grayscale(1);z-index:-1;pointer-events:none}
-@media(prefers-color-scheme:dark){body::before{opacity:.12;filter:grayscale(1) brightness(1.4)}}
-@media print{body::before{display:none}}
 header{background:var(--card);border-bottom:3px solid var(--lima)}
-.topo{max-width:1080px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:10px 20px;flex-wrap:wrap}
+.topo{max-width:var(--larg);margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:10px 20px;flex-wrap:wrap}
 .marcas{display:flex;align-items:center;gap:14px;padding:6px 14px;background:#fff;border:1px solid var(--line);border-radius:14px}
 .marcas img{height:46px;width:auto;display:block}
 .marcas img.curso{width:46px;border-radius:12px}
@@ -31,7 +30,7 @@ header{background:var(--card);border-bottom:3px solid var(--lima)}
 .produto{display:flex;align-items:center;gap:8px;font-size:19px;font-weight:700;color:var(--azul);letter-spacing:-.01em}
 .ver{font-size:12px;font-weight:600;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:1px 9px;letter-spacing:0}
 #user{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:14px}
-main{max-width:1080px;margin:0 auto;padding:28px 20px 48px}
+main{max-width:var(--larg);margin:0 auto;padding:28px 20px 48px}
 h1{font-size:clamp(28px,4.6vw,40px);line-height:1.12;letter-spacing:-.025em;font-weight:700;color:var(--azul);margin:0 0 14px}
 h2{font-size:22px;margin:0 0 6px;line-height:1.25;letter-spacing:-.015em;font-weight:700;color:var(--azul)}h3{font-size:17px;margin:0 0 6px;font-weight:600}
 .mut{color:var(--mut);font-size:14px}
@@ -90,11 +89,44 @@ textarea{min-height:110px;resize:vertical}
 /* tela de entrada */
 .entrada{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:56px;align-items:center;padding:12px 0}
 .hero p{font-size:17px;color:var(--mut);max-width:38ch;margin:0 0 22px}
-.geo{display:block;width:100%;max-width:380px;height:auto}
+.geo{display:block;width:100%;max-width:528px;height:auto}
 .geo .fundo{fill:var(--card);stroke:var(--line)}.geo .malha{stroke:var(--ink);stroke-opacity:.07;fill:none}
 .geo .area{fill:var(--lima);fill-opacity:.24;stroke:var(--pri);stroke-width:2;stroke-dasharray:6 6}
 .geo .lider{fill:none;stroke:var(--pri);stroke-width:1.5;stroke-opacity:.55}.geo .sala{fill:var(--azul)}.geo .dentro{fill:var(--pri);stroke:var(--card);stroke-width:3}.geo .fora{fill:#9aa8a0;stroke:var(--card);stroke-width:3}
 .geo .selo{fill:var(--card);stroke:var(--line);filter:drop-shadow(0 4px 8px rgba(24,40,48,.12))}.geo text{font:600 11.5px 'Poppins',system-ui,sans-serif;fill:var(--ink)}.geo text.ok{fill:var(--ok)}.geo text.no{fill:var(--mut)}
+/* Enfeites de tecnologia em volta do mapa: o mapa vira um chip, com pinos, trilhas de circuito e símbolos (tudo desenhado aqui, sem imagem e sem personagem).
+   Para tirar, apague o <g class="tec"> do desenho no HTML. As faíscas só se mexem para quem não pediu "reduzir movimento". */
+.geo .pino{fill:var(--lima)}
+.geo .tr{fill:none;stroke:var(--pri);stroke-opacity:.5;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.geo .tr.az{stroke:var(--azul);stroke-opacity:.45}
+.geo .pad{fill:var(--bg);stroke:var(--pri);stroke-width:1.6}.geo .pad.az{stroke:var(--azul)}
+.geo .selo-tec rect{fill:var(--card);stroke:var(--line)}
+.geo text.cod{font:700 13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;fill:var(--azul)}
+.geo text.bin{font:500 9px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;fill:var(--azul);fill-opacity:.55;letter-spacing:.08em}
+.geo .sinal{fill:none;stroke:var(--azul);stroke-width:2;stroke-linecap:round}.geo .sinal-p{fill:var(--azul)}
+.geo .chipic rect{fill:var(--card);stroke:var(--azul);stroke-width:1.6}.geo .chipic .nuc{fill:var(--azul);fill-opacity:.55;stroke:none}.geo .chipic path{fill:none;stroke:var(--azul);stroke-width:1.6;stroke-linecap:round}
+.geo .faisca{display:none;fill:none;stroke:var(--lima);stroke-width:3.2;stroke-linecap:round;stroke-dasharray:10 90}
+@media(prefers-reduced-motion:no-preference){.geo .faisca{display:inline;animation:faisca 5s linear infinite;animation-delay:var(--d,0s)}}
+@keyframes faisca{from{stroke-dashoffset:10}to{stroke-dashoffset:-90}}
+/* telas grandes (PC): cabeçalho e tela de entrada maiores. O tamanho vem de --k, no começo do CSS. */
+@media(min-width:1280px){
+.marcas{gap:calc(14px*var(--k));padding:calc(6px*var(--k)) calc(14px*var(--k));border-radius:calc(14px*var(--k))}
+.marcas img{height:calc(46px*var(--k))}.marcas img.curso{width:calc(46px*var(--k))}.marcas i{height:calc(32px*var(--k))}
+.produto{font-size:calc(19px*var(--k))}.ver{font-size:calc(12px*var(--k))}#user{font-size:calc(14px*var(--k))}
+.entrada{gap:calc(56px*var(--k))}
+.entrada h1{font-size:calc(40px*var(--k))}
+.hero p{font-size:calc(17px*var(--k));margin-bottom:calc(22px*var(--k))}
+.geo{max-width:calc(528px*var(--k))}
+.auth-card{padding:calc(22px*var(--k));font-size:calc(16px*var(--k))}
+.entrada h2{font-size:calc(22px*var(--k))}
+.entrada .tabs{gap:calc(8px*var(--k));margin:calc(12px*var(--k)) 0 4px}
+.entrada .tab{padding:calc(12px*var(--k)) 4px;border-radius:calc(14px*var(--k))}
+.entrada .tab svg{width:calc(22px*var(--k));height:calc(22px*var(--k))}
+.entrada .tab b{font-size:calc(14px*var(--k))}.entrada .tab small{font-size:calc(11.5px*var(--k))}
+.entrada label{font-size:calc(13.5px*var(--k));margin-top:calc(14px*var(--k))}
+.entrada input,.entrada select{padding:calc(12px*var(--k)) calc(14px*var(--k));font-size:calc(16px*var(--k));border-radius:calc(12px*var(--k))}
+.entrada .mut{font-size:calc(14px*var(--k))}.entrada .msg{font-size:calc(14.5px*var(--k))}
+.entrada .btn.big{font-size:calc(17px*var(--k));padding:calc(15px*var(--k));margin-top:calc(12px*var(--k))}
+}
 /* aviso de status (ligar/desligar em SITE.aviso, no começo do script) */
 .aviso{display:flex;align-items:center;gap:14px 18px;flex-wrap:wrap;margin:0 0 22px;padding:16px 20px;border-radius:18px;background:#23589a;color:#fff;box-shadow:var(--sombra)}
 .aviso .selo{background:var(--lima);color:#182830;font-weight:700;font-size:13px;border-radius:999px;padding:4px 14px;white-space:nowrap}
@@ -144,8 +176,32 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
   <div class="hero">
     <h1>Registre sua presença na aula, pelo celular</h1>
     <p>O GeoCheckIn confirma pelo GPS que você está na sala. Entre com seu e-mail institucional para começar.</p>
-    <svg class="geo" viewBox="0 0 360 290" role="img" aria-label="Mapa: o aluno dentro da área da aula pode registrar a presença; o aluno fora da área não pode">
-      <defs><pattern id="malha" width="30" height="30" patternUnits="userSpaceOnUse"><path class="malha" d="M30 0H0V30"/></pattern></defs>
+    <svg class="geo" viewBox="-70 -50 500 400" role="img" aria-label="Mapa: o aluno dentro da área da aula pode registrar a presença; o aluno fora da área não pode">
+      <defs>
+        <pattern id="malha" width="30" height="30" patternUnits="userSpaceOnUse"><path class="malha" d="M30 0H0V30"/></pattern>
+        <!-- trilhas do circuito (pathLength=100 deixa todas com o mesmo ritmo de faísca) -->
+        <path id="t1" pathLength="100" d="M-8 40H-28L-40 28V-10"/>
+        <path id="t2" pathLength="100" d="M-8 120H-34L-48 134V200"/>
+        <path id="t3" pathLength="100" d="M-8 200H-18L-30 212V262L-42 274V288"/>
+        <path id="t4" pathLength="100" d="M110 -8V-20L124 -34H186"/>
+        <path id="t5" pathLength="100" d="M210 -8V-14L220 -24H282"/>
+        <path id="t6" pathLength="100" d="M310 -8V-20L322 -32H340L350 -22H390"/>
+        <path id="t7" pathLength="100" d="M368 80H388L402 94V130"/>
+        <path id="t8" pathLength="100" d="M368 160H378L390 172V222L400 232H420"/>
+        <path id="t9" pathLength="100" d="M60 298V312L74 326H164"/>
+        <path id="t10" pathLength="100" d="M260 298V308L270 318H326L338 330H358"/>
+      </defs>
+      <g class="tec" aria-hidden="true">
+        <g class="pinos">
+          <rect class="pino" x="-8" y="36.5" width="11" height="7" rx="2"/><rect class="pino" x="-8" y="76.5" width="11" height="7" rx="2"/><rect class="pino" x="-8" y="116.5" width="11" height="7" rx="2"/><rect class="pino" x="-8" y="156.5" width="11" height="7" rx="2"/><rect class="pino" x="-8" y="196.5" width="11" height="7" rx="2"/><rect class="pino" x="-8" y="236.5" width="11" height="7" rx="2"/>
+          <rect class="pino" x="357" y="36.5" width="11" height="7" rx="2"/><rect class="pino" x="357" y="76.5" width="11" height="7" rx="2"/><rect class="pino" x="357" y="116.5" width="11" height="7" rx="2"/><rect class="pino" x="357" y="156.5" width="11" height="7" rx="2"/><rect class="pino" x="357" y="196.5" width="11" height="7" rx="2"/><rect class="pino" x="357" y="236.5" width="11" height="7" rx="2"/>
+          <rect class="pino" x="56.5" y="-8" width="7" height="11" rx="2"/><rect class="pino" x="106.5" y="-8" width="7" height="11" rx="2"/><rect class="pino" x="156.5" y="-8" width="7" height="11" rx="2"/><rect class="pino" x="206.5" y="-8" width="7" height="11" rx="2"/><rect class="pino" x="256.5" y="-8" width="7" height="11" rx="2"/><rect class="pino" x="306.5" y="-8" width="7" height="11" rx="2"/>
+          <rect class="pino" x="56.5" y="287" width="7" height="11" rx="2"/><rect class="pino" x="106.5" y="287" width="7" height="11" rx="2"/><rect class="pino" x="156.5" y="287" width="7" height="11" rx="2"/><rect class="pino" x="206.5" y="287" width="7" height="11" rx="2"/><rect class="pino" x="256.5" y="287" width="7" height="11" rx="2"/><rect class="pino" x="306.5" y="287" width="7" height="11" rx="2"/>
+        </g>
+        <use class="tr az" href="#t1"/><use class="tr" href="#t2"/><use class="tr az" href="#t3"/><use class="tr" href="#t4"/><use class="tr az" href="#t5"/><use class="tr" href="#t6"/><use class="tr az" href="#t7"/><use class="tr" href="#t8"/><use class="tr az" href="#t9"/><use class="tr" href="#t10"/>
+        <use class="faisca" href="#t1" style="--d:0s"/><use class="faisca" href="#t4" style="--d:1.1s"/><use class="faisca" href="#t7" style="--d:2.2s"/><use class="faisca" href="#t9" style="--d:3.3s"/><use class="faisca" href="#t10" style="--d:4.2s"/><use class="faisca" href="#t8" style="--d:.6s"/>
+        <circle class="pad az" cx="-48" cy="200" r="3.6"/><circle class="pad" cx="190" cy="-34" r="3.6"/><circle class="pad az" cx="286" cy="-24" r="3.6"/><circle class="pad az" cx="402" cy="130" r="3.6"/><circle class="pad" cx="420" cy="232" r="3.6"/>
+      </g>
       <rect class="fundo" x=".5" y=".5" width="359" height="289" rx="22"/><rect width="360" height="290" rx="22" fill="url(#malha)"/>
       <circle class="area" cx="150" cy="138" r="84"/>
       <path class="lider" d="M100 50C108 84 150 96 170 111"/>
@@ -154,6 +210,14 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
       <circle class="fora" cx="312" cy="224" r="10"/>
       <g transform="translate(18 20)"><rect class="selo" x="0" y="0" width="150" height="30" rx="15"/><text class="ok" x="75" y="19.5" text-anchor="middle">Dentro da área · 12 m</text></g>
       <g transform="translate(168 240)"><rect class="selo" x="0" y="0" width="154" height="30" rx="15"/><text class="no" x="77" y="19.5" text-anchor="middle">Fora da área · 180 m</text></g>
+      <g class="tec" aria-hidden="true">
+        <g class="selo-tec" transform="translate(-66 -38)"><rect width="52" height="28" rx="9"/><text class="cod" x="26" y="18.5" text-anchor="middle">&lt;/&gt;</text></g>
+        <g class="selo-tec" transform="translate(-66 288)"><rect width="48" height="28" rx="9"/><text class="cod" x="24" y="18.5" text-anchor="middle">{ }</text></g>
+        <g class="selo-tec" transform="translate(164 314)"><rect width="48" height="24" rx="8"/><text class="cod" x="24" y="16.5" text-anchor="middle">&gt;_</text></g>
+        <g transform="translate(398 -22)"><circle class="sinal-p" r="2.6"/><path class="sinal" d="M-5.7 -5.7A8 8 0 0 1 5.7 -5.7"/><path class="sinal" d="M-10.6 -10.6A15 15 0 0 1 10.6 -10.6"/><path class="sinal" d="M-15.6 -15.6A22 22 0 0 1 15.6 -15.6"/></g>
+        <g class="chipic" transform="translate(358 319)"><rect x="3" y="3" width="16" height="16" rx="3"/><rect class="nuc" x="7.5" y="7.5" width="7" height="7" rx="1.5"/><path d="M7 0V3M11 0V3M15 0V3M7 19V22M11 19V22M15 19V22M0 7H3M0 11H3M0 15H3M19 7H22M19 11H22M19 15H22"/></g>
+        <text class="bin" x="374" y="14">01000111</text><text class="bin" x="374" y="26">01010100</text><text class="bin" x="374" y="38">01001001</text>
+      </g>
     </svg>
   </div>
   <div class="card auth-card">
