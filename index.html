@@ -62,6 +62,8 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid v
 .count{font-size:46px;font-weight:700;line-height:1;color:var(--azul)}
 .live{color:var(--ok);font-weight:600;font-size:14px}.live.off{color:var(--mut)}
 .acoes{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.nota-info{display:flex;justify-content:space-between;gap:10px;font-size:13px;margin-top:6px}#nota-texto{min-height:150px}
+.nota{border-left:4px solid var(--azul)}.nota h3{margin:0 0 2px}.nota-txt{white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0 4px}.nota .acoes{align-items:center}
 .scroll{overflow:auto;max-height:420px;margin-top:10px}
 table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
@@ -100,7 +102,8 @@ textarea{min-height:110px;resize:vertical}
 .pessoa-topo{display:flex;align-items:center;gap:12px}.pessoa-topo>div{min-width:0}
 .pessoa b{display:block;line-height:1.3}.pessoa .mut{overflow-wrap:anywhere}
 .avatar{flex:none;width:44px;height:44px;border-radius:50%;background:var(--azul);color:#fff;display:grid;place-items:center;font-weight:600;font-size:15px}
-.chips{display:flex;gap:6px;flex-wrap:wrap}.chip{font-size:12px;font-weight:600;padding:2px 11px;border-radius:999px;background:var(--okbg);color:var(--ok)}.chip.azul{background:var(--azulbg);color:var(--azul)}.chip.cinza{background:var(--line);color:var(--mut)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}.chip{font-size:12px;font-weight:600;padding:2px 11px;border-radius:999px;background:var(--okbg);color:var(--ok)}.chip.azul{background:var(--azulbg);color:var(--azul)}.chip.cinza{background:var(--line);color:var(--mut)}.chip.aviso{background:var(--errbg);color:var(--err)}
+.pessoa.pend{border-color:var(--err)}.pessoa.pend .pessoa-acoes{align-items:center}.pessoa-acoes .btn{padding:8px 18px;font-size:14px}
 .pessoa dl{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0;font-size:13.5px}.pessoa dt{color:var(--mut)}.pessoa dd{margin:0;overflow-wrap:anywhere}
 .pessoa-acoes{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:auto;padding-top:12px;border-top:1px solid var(--line);font-size:14px}
 @media(max-width:860px){.entrada{grid-template-columns:1fr;gap:20px}.geo{display:none}.hero p{margin-bottom:6px}}
@@ -179,6 +182,20 @@ textarea{min-height:110px;resize:vertical}
   <h2 style="margin-top:22px">Meus comprovantes</h2>
   <p class="mut">Para provar ao professor que você fez a chamada, toque em <b>Mostrar ao professor</b>: o comprovante abre em tela cheia, com seus dados, o evento, o horário e um relógio ao vivo. Toque em <b>Baixar PDF</b> para salvar o comprovante com o código de validação da aula.</p>
   <div id="comprov"></div>
+
+  <h2 style="margin-top:22px">Minhas anotações <span class="chip azul" style="vertical-align:middle">Privado: só você vê</span></h2>
+  <p class="mut">Escreva como foi o evento, o que você aprendeu e o que quer lembrar. Professores e coordenação <b>não têm acesso</b> a estas anotações. Você baixa em PDF, num arquivo separado do comprovante de presença. Se um evento for excluído, a sua anotação continua aqui. No PDF, emojis aparecem como “?”.</p>
+  <div class="msg" id="msg-notas" hidden></div>
+  <div class="card" id="nota-form">
+    <label for="nota-evento">Evento</label>
+    <select id="nota-evento"><option value="">Escolha o evento…</option></select>
+    <label for="nota-texto">Sua anotação</label>
+    <textarea id="nota-texto" maxlength="4000" placeholder="Como foi o evento? O que você aprendeu? O que ficou pendente?" disabled></textarea>
+    <div class="nota-info"><span class="mut" id="nota-aviso"></span><span class="mut" id="nota-cont">0 / 4000</span></div>
+    <div class="acoes"><button class="btn" id="nota-salvar" type="button" disabled>Salvar anotação</button></div>
+  </div>
+  <div class="acoes"><button class="btn alt" id="notas-pdf-todas" type="button" hidden>Baixar todas as anotações (PDF)</button></div>
+  <div id="notas"></div>
 </section>
 
 <!-- ============ PROFESSOR ============ -->
@@ -392,12 +409,13 @@ function renderAuth(){
   $('#f-senha').hidden = esq; $('#f-senha2').hidden = !reg; $('#f-ref').hidden = !esq; $('#p-esqueci').hidden = S.modo !== 'login' || adm;
   $('#ref-rot').textContent = alu ? 'Matrícula' : 'Registro Funcional / ID Docente';
   $('#ref').placeholder = alu ? 'Ex.: 202610405 ou GTI202610405' : 'Ex.: DOC-2026-08';
-  $('#btn-auth').textContent = esq ? 'Enviar pedido à coordenação' : reg ? 'Criar conta' : 'Entrar';
+  $('#btn-auth').textContent = esq ? 'Enviar pedido à coordenação' : reg ? (prof ? 'Solicitar cadastro' : 'Criar conta') : 'Entrar';
   $('#toggle').hidden = adm && S.modo === 'login' && !S.cfg.coordenacao_aberta;
-  $('#toggle').textContent = S.modo === 'login' ? (adm ? 'Primeiro acesso da coordenação · Criar conta' : 'Primeiro acesso · Criar conta') : 'Já tenho conta · Entrar';
+  $('#toggle').textContent = S.modo === 'login' ? (adm ? 'Primeiro acesso da coordenação · Criar conta' : prof ? 'Primeiro acesso · Solicitar cadastro' : 'Primeiro acesso · Criar conta') : 'Já tenho conta · Entrar';
   $('#senha').autocomplete = reg ? 'new-password' : 'current-password';
   $('#dica').textContent = alu ? 'Alunos: nome@' + S.cfg.dominio_aluno
     : adm ? (reg ? 'Coordenação: e-mail ' + dp + '. Use a Chave de Acesso da Coordenação (CHAVE_MASTER).' : 'Coordenação: e-mail ' + dp + '. Esqueceu a senha? Outra pessoa da coordenação redefine no painel.')
+    : reg ? 'Professores: nome' + dp + '. Depois de enviar, a coordenação precisa autorizar o seu cadastro antes do primeiro acesso.'
     : 'Professores: nome' + dp;
   msg($('#msg-auth'), '');
 }
@@ -458,6 +476,10 @@ $('#form-auth').onsubmit = async e => {
   const b = $('#btn-auth'); b.disabled = true;
   try {
     const r = await api(reg ? '/auth/registro' : '/auth/login', {method:'POST', body});
+    if (r.pendente){ // professor: cadastro recebido, mas só entra depois da autorização da coordenação
+      $('#senha').value = ''; $('#senha2').value = ''; $('#chave').value = ''; S.modo = 'login'; renderAuth();
+      return msg(m, r.mensagem, 'ok');
+    }
     S.token = r.token; S.user = r.usuario; store.set(KT, r.token); store.set(KU, JSON.stringify(r.usuario));
     $('#senha').value = ''; $('#senha2').value = ''; $('#chave').value = ''; iniciar();
   } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; }
@@ -467,14 +489,14 @@ function iniciar(){
   $('#user-nome').textContent = S.user.nome.split(' ')[0];
   if (S.user.perfil === 'admin'){ Object.assign(ADM, {aba:'resumo', pag:1, q:'', curso:0}); show('admin'); admRender(); } // sempre abre no Resumo (onde fica o aviso da senha provisória)
   else if (S.user.perfil === 'aluno'){
-    show('aluno'); carregarAulas(); carregarComprovantes();
+    show('aluno'); carregarAulas(); carregarComprovantes(); carregarNotas();
     $('#aluno-info').textContent = (S.user.curso ? S.user.curso + ' · ' : '') + (S.user.periodo ? S.user.periodo + 'º período · ' : '') + 'Use o seu próprio celular e fique dentro da sala. O navegador vai pedir permissão para usar a localização.';
     S.timer = setInterval(() => { if (!document.hidden) carregarAulas(); }, 10000);
   } else { show('prof'); initMapa(); recarregarHist(true); }
 }
 function sair(aviso){
   clearInterval(S.timer); clearInterval(S.poll); geoDesligar(); S.geo.pos = S.geo.erro = null;
-  S.token = S.user = S.aula = null; store.del(KT); store.del(KU);
+  S.token = S.user = S.aula = null; store.del(KT); store.del(KU); limparNotas();
   $('#painel').hidden = true; S.modo = 'login';
   fecharMostrar(); renderAuth(); show('auth'); if (aviso) msg($('#msg-auth'), aviso, 'err');
 }
@@ -549,16 +571,17 @@ $('#aulas').onclick = async e => {
 };
 
 /* PDF do comprovante: o servidor gera (com o código de validação do evento e a autenticação) e o navegador baixa. */
-async function baixarPDF(id, btn, aviso){
+const baixarPDF = (id, btn, aviso) => baixarPdfDe(`/api/aluno/presencas/${id}/pdf`, `comprovante-presenca-${id}.pdf`, btn, aviso);
+async function baixarPdfDe(url, nomeArquivo, btn, aviso){
   msg(aviso, ''); const rot = btn.textContent; btn.disabled = true; btn.textContent = 'Gerando PDF…';
   try {
-    const r = await fetch(`/api/aluno/presencas/${id}/pdf`, {headers:{Authorization:'Bearer ' + S.token}});
+    const r = await fetch(url, {headers:{Authorization:'Bearer ' + S.token}});
     if (!r.ok){
       let d = null; try { d = await r.json(); } catch {}
       if (r.status === 401) return sair('Sessão expirada. Entre novamente.');
       throw new Error(typeof d?.detail === 'string' ? d.detail : 'Não foi possível gerar o PDF agora. Tente de novo.');
     }
-    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = `comprovante-presenca-${id}.pdf`;
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = nomeArquivo;
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
   } catch (x) { msg(aviso, x.name === 'TypeError' ? 'Sem conexão com o servidor. Verifique sua internet.' : x.message, 'err'); }
   finally { btn.disabled = false; btn.textContent = rot; }
@@ -572,8 +595,9 @@ async function carregarComprovantes(destacar){
     box.innerHTML = l.length ? l.map((p, i) => `<article class="card comp${destacar && i === 0 ? ' novo' : ''}">
       <h3>✓ Presença registrada · Protocolo nº ${p.id}</h3>
       <p>O aluno <b>${esc(me.nome)}</b>${me.matricula ? `, matrícula <b>${esc(me.matricula)}</b>` : ''}${me.curso ? `, do curso de ${esc(me.curso)}` : ''}${me.periodo ? `, ${me.periodo}º período` : ''}, registrou presença em <b>${esc(p.titulo)}</b>${p.disciplina ? ` (disciplina ${esc(p.disciplina)})` : ''} (${p.tipo === 'palestra' ? 'palestra' : 'aula'} · ${p.local_tipo === 'fora' ? 'fora da faculdade' : 'dentro da faculdade'}), com o(a) prof. ${esc(p.professor)}, em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.</p>
-      <div class="acoes"><button class="btn" type="button" data-m="${i}">Mostrar ao professor</button><button class="btn alt" type="button" data-pdf="${p.id}">Baixar PDF</button></div>
+      <div class="acoes"><button class="btn" type="button" data-m="${i}">Mostrar ao professor</button><button class="btn alt" type="button" data-pdf="${p.id}">Baixar PDF</button><button class="btn alt" type="button" data-nota="${p.id}">Anotar</button></div>
     </article>`).join('') : '<div class="card vazio mut">Você ainda não registrou nenhuma presença.</div>';
+    montarSelectNotas();
     if (destacar) box.scrollIntoView({behavior:'smooth', block:'start'});
   } catch (x) { box.innerHTML = `<div class="msg err">${esc(x.message)}</div>`; }
 }
@@ -599,8 +623,91 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') fecharMostra
 $('#comprov').addEventListener('click', e => {
   const b = e.target.closest('button[data-m]'); if (b) mostrarAoProfessor(+b.dataset.m);
   const p = e.target.closest('button[data-pdf]'); if (p) baixarPDF(+p.dataset.pdf, p, $('#msg-aluno'));
+  const n = e.target.closest('button[data-nota]'); if (n) abrirNota(+n.dataset.nota);
 });
 $('#m-pdf').onclick = () => baixarPDF(+$('#m-pdf').dataset.id, $('#m-pdf'), $('#m-msg'));
+
+/* ---------------- Aluno: anotações PRIVADAS (só ele vê; PDF separado do comprovante) ---------------- */
+const NOTA_MAX = 4000;
+const dataCurta = d => new Date(d).toLocaleDateString('pt-BR');
+function opcoesNota(){ // eventos em que o aluno registrou presença + eventos que só restam como anotação (evento excluído)
+  const mapa = new Map(), tem = new Set((S.notas || []).map(n => n.presenca_id));
+  (S.comp || []).forEach(p => mapa.set(p.id, {titulo:p.titulo, em:p.registrado_em, removido:false}));
+  (S.notas || []).forEach(n => { if (!mapa.has(n.presenca_id)) mapa.set(n.presenca_id, {titulo:n.titulo, em:n.evento_em, removido:true}); });
+  return [...mapa].sort((a, b) => new Date(b[1].em) - new Date(a[1].em)).map(([id, o]) => ({id, tem:tem.has(id),
+    rot:`${o.titulo} · ${dataCurta(o.em)}${tem.has(id) ? ' · com anotação' : ''}${o.removido ? ' · evento excluído' : ''}`}));
+}
+function montarSelectNotas(){
+  const sel = $('#nota-evento'), atual = sel.value, ops = opcoesNota();
+  sel.innerHTML = '<option value="">' + (ops.length ? 'Escolha o evento…' : 'Registre presença em um evento para poder anotar') + '</option>'
+    + ops.map(o => `<option value="${o.id}">${esc(o.rot)}</option>`).join('');
+  if (atual && ops.some(o => String(o.id) === atual)) sel.value = atual; else if (atual){ S.notaPid = 0; preencherNota(0); }
+  sel.disabled = !ops.length;
+}
+function contarNota(){ $('#nota-cont').textContent = `${$('#nota-texto').value.length} / ${NOTA_MAX}`; }
+function preencherNota(pid){ // mostra no formulário a anotação já salva do evento (ou deixa em branco)
+  S.notaPid = pid; S.notaSujo = false;
+  const n = pid ? (S.notas || []).find(x => x.presenca_id === pid) : null;
+  $('#nota-texto').value = n ? n.texto : ''; $('#nota-texto').disabled = !pid; $('#nota-salvar').disabled = !pid;
+  $('#nota-aviso').textContent = n ? 'Você já tem uma anotação deste evento: ao salvar, ela é atualizada.' : '';
+  contarNota();
+}
+async function carregarNotas(){
+  const box = $('#notas');
+  try { S.notas = await api('/aluno/notas'); }
+  catch (x) { box.innerHTML = `<div class="msg err">${esc(x.message)}</div>`; return; }
+  box.innerHTML = S.notas.length ? S.notas.map(n => `<article class="card nota">
+      <h3>${esc(n.titulo)}</h3>
+      <div class="mut">${n.tipo === 'palestra' ? 'Palestra' : 'Aula'}${n.disciplina ? ' · disciplina ' + esc(n.disciplina) : ''} · presença em ${esc(new Date(n.evento_em).toLocaleString('pt-BR'))} · salva em ${esc(new Date(n.atualizado_em).toLocaleString('pt-BR'))}</div>
+      <p class="nota-txt">${esc(n.texto)}</p>
+      <div class="acoes"><button class="btn alt" type="button" data-nota-edit="${n.presenca_id}">Editar</button><button class="btn alt" type="button" data-nota-pdf="${n.id}">Baixar PDF</button><button class="link del" type="button" data-nota-del="${n.id}">Excluir</button></div>
+    </article>`).join('') : '<div class="card vazio mut">Você ainda não escreveu nenhuma anotação.</div>';
+  $('#notas-pdf-todas').hidden = !S.notas.length;
+  montarSelectNotas();
+  if (S.notaPid) $('#nota-evento').value = String(S.notaPid);
+}
+function abrirNota(pid){
+  if (S.notaSujo && S.notaPid !== pid && !confirm('Descartar o que você digitou na anotação em edição?')) return;
+  if (![...$('#nota-evento').options].some(o => o.value === String(pid))) montarSelectNotas();
+  $('#nota-evento').value = String(pid); preencherNota(pid);
+  $('#nota-form').scrollIntoView({behavior:'smooth', block:'center'}); $('#nota-texto').focus({preventScroll:true});
+}
+$('#nota-evento').onchange = e => {
+  const pid = +e.target.value || 0;
+  if (S.notaSujo && !confirm('Descartar o que você digitou na anotação em edição?')){ e.target.value = S.notaPid ? String(S.notaPid) : ''; return; }
+  preencherNota(pid);
+};
+$('#nota-texto').oninput = () => { S.notaSujo = true; contarNota(); };
+$('#nota-salvar').onclick = async () => {
+  const pid = +$('#nota-evento').value, texto = $('#nota-texto').value, m = $('#msg-notas'); msg(m, '');
+  if (!pid) return msg(m, 'Escolha o evento da anotação.', 'err');
+  if (!texto.trim()) return msg(m, 'Escreva algo para salvar. Para apagar uma anotação, use Excluir.', 'err');
+  const b = $('#nota-salvar'); b.disabled = true;
+  try {
+    await api(`/aluno/presencas/${pid}/nota`, {method:'PUT', body:{texto}});
+    await carregarNotas(); preencherNota(pid); msg(m, 'Anotação salva. Só você pode ver.', 'ok');
+  } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = !+$('#nota-evento').value; }
+};
+$('#notas').addEventListener('click', async e => {
+  const m = $('#msg-notas');
+  const ed = e.target.closest('button[data-nota-edit]'); if (ed) return abrirNota(+ed.dataset.notaEdit);
+  const pdf = e.target.closest('button[data-nota-pdf]'); if (pdf) return baixarPdfDe(`/api/aluno/notas/${pdf.dataset.notaPdf}/pdf`, `anotacao-${pdf.dataset.notaPdf}.pdf`, pdf, m);
+  const del = e.target.closest('button[data-nota-del]'); if (!del) return;
+  if (!confirm('Excluir esta anotação? Não pode ser desfeita.')) return;
+  msg(m, '');
+  try {
+    const n = (S.notas || []).find(x => x.id === +del.dataset.notaDel);
+    await api(`/aluno/notas/${del.dataset.notaDel}`, {method:'DELETE'});
+    if (n && n.presenca_id === S.notaPid) preencherNota(S.notaPid);
+    await carregarNotas(); msg(m, 'Anotação excluída.', 'ok');
+  } catch (x) { msg(m, x.message, 'err'); }
+});
+$('#notas-pdf-todas').onclick = e => baixarPdfDe('/api/aluno/notas/pdf', 'minhas-anotacoes.pdf', e.currentTarget, $('#msg-notas'));
+function limparNotas(){ // ao sair: o próximo usuário deste navegador não pode ver nada do anterior
+  S.notas = null; S.notaPid = 0; S.notaSujo = false; $('#notas').innerHTML = ''; $('#nota-texto').value = ''; $('#nota-texto').disabled = true;
+  $('#nota-salvar').disabled = true; $('#nota-aviso').textContent = ''; $('#notas-pdf-todas').hidden = true; msg($('#msg-notas'), '');
+  $('#nota-evento').innerHTML = '<option value="">Escolha o evento…</option>'; contarNota();
+}
 
 /* ---------------- Professor: mapa e abertura ---------------- */
 function initMapa(){
@@ -817,6 +924,14 @@ $('#p-tabs').onclick = e => {
 /* ---------------- Coordenação ---------------- */
 const ADM = {aba:'resumo', pag:1, q:'', curso:0};
 const iniciais = n => String(n || '?').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(w => (w.match(/\p{L}/u) || ['?'])[0]).join('').toUpperCase();
+const cartaoPendente = p => `<article class="pessoa pend">
+  <div class="pessoa-topo"><span class="avatar" aria-hidden="true">${esc(iniciais(p.nome))}</span><div><b>${esc(p.nome)}</b><span class="mut">${esc(p.email)}</span></div></div>
+  <div class="chips"><span class="chip aviso">Aguardando autorização</span></div>
+  <dl><dt>Registro</dt><dd>${esc(p.registro_funcional || '—')}</dd><dt>Área</dt><dd>${esc(p.departamento || '—')}</dd><dt>Pedido em</dt><dd>${dh(p.criado_em)}</dd></dl>
+  <div class="pessoa-acoes">
+    <button class="btn" data-act="prof-aut" data-id="${p.id}" data-t="${esc(p.nome)}" data-r="${esc(p.registro_funcional || '')}">Autorizar</button>
+    <button class="link del" data-act="prof-rec" data-id="${p.id}" data-t="${esc(p.nome)}">Recusar</button>
+  </div></article>`;
 const cartaoProf = p => `<article class="pessoa${p.ativo ? '' : ' off'}">
   <div class="pessoa-topo"><span class="avatar" aria-hidden="true">${esc(iniciais(p.nome))}</span><div><b>${esc(p.nome)}</b><span class="mut">${esc(p.email)}</span></div></div>
   <div class="chips">${p.admin ? '<span class="chip azul">Coordenação</span>' : '<span class="chip">Professor</span>'}${p.ativo ? '<span class="chip">Ativo</span>' : '<span class="chip cinza">Desativado</span>'}</div>
@@ -836,7 +951,7 @@ const pager = (total, sufixo) => { const n = Math.max(1, Math.ceil(total / 50));
     <button class="btn alt" data-act="pag" data-v="1"${ADM.pag >= n ? ' disabled' : ''}>Próxima ›</button></div>`; };
 const ACAO = {exportar_chamada:'Exportou chamada (CSV)', excluir_aula:'Excluiu aula', excluir_todas_aulas:'Excluiu todas as aulas', excluir_aula_admin:'Coordenação excluiu aula',
   pedido_senha:'Pediu nova senha', login_admin:'Login da coordenação', login_admin_falha:'Falha de login da coordenação', cadastro_professor:'Professor se cadastrou', criar_professor:'Coordenação criou professor',
-  excluir_professor:'Excluiu professor', criar_coordenacao:'Criou conta da coordenação', professor_coordenacao:'Mudou papel na coordenação', professor_ativo:'Ativou/desativou professor', criar_curso:'Criou curso', curso_ativo:'Ativou/desativou curso', editar_aluno:'Editou aluno',
+  autorizar_professor:'Autorizou professor', recusar_professor:'Recusou cadastro de professor', excluir_professor:'Excluiu professor', criar_coordenacao:'Criou conta da coordenação', professor_coordenacao:'Mudou papel na coordenação', professor_ativo:'Ativou/desativou professor', criar_curso:'Criou curso', curso_ativo:'Ativou/desativou curso', editar_aluno:'Editou aluno',
   excluir_aluno:'Excluiu aluno', redefinir_senha:'Redefiniu senha', trocar_senha_admin:'Coordenação trocou a própria senha', importar_matriculas:'Importou matrículas', excluir_matricula:'Excluiu matrícula autorizada'};
 const ADM_ABAS = {
   async resumo(){
@@ -844,9 +959,10 @@ const ADM_ABAS = {
     const aviso = !r.matricula_obrigatoria ? '<div class="msg">A lista de matrículas autorizadas está DESLIGADA por enquanto: qualquer matrícula numérica pode se cadastrar. Para ligar de novo, defina MATRICULA_OBRIGATORIA=1 na Render.</div>'
       : r.matriculas_autorizadas === 0 ? '<div class="msg err">Nenhuma matrícula autorizada ainda: alunos novos não conseguem criar conta. Importe a lista na aba Matrículas.</div>' : '';
     const pend = r.pedidos_senha_pendentes ? `<div class="msg err">${r.pedidos_senha_pendentes} pedido(s) de nova senha aguardando. Abra a aba Pedidos de senha.</div>` : '';
+    const aut = r.professores_pendentes ? `<div class="msg err">${r.professores_pendentes} cadastro(s) de professor aguardando a sua autorização. Abra a aba Professores.</div>` : '';
     const prov = r.senha_provisoria ? '<div class="msg err">Você entrou com a senha PROVISÓRIA. Troque agora, logo abaixo: enquanto ela não for trocada, qualquer pessoa que a conheça entra como coordenação.</div>' : '';
     const cardSenha = `<h3 style="margin-top:16px">Trocar minha senha</h3><div class="row"><input id="ms-atual" type="password" autocomplete="current-password" placeholder="Senha atual"><input id="ms-nova" type="password" autocomplete="new-password" placeholder="Nova senha (mín. 8)"><input id="ms-nova2" type="password" autocomplete="new-password" placeholder="Repita a nova senha"><button class="btn" data-act="minha-senha">Trocar senha</button></div>`;
-    return prov + (r.senha_provisoria ? cardSenha : '') + aviso + pend + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
+    return prov + (r.senha_provisoria ? cardSenha : '') + aviso + aut + pend + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aguardando autorização',r.professores_pendentes || 0],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
       <h3 style="margin-top:16px">Alunos por curso</h3>` + tb(['Curso','Alunos'], r.por_curso.map(c => `<tr><td>${esc(c.curso)}</td><td>${c.alunos}</td></tr>`)) +
       `<h3 style="margin-top:16px">Proteção contra VPN</h3><p class="mut">Confere se o servidor enxerga o seu IP corretamente e se a verificação de VPN está ativa.</p><button class="btn alt" data-act="vpn-test">Testar proteção contra VPN</button>` + (r.senha_provisoria ? '' : cardSenha);
   },
@@ -857,8 +973,13 @@ const ADM_ABAS = {
         <td><button class="link" data-act="curso-tog" data-id="${c.id}" data-v="${c.ativo ? 0 : 1}">${c.ativo ? 'Desativar' : 'Ativar'}</button></td></tr>`));
   },
   async professores(){
-    const l = await api('/admin/professores');
-    return `<h3>Criar conta de professor ou da coordenação</h3><div class="row"><input id="np-nome" placeholder="Nome completo"><input id="np-email" type="email" placeholder="nome@unicerrado.edu.br"></div>
+    const todos = await api('/admin/professores'), pendentes = todos.filter(p => p.pendente), l = todos.filter(p => !p.pendente);
+    const blocoPend = pendentes.length
+      ? `<div class="msg err">${pendentes.length} cadastro(s) de professor aguardando a sua autorização. Quem não for autorizado não consegue entrar.</div>
+         <h3>Aguardando autorização (${pendentes.length})</h3><p class="mut">Confira o nome e o registro funcional antes de autorizar. Ao autorizar, a pessoa já pode entrar e abrir chamadas. Ao recusar, o cadastro é apagado.</p>
+         <div class="pessoas">${pendentes.map(cartaoPendente).join('')}</div>`
+      : '<p class="mut">Nenhum cadastro de professor aguardando autorização.</p>';
+    return blocoPend + `<h3 style="margin-top:20px">Criar conta de professor ou da coordenação</h3><p class="mut">Contas criadas aqui já nascem autorizadas.</p><div class="row"><input id="np-nome" placeholder="Nome completo"><input id="np-email" type="email" placeholder="nome@unicerrado.edu.br"></div>
       <div class="row"><input id="np-reg" placeholder="Registro funcional (DOC-2026-08)"><input id="np-depto" placeholder="Departamento / Área"><input id="np-senha" type="password" placeholder="Senha provisória (mín. 8)"><label class="mut" style="margin:0;display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" id="np-coord" style="width:auto;flex:none;min-width:0"> Conta da coordenação</label><button class="btn" data-act="prof-add">Criar conta</button></div>
       <h3 style="margin-top:20px">Professores e coordenação</h3>` + (l.length ? `<div class="pessoas">${l.map(cartaoProf).join('')}</div>` : '<p class="mut">Nenhum professor cadastrado ainda.</p>');
   },
@@ -920,6 +1041,14 @@ $('#adm-corpo').onclick = async e => {
     else if (act === 'curso-tog') await api(`/admin/cursos/${id}`, {method:'PATCH', body:{ativo:v === '1'}});
     else if (act === 'prof-tog') await api(`/admin/professores/${id}`, {method:'PATCH', body:{ativo:v === '1'}});
     else if (act === 'prof-coord') await api(`/admin/professores/${id}/coordenacao`, {method:'PATCH', body:{ativo:v === '1'}});
+    else if (act === 'prof-aut'){
+      if (!confirm(`Autorizar "${t}"${b.dataset.r ? ` (registro ${b.dataset.r})` : ''} como professor? A pessoa poderá entrar e abrir chamadas.`)) return;
+      await api(`/admin/professores/${id}/autorizar`, {method:'POST'}); await admRender(); return msg(m, `${t} foi autorizado(a) e já pode entrar.`, 'ok');
+    }
+    else if (act === 'prof-rec'){
+      if (!confirm(`Recusar o cadastro de "${t}"? A conta será apagada (a pessoa pode pedir de novo). Não pode ser desfeito.`)) return;
+      await api(`/admin/professores/${id}/recusar`, {method:'POST'}); await admRender(); return msg(m, `Cadastro de ${t} recusado e apagado.`, 'ok');
+    }
     else if (act === 'prof-add'){
       const nome = $('#np-nome').value.trim(), email = $('#np-email').value.trim().toLowerCase(), senha = $('#np-senha').value,
             registro_funcional = $('#np-reg').value.trim(), departamento = $('#np-depto').value.trim(), coordenacao = $('#np-coord').checked;

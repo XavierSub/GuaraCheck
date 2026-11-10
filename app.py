@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import (Boolean, DateTime, Float, ForeignKey, Index, Integer, String,
+from sqlalchemy import (Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text,
                         UniqueConstraint, create_engine, delete, event, func, inspect,
                         exists, or_, select, text, update)
 from sqlalchemy.exc import IntegrityError
@@ -173,6 +173,9 @@ class Professor(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     ativo: Mapped[Optional[bool]] = mapped_column(Boolean, default=True)  # a coordenação pode desativar
     coordenacao: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)  # conta da coordenação (painel administrativo)
+    # False = cadastro feito pelo próprio professor, ainda sem a autorização da coordenação (não consegue entrar).
+    # True/None = autorizado (contas antigas e contas criadas pela coordenação ficam como True).
+    aprovado: Mapped[Optional[bool]] = mapped_column(Boolean, default=True)
     registro_funcional: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # ex.: DOC-2026-08
     departamento: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     nome: Mapped[str] = mapped_column(String(120))
@@ -252,6 +255,31 @@ class Tentativa(Base):
     )
 
 
+NOTA_MAX = 4000  # caracteres por anotação
+NOTAS_MAX_PDF = 200  # anotações no PDF com todas
+
+
+class NotaAluno(Base):
+    """
+    Anotação PRIVADA do aluno sobre um evento em que ele registrou presença ("como foi", o que aprendeu...).
+    Só o próprio aluno lê, edita e baixa: NENHUMA rota de professor ou da coordenação consulta esta tabela
+    (a coordenação só a apaga junto com o aluno). Guarda uma cópia do título/tipo/disciplina/data do evento, então a
+    anotação continua existindo se o professor excluir o evento. presenca_id não é chave estrangeira, de propósito.
+    """
+    __tablename__ = "notas_aluno"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id", ondelete="CASCADE"), index=True)
+    presenca_id: Mapped[int] = mapped_column(Integer)
+    evento_titulo: Mapped[str] = mapped_column(String(140))
+    evento_tipo: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    evento_disciplina: Mapped[Optional[str]] = mapped_column(String(140), nullable=True)
+    evento_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # quando o aluno registrou presença
+    texto: Mapped[str] = mapped_column(Text)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (UniqueConstraint("aluno_id", "presenca_id", name="uq_nota_aluno_presenca"),)
+
+
 class MatriculasAutorizadas(Base):
     """Lista pré-aprovada pela coordenação. O aluno só se cadastra com uma matrícula daqui e ainda não utilizada."""
     __tablename__ = "matriculas_autorizadas"
@@ -291,6 +319,7 @@ def migrar_esquema():
         "alunos": [("curso_id", "INTEGER REFERENCES cursos (id)"), ("periodo", "INTEGER"),
                    ("status", "VARCHAR(10) DEFAULT 'ativo'")],
         "professores": [("ativo", "BOOLEAN DEFAULT TRUE"), ("coordenacao", "BOOLEAN DEFAULT FALSE"),
+                        ("aprovado", "BOOLEAN DEFAULT TRUE"),  # professores que já existem continuam autorizados
                         ("registro_funcional", "VARCHAR(30)"),
                         ("departamento", "VARCHAR(100)")],
         "aulas": [("tipo", "VARCHAR(20) DEFAULT 'aula'"), ("local_tipo", "VARCHAR(10) DEFAULT 'dentro'"),
@@ -320,7 +349,8 @@ def migrar_esquema():
 
 def resetar_dados_de_teste():
     """
-    Apaga alunos, professores, aulas, presenças, tentativas, matrículas autorizadas e a auditoria. Mantém os cursos.
+    Apaga alunos, professores, aulas, presenças, tentativas, anotações dos alunos, matrículas autorizadas e a auditoria.
+    Mantém os cursos.
     Roda no máximo UMA vez por valor de RESET_BANCO (o valor fica registrado, em forma de hash, em controle_sistema),
     então pode deixar a variável cadastrada: reiniciar o servidor não apaga de novo.
     """
@@ -334,7 +364,7 @@ def resetar_dados_de_teste():
         if atual and atual.valor == marca:
             print("RESET_BANCO: já executado com este valor; nada a fazer.")
             return
-        for modelo in (Tentativa, Presenca, Aula, Aluno, Professor, MatriculasAutorizadas, LogSeguranca):
+        for modelo in (NotaAluno, Tentativa, Presenca, Aula, Aluno, Professor, MatriculasAutorizadas, LogSeguranca):
             db.execute(delete(modelo))  # ordem respeita as chaves estrangeiras
         if atual:
             atual.valor = marca
@@ -549,6 +579,16 @@ def senha_admin_confere(p: "Professor", senha: str) -> bool:
     if confere_senha(senha, p.senha_hash):
         return True
     return senha_provisoria_ativa(p) and _forma_simples(senha) == _forma_simples(COORD_SENHA)
+
+
+def aguardando_autorizacao(p: "Professor") -> bool:
+    """True = professor que se cadastrou sozinho e ainda não foi autorizado pela coordenação (não pode entrar).
+    Conta da coordenação nunca fica aguardando: senão ADMIN_EMAILS poderia ficar sem acesso ao próprio painel."""
+    return p.aprovado is False and not (bool(p.coordenacao) or p.email in ADMIN_EMAILS)
+
+
+MSG_AGUARDANDO = ("Seu cadastro de professor foi recebido e está aguardando a autorização da coordenação. "
+                  "Você poderá entrar assim que ele for aprovado.")
 
 
 def resposta_token(u, perfil: str, curso: Optional[str] = None) -> dict:
@@ -802,6 +842,149 @@ def gerar_pdf_comprovante(d: dict) -> bytes:
     return buf.getvalue()
 
 
+def limpar_nota(s) -> str:
+    """Texto da anotação: quebras de linha padronizadas, sem caracteres de controle, sem espaços nas pontas."""
+    s = (s or "").replace("\r\n", "\n").replace("\r", "\n")
+    return "".join(ch for ch in s if ch in "\n\t" or unicodedata.category(ch)[0] != "C").strip()
+
+
+def _quebrar_texto(texto: str, fonte: str, tam: float, largura: float) -> list:
+    """Quebra o texto em linhas que cabem na largura: respeita as quebras do aluno e parte palavras enormes (links)."""
+    from reportlab.lib.utils import simpleSplit
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    saida = []
+    for par in _l1(texto).split("\n"):
+        if not par.strip():
+            saida.append("")
+            continue
+        for lin in simpleSplit(par, fonte, tam, largura):
+            while stringWidth(lin, fonte, tam) > largura:  # uma palavra maior que a linha inteira
+                corte = len(lin)
+                while corte > 1 and stringWidth(lin[:corte], fonte, tam) > largura:
+                    corte -= 1
+                saida.append(lin[:corte])
+                lin = lin[corte:]
+            saida.append(lin)
+    return saida
+
+
+def gerar_pdf_anotacoes(d: dict) -> bytes:
+    """
+    Anotações pessoais do aluno em PDF. É um documento SEPARADO do comprovante: cabeçalho azul (o comprovante é verde),
+    sem código de validação nem autenticação, e com aviso de que não vale como comprovante de presença.
+    d: {"nome", "notas": [{"titulo","tipo","disciplina","evento_em","atualizado_em","texto"}], "emitido_em", "unico"}.
+    """
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import simpleSplit
+    from reportlab.pdfgen import canvas
+
+    W, H = A4
+    M = 48
+    azul, cinza, escuro = colors.HexColor("#23589a"), colors.HexColor("#5b6670"), colors.HexColor("#14202b")
+    notas = d["notas"]
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.setTitle(_l1("Minhas anotações" if not d.get("unico") else f"Anotação: {notas[0]['titulo']}"))
+    c.setAuthor("GeoCheckIn - UniCerrado")
+    c.setSubject("Anotações pessoais do aluno")
+    estado = {"y": 0.0, "pagina": 0}
+    emitido = d["emitido_em"].astimezone(BRT).strftime("%d/%m/%Y %H:%M")
+
+    def rodape():
+        c.setStrokeColor(colors.HexColor("#cfd8d3"))
+        c.setLineWidth(0.8)
+        c.line(M, 62, W - M, 62)
+        c.setFillColor(cinza)
+        c.setFont("Helvetica", 8)
+        aviso = ("Documento pessoal do aluno. Não vale como comprovante de presença, não tem código de validação e "
+                 "não é visto por professores nem pela coordenação. "
+                 f"Gerado em {emitido} (horário de Brasília).")
+        yy = 50
+        for lin in simpleSplit(_l1(aviso), "Helvetica", 8, W - 2 * M - 60):
+            c.drawString(M, yy, lin)
+            yy -= 10
+        c.drawRightString(W - M, 50, _l1(f"Página {estado['pagina']}"))
+
+    def nova_pagina():
+        if estado["pagina"]:
+            rodape()
+            c.showPage()
+        estado["pagina"] += 1
+        c.setFillColor(azul)
+        if estado["pagina"] == 1:
+            c.rect(0, H - 86, W, 86, stroke=0, fill=1)
+            c.setFillColor(colors.white)
+            c.setFont("Helvetica-Bold", 22)
+            c.drawString(M, H - 42, "GeoCheckIn")
+            c.setFont("Helvetica", 12)
+            c.drawString(M, H - 62, _l1("Minhas anotações · Centro Universitário de Goiatuba (UniCerrado)"))
+            estado["y"] = H - 124
+        else:
+            c.rect(0, H - 34, W, 34, stroke=0, fill=1)
+            c.setFillColor(colors.white)
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(M, H - 22, _l1("GeoCheckIn · Minhas anotações"))
+            estado["y"] = H - 64
+
+    def garantir(espaco: float):
+        if estado["y"] - espaco < 76:
+            nova_pagina()
+
+    nova_pagina()
+    c.setFillColor(azul)
+    c.setFont("Helvetica-Bold", 15)
+    c.drawString(M, estado["y"], _l1("ANOTAÇÃO DO EVENTO" if d.get("unico") else "ANOTAÇÕES PESSOAIS"))
+    estado["y"] -= 24
+    c.setFillColor(cinza)
+    c.setFont("Helvetica", 10)
+    resumo = f"{d['nome']} · {len(notas)} " + ("anotação" if len(notas) == 1 else "anotações")
+    for lin in simpleSplit(_l1(resumo), "Helvetica", 10, W - 2 * M):
+        c.drawString(M, estado["y"], lin)
+        estado["y"] -= 13
+    estado["y"] -= 14
+
+    for n in notas:
+        titulos = _quebrar_texto(n["titulo"], "Helvetica-Bold", 12.5, W - 2 * M)
+        garantir(len(titulos) * 16 + 14 + 3 * 14)
+        c.setFillColor(escuro)
+        c.setFont("Helvetica-Bold", 12.5)
+        for lin in titulos:
+            c.drawString(M, estado["y"], lin)
+            estado["y"] -= 16
+        quando = aware(n["evento_em"]).astimezone(BRT)
+        meta = (("Palestra" if n.get("tipo") == "palestra" else "Aula")
+                + (f" · disciplina {n['disciplina']}" if n.get("disciplina") else "")
+                + f" · presença em {quando.strftime('%d/%m/%Y às %H:%M')}")
+        c.setFillColor(cinza)
+        c.setFont("Helvetica", 9)
+        for lin in _quebrar_texto(meta, "Helvetica", 9, W - 2 * M):
+            c.drawString(M, estado["y"], lin)
+            estado["y"] -= 12
+        estado["y"] -= 6
+        c.setFillColor(escuro)
+        for lin in _quebrar_texto(n["texto"], "Helvetica", 10.5, W - 2 * M - 14):
+            garantir(14)
+            c.setFillColor(azul)
+            c.rect(M, estado["y"] - 4, 2.5, 14, stroke=0, fill=1)  # filete à esquerda do texto
+            c.setFillColor(escuro)
+            c.setFont("Helvetica", 10.5)
+            c.drawString(M + 12, estado["y"], lin)
+            estado["y"] -= 14
+        estado["y"] -= 10
+        if n is not notas[-1]:
+            garantir(24)
+            c.setStrokeColor(colors.HexColor("#d9e0e6"))
+            c.setLineWidth(0.6)
+            c.line(M, estado["y"] + 4, W - M, estado["y"] + 4)
+            estado["y"] -= 18
+    rodape()
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
 # =====================================================================
 # APP
 # =====================================================================
@@ -938,6 +1121,8 @@ def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
                 raise HTTPException(409, "Esta matrícula já está vinculada a outro e-mail. Procure a coordenação.")
     else:
         u.registro_funcional, u.departamento = registro, depto
+        # o professor só entra depois da autorização da coordenação (e-mails de ADMIN_EMAILS já são da coordenação)
+        u.aprovado = email in ADMIN_EMAILS
     db.add(u)
     try:
         db.commit()
@@ -945,7 +1130,11 @@ def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(409, "Este e-mail já possui cadastro. Use a opção Entrar.")
     if b.perfil == "professor":
-        log_seg(db, u.id, "cadastro_professor", f"registro={registro}", ip_cliente(request), commit=True)
+        pendente = aguardando_autorizacao(u)
+        log_seg(db, u.id, "cadastro_professor", f"registro={registro}; {'aguardando autorização' if pendente else 'autorizado'}",
+                ip_cliente(request), commit=True)
+        if pendente:  # nenhum token é emitido: a pessoa só consegue entrar depois que a coordenação autorizar
+            return {"pendente": True, "mensagem": MSG_AGUARDANDO}
     return resposta_token(u, b.perfil, curso.nome if curso else None)
 
 
@@ -992,6 +1181,8 @@ def login(b: LoginIn, db: Session = Depends(get_db)):
     u = db.scalar(select(Model).where(Model.email == email))
     if not u or not confere_senha(b.senha, u.senha_hash):
         raise HTTPException(401, "E-mail ou senha incorretos.")
+    if b.perfil == "professor" and aguardando_autorizacao(u):  # só depois de conferir a senha: não revela o estado a estranhos
+        raise HTTPException(403, MSG_AGUARDANDO)
     if b.perfil == "professor" and u.ativo is False:
         raise HTTPException(403, "Conta desativada. Procure a coordenação.")
     if b.perfil == "aluno" and u.status == "inativo":
@@ -1339,6 +1530,101 @@ def comprovante_pdf(presenca_id: int, u: dict = Depends(so_aluno), db: Session =
         "Content-Disposition": f'attachment; filename="comprovante-presenca-{p.id}.pdf"', "Cache-Control": "no-store"})
 
 
+# ----------------- Anotações PRIVADAS do aluno (só ele vê) -----------------
+# Todas as rotas abaixo exigem papel "aluno" e filtram SEMPRE por NotaAluno.aluno_id == u["id"].
+# Nenhuma rota de professor ou da coordenação lê esta tabela.
+class NotaIn(BaseModel):
+    texto: str = Field(max_length=NOTA_MAX)  # vazio apaga a anotação
+
+
+def _nota_dict(n: NotaAluno) -> dict:
+    return {"id": n.id, "presenca_id": n.presenca_id, "titulo": n.evento_titulo, "tipo": n.evento_tipo or "aula",
+            "disciplina": n.evento_disciplina, "evento_em": iso(n.evento_em), "texto": n.texto,
+            "atualizado_em": iso(n.atualizado_em)}
+
+
+@app.get("/api/aluno/notas")
+def minhas_notas(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """As anotações do próprio aluno, da mais recente para a mais antiga."""
+    rows = db.scalars(select(NotaAluno).where(NotaAluno.aluno_id == u["id"])
+                      .order_by(NotaAluno.evento_em.desc(), NotaAluno.id.desc()).limit(NOTAS_MAX_PDF)).all()
+    return [_nota_dict(n) for n in rows]
+
+
+@app.put("/api/aluno/presencas/{presenca_id}/nota")
+def salvar_nota(presenca_id: int, b: NotaIn, u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """Cria ou atualiza a anotação da PRÓPRIA presença. Texto vazio apaga. Se o evento já foi excluído mas a anotação
+    existe, ela ainda pode ser editada."""
+    limitar_tentativas("nota:" + str(u["id"]), 60, 600)
+    texto = limpar_nota(b.texto)
+    nota = db.scalar(select(NotaAluno).where(NotaAluno.aluno_id == u["id"], NotaAluno.presenca_id == presenca_id))
+    if not texto:
+        if nota:
+            db.delete(nota)
+            db.commit()
+        return {"ok": True, "nota": None}
+    if nota:
+        nota.texto, nota.atualizado_em = texto, utcnow()
+    else:
+        ev = db.execute(select(Presenca.registrado_em, Aula.titulo, Aula.tipo, Aula.disciplina)
+                        .select_from(Presenca).join(Aula, Aula.id == Presenca.aula_id)
+                        .where(Presenca.id == presenca_id, Presenca.aluno_id == u["id"])).first()  # só a PRÓPRIA presença
+        if not ev:
+            raise HTTPException(404, "Presença não encontrada.")
+        nota = NotaAluno(aluno_id=u["id"], presenca_id=presenca_id, evento_titulo=ev.titulo, evento_tipo=ev.tipo,
+                         evento_disciplina=ev.disciplina, evento_em=aware(ev.registrado_em), texto=texto)
+        db.add(nota)
+    try:
+        db.commit()
+    except IntegrityError:  # dois salvamentos ao mesmo tempo criando a mesma anotação
+        db.rollback()
+        raise HTTPException(409, "Não foi possível salvar agora. Tente de novo.")
+    db.refresh(nota)
+    return {"ok": True, "nota": _nota_dict(nota)}
+
+
+@app.delete("/api/aluno/notas/{nota_id}")
+def excluir_nota(nota_id: int, u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    r = db.execute(delete(NotaAluno).where(NotaAluno.id == nota_id, NotaAluno.aluno_id == u["id"]))
+    if not r.rowcount:
+        raise HTTPException(404, "Anotação não encontrada.")
+    db.commit()
+    return {"ok": True}
+
+
+def _pdf_notas(db: Session, u: dict, notas: list, arquivo: str, unico: bool) -> Response:
+    nome = db.scalar(select(Aluno.nome).where(Aluno.id == u["id"])) or ""
+    try:
+        pdf = gerar_pdf_anotacoes({"nome": nome, "emitido_em": utcnow(), "unico": unico, "notas": [
+            {"titulo": n.evento_titulo, "tipo": n.evento_tipo, "disciplina": n.evento_disciplina,
+             "evento_em": n.evento_em, "atualizado_em": n.atualizado_em, "texto": n.texto} for n in notas]})
+    except ImportError:
+        raise HTTPException(503, "A geração de PDF não está disponível no servidor. Avise a coordenação.")
+    return Response(pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{arquivo}"', "Cache-Control": "no-store"})
+
+
+@app.get("/api/aluno/notas/pdf")
+def notas_pdf_todas(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """PDF com TODAS as anotações do próprio aluno (documento separado do comprovante)."""
+    limitar_tentativas("pdfnotas:" + str(u["id"]), 30, 600)
+    notas = db.scalars(select(NotaAluno).where(NotaAluno.aluno_id == u["id"])
+                       .order_by(NotaAluno.evento_em.desc(), NotaAluno.id.desc()).limit(NOTAS_MAX_PDF)).all()
+    if not notas:
+        raise HTTPException(404, "Você ainda não tem anotações.")
+    return _pdf_notas(db, u, notas, "minhas-anotacoes.pdf", False)
+
+
+@app.get("/api/aluno/notas/{nota_id}/pdf")
+def nota_pdf(nota_id: int, u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """PDF de UMA anotação do próprio aluno."""
+    limitar_tentativas("pdfnotas:" + str(u["id"]), 30, 600)
+    n = db.scalar(select(NotaAluno).where(NotaAluno.id == nota_id, NotaAluno.aluno_id == u["id"]))
+    if not n:
+        raise HTTPException(404, "Anotação não encontrada.")
+    return _pdf_notas(db, u, [n], f"anotacao-evento-{n.presenca_id}.pdf", True)
+
+
 @app.get("/api/aulas/ativas")
 def aulas_ativas(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
     if u.get("tem_cid") and u.get("tem_per"):
@@ -1554,6 +1840,7 @@ def admin_registro(b: AdminRegistroIn, request: Request, db: Session = Depends(g
         if not confere_senha(b.senha, p.senha_hash):
             raise HTTPException(409, "Este e-mail já tem conta de professor com outra senha. Digite a senha dela.")
         p.coordenacao = True
+        p.aprovado = True
     else:
         p = Professor(nome=b.nome.strip(), email=email, senha_hash=hash_senha(b.senha),
                       departamento="Coordenação", coordenacao=True)
@@ -1621,6 +1908,8 @@ def adm_resumo(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
             "presencas": _contar(db, Presenca), "aulas_ativas": _contar(db, Aula, Aula.ativa.is_(True)),
             "alunos_sem_curso": _contar(db, Aluno, Aluno.curso_id.is_(None)),
             "alunos_inativos": _contar(db, Aluno, Aluno.status == "inativo"),
+            "professores_pendentes": _contar(db, Professor, Professor.aprovado.is_(False),
+                                             or_(Professor.coordenacao.is_(None), Professor.coordenacao.is_(False))),
             "matriculas_autorizadas": _contar(db, MatriculasAutorizadas),
             "matriculas_utilizadas": _contar(db, MatriculasAutorizadas, MatriculasAutorizadas.utilizada.is_(True)),
             "matricula_obrigatoria": MATRICULA_OBRIGATORIA,
@@ -1665,7 +1954,39 @@ def adm_professores(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
                       .group_by(Professor.id).order_by(Professor.nome)).all()
     return [{"id": p.id, "nome": p.nome, "email": p.email, "registro_funcional": p.registro_funcional,
              "departamento": p.departamento, "ativo": p.ativo is not False,
+             "pendente": aguardando_autorizacao(p), "criado_em": iso(p.criado_em),
              "aulas": n, "admin": eh_coordenacao(p), "fixo_env": p.email in ADMIN_EMAILS} for p, n in rows]
+
+
+@app.post("/api/admin/professores/{prof_id}/autorizar")
+def adm_professor_autorizar(prof_id: int, request: Request, u: dict = Depends(so_admin),
+                            db: Session = Depends(get_db)):
+    """A coordenação autoriza o cadastro de um professor que está aguardando. Depois disso ele consegue entrar."""
+    p = db.get(Professor, prof_id)
+    if not p:
+        raise HTTPException(404, "Professor não encontrado.")
+    if not aguardando_autorizacao(p):
+        return {"ok": True, "ja_autorizado": True}  # idempotente: dois cliques ou duas pessoas da coordenação
+    p.aprovado = True
+    log_seg(db, u["id"], "autorizar_professor", f"{p.email}; registro={p.registro_funcional or '-'}", ip_cliente(request))
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/admin/professores/{prof_id}/recusar")
+def adm_professor_recusar(prof_id: int, request: Request, u: dict = Depends(so_admin),
+                          db: Session = Depends(get_db)):
+    """Recusa um cadastro que está aguardando: apaga a conta (a pessoa pode se cadastrar de novo, se for o caso).
+    Só vale para cadastro AGUARDANDO; para bloquear quem já foi autorizado, use desativar."""
+    p = db.get(Professor, prof_id)
+    if not p:
+        raise HTTPException(404, "Professor não encontrado.")
+    if not aguardando_autorizacao(p):
+        raise HTTPException(409, "Este professor já está autorizado. Para bloquear o acesso, desative a conta.")
+    db.execute(delete(Professor).where(Professor.id == prof_id, Professor.aprovado.is_(False)))
+    log_seg(db, u["id"], "recusar_professor", f"{p.email}; registro={p.registro_funcional or '-'}", ip_cliente(request))
+    db.commit()
+    return {"ok": True}
 
 
 @app.patch("/api/admin/professores/{prof_id}")
@@ -1702,7 +2023,8 @@ def adm_professor_novo(b: ProfessorIn, request: Request, u: dict = Depends(so_ad
     if db.scalar(select(Professor.id).where(Professor.email == email)):
         raise HTTPException(409, "Já existe um professor com esse e-mail.")
     db.add(Professor(nome=b.nome.strip(), email=email, senha_hash=hash_senha(b.senha),
-                     registro_funcional=registro or None, departamento=depto, coordenacao=coord))
+                     registro_funcional=registro or None, departamento=depto, coordenacao=coord,
+                     aprovado=True))  # conta criada pela própria coordenação já nasce autorizada
     log_seg(db, u["id"], "criar_professor", f"{email}; registro={registro or '-'}; coordenacao={coord}", ip_cliente(request))
     db.commit()
     return {"ok": True}
@@ -1720,6 +2042,8 @@ def adm_professor_coordenacao(prof_id: int, b: AtivoIn, request: Request, u: dic
             raise HTTPException(400, "Você não pode tirar a si mesmo da coordenação.")
         if p.email in ADMIN_EMAILS:
             raise HTTPException(400, "Essa conta está em ADMIN_EMAILS (configuração do servidor).")
+    elif aguardando_autorizacao(p):
+        raise HTTPException(409, "Autorize o cadastro deste professor antes de colocá-lo na coordenação.")
     p.coordenacao = b.ativo
     log_seg(db, u["id"], "professor_coordenacao", f"{p.email}: {'coordenação' if b.ativo else 'professor'}",
             ip_cliente(request))
@@ -1799,6 +2123,7 @@ def adm_aluno_excluir(aluno_id: int, request: Request, u: dict = Depends(so_admi
         raise HTTPException(404, "Aluno não encontrado.")
     db.execute(delete(Tentativa).where(Tentativa.aluno_id == aluno_id))
     db.execute(delete(Presenca).where(Presenca.aluno_id == aluno_id))
+    db.execute(delete(NotaAluno).where(NotaAluno.aluno_id == aluno_id))  # só apaga: a coordenação nunca lê as anotações
     if a.matricula:  # libera a matrícula na lista autorizada para um novo cadastro
         db.execute(update(MatriculasAutorizadas).where(MatriculasAutorizadas.matricula == a.matricula)
                    .values(utilizada=False))
