@@ -508,6 +508,36 @@ def limitar_tentativas(chave: str, maximo: int = 5, janela: int = 600):
     _tentativas[chave] = recentes
 
 
+# Login: só as FALHAS contam (quem acerta a senha não gasta tentativa), então uma turma inteira entrando ao mesmo
+# tempo pela mesma rede da faculdade não se bloqueia. Duas travas: por IP (varrer várias contas) e por conta+IP
+# (adivinhar a senha de uma conta; outra pessoa, em outro IP, não consegue travar a conta de ninguém).
+LOGIN_FALHAS_IP = int(os.getenv("LOGIN_FALHAS_IP", "30"))
+LOGIN_FALHAS_CONTA = int(os.getenv("LOGIN_FALHAS_CONTA", "8"))
+LOGIN_JANELA_S = 600
+
+
+def checar_falhas(chave: str, maximo: int, janela: int):
+    """Levanta 429 se a chave já acumulou `maximo` falhas dentro da janela. Não conta a chamada atual."""
+    agora = time.monotonic()
+    recentes = [t for t in _tentativas.get(chave, []) if agora - t < janela]
+    if recentes:
+        _tentativas[chave] = recentes
+    else:
+        _tentativas.pop(chave, None)
+    if len(recentes) >= maximo:
+        raise HTTPException(429, "Muitas tentativas de entrada. Aguarde alguns minutos e tente de novo.")
+
+
+def registrar_falha(chave: str):
+    if len(_tentativas) > 5000:
+        _tentativas.clear()
+    _tentativas.setdefault(chave, []).append(time.monotonic())
+
+
+def esquecer_falhas(chave: str):
+    _tentativas.pop(chave, None)
+
+
 # =====================================================================
 # AUTENTICAÇÃO
 # =====================================================================
@@ -558,6 +588,9 @@ def confere_senha(senha: str, guardado: str) -> bool:
         return False
 
 
+HASH_FALSO = hash_senha(secrets.token_hex(16))  # confere_senha contra e-mail inexistente leva o mesmo tempo que contra um real
+
+
 def sem_acentos(s: str) -> str:
     """'coordenação355' -> 'coordenacao355' (o e-mail é guardado sem acento)."""
     return "".join(c for c in unicodedata.normalize("NFKD", s or "") if not unicodedata.combining(c))
@@ -602,16 +635,52 @@ def resposta_token(u, perfil: str, curso: Optional[str] = None) -> dict:
                                         "matricula": getattr(u, "matricula", None)}}
 
 
-def usuario_atual(authorization: Optional[str] = Header(None)) -> dict:
+_cache_contas: dict = {}
+CONTA_CACHE_S = 5  # uma conta desativada perde o acesso em até 5 s (as rotas da coordenação limpam o cache na hora)
+
+
+def esquecer_contas():
+    _cache_contas.clear()
+
+
+def conta_liberada(db: Session, role: str, uid: int) -> bool:
+    """A conta do token ainda existe e continua liberada? Sem isso, quem foi desativado, excluído ou rebaixado
+    manteria a sessão até o token vencer (TOKEN_HORAS). O resultado fica 5 s em cache para não consultar o banco
+    a cada chamada da tela do aluno, que atualiza sozinha."""
+    chave, agora = (role, uid), time.monotonic()
+    hit = _cache_contas.get(chave)
+    if hit and agora - hit[0] < CONTA_CACHE_S:
+        return hit[1]
+    if role == "aluno":
+        a = db.get(Aluno, uid)
+        liberada = a is not None and a.status != "inativo"
+    elif role == "professor":
+        p = db.get(Professor, uid)
+        liberada = p is not None and p.ativo is not False and not aguardando_autorizacao(p)
+    elif role == "admin":
+        p = db.get(Professor, uid)
+        liberada = p is not None and p.ativo is not False and eh_coordenacao(p)
+    else:
+        liberada = False
+    if len(_cache_contas) > 5000:
+        _cache_contas.clear()
+    _cache_contas[chave] = (agora, liberada)
+    return liberada
+
+
+def usuario_atual(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)) -> dict:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "Faça login para continuar.")
     try:
         p = jwt.decode(authorization[7:], SECRET_KEY, algorithms=["HS256"])
-        return {"id": int(p["sub"]), "role": p["role"], "nome": p.get("nome", ""),
-                "cid": p.get("cid"), "tem_cid": "cid" in p,
-                "per": p.get("per"), "tem_per": "per" in p}
+        u = {"id": int(p["sub"]), "role": p["role"], "nome": p.get("nome", ""),
+             "cid": p.get("cid"), "tem_cid": "cid" in p,
+             "per": p.get("per"), "tem_per": "per" in p}
     except (jwt.PyJWTError, KeyError, ValueError):
         raise HTTPException(401, "Sessão expirada. Entre novamente.")
+    if not conta_liberada(db, u["role"], u["id"]):
+        raise HTTPException(401, "Esta conta foi desativada ou removida. Procure a coordenação.")
+    return u
 
 
 def so_aluno(u: dict = Depends(usuario_atual)) -> dict:
@@ -1011,6 +1080,32 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="GeoCheckIn V2 - UniCerrado", lifespan=lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)
 
+# Content-Security-Policy da página: só carrega scripts, estilos, fontes, imagens e mapas dos endereços que o site
+# realmente usa (Leaflet no cdnjs, fontes do Google, mapas Esri e OpenStreetMap). Os scripts e estilos da própria
+# página são inline, por isso 'unsafe-inline'. Se o site passar a usar outro endereço externo, inclua-o aqui.
+CSP_PAGINA = ("default-src 'self'; "
+              "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; "
+              "font-src 'self' https://fonts.gstatic.com; "
+              "img-src 'self' data: blob: https://cdnjs.cloudflare.com https://server.arcgisonline.com "
+              "https://tile.openstreetmap.org https://*.tile.openstreetmap.org; "
+              "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'")
+
+
+@app.middleware("http")
+async def cabecalhos_de_seguranca(request: Request, call_next):
+    resp = await call_next(request)
+    h = resp.headers
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("X-Frame-Options", "DENY")
+    h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")  # o OpenStreetMap exige Referer nos mapas
+    h.setdefault("Permissions-Policy", "geolocation=(self), camera=(), microphone=(), payment=()")
+    if request.headers.get("x-forwarded-proto", request.url.scheme) == "https":
+        h.setdefault("Strict-Transport-Security", "max-age=31536000")
+    if (h.get("content-type") or "").startswith("text/html"):
+        h.setdefault("Content-Security-Policy", CSP_PAGINA)
+    return resp
+
 
 def _arquivo_index() -> Path:
     for p in (BASE_DIR / "web" / "index.html", BASE_DIR / "index.html"):
@@ -1173,14 +1268,22 @@ def esqueci_senha(b: EsqueciIn, request: Request, db: Session = Depends(get_db))
 
 
 @app.post("/api/auth/login")
-def login(b: LoginIn, db: Session = Depends(get_db)):
+def login(b: LoginIn, request: Request, db: Session = Depends(get_db)):
     email = b.email.strip().lower()
     if not email_permitido(email, b.perfil):
         raise HTTPException(403, "E-mail não autorizado para este perfil.")
+    ip = ip_cliente(request)
+    k_ip, k_conta = "lg-ip:" + ip, f"lg-em:{b.perfil}:{email}|{ip}"
+    checar_falhas(k_ip, LOGIN_FALHAS_IP, LOGIN_JANELA_S)
+    checar_falhas(k_conta, LOGIN_FALHAS_CONTA, LOGIN_JANELA_S)
     Model = Aluno if b.perfil == "aluno" else Professor
     u = db.scalar(select(Model).where(Model.email == email))
-    if not u or not confere_senha(b.senha, u.senha_hash):
+    senha_ok = confere_senha(b.senha, u.senha_hash if u else HASH_FALSO)  # sempre gasta o mesmo tempo: não revela se o e-mail existe
+    if not u or not senha_ok:
+        registrar_falha(k_ip)
+        registrar_falha(k_conta)
         raise HTTPException(401, "E-mail ou senha incorretos.")
+    esquecer_falhas(k_conta)
     if b.perfil == "professor" and aguardando_autorizacao(u):  # só depois de conferir a senha: não revela o estado a estranhos
         raise HTTPException(403, MSG_AGUARDANDO)
     if b.perfil == "professor" and u.ativo is False:
@@ -1986,6 +2089,7 @@ def adm_professor_recusar(prof_id: int, request: Request, u: dict = Depends(so_a
     db.execute(delete(Professor).where(Professor.id == prof_id, Professor.aprovado.is_(False)))
     log_seg(db, u["id"], "recusar_professor", f"{p.email}; registro={p.registro_funcional or '-'}", ip_cliente(request))
     db.commit()
+    esquecer_contas()
     return {"ok": True}
 
 
@@ -2000,6 +2104,7 @@ def adm_professor_ativo(prof_id: int, b: AtivoIn, request: Request, u: dict = De
     p.ativo = b.ativo
     log_seg(db, u["id"], "professor_ativo", f"{p.email}: {'ativo' if b.ativo else 'desativado'}", ip_cliente(request))
     db.commit()
+    esquecer_contas()  # desativar vale já: a sessão aberta do professor deixa de funcionar na próxima chamada
     return {"ok": True}
 
 
@@ -2048,6 +2153,7 @@ def adm_professor_coordenacao(prof_id: int, b: AtivoIn, request: Request, u: dic
     log_seg(db, u["id"], "professor_coordenacao", f"{p.email}: {'coordenação' if b.ativo else 'professor'}",
             ip_cliente(request))
     db.commit()
+    esquecer_contas()  # quem saiu da coordenação perde o painel na hora
     return {"ok": True}
 
 
@@ -2069,6 +2175,7 @@ def adm_professor_excluir(prof_id: int, request: Request, u: dict = Depends(so_a
     db.execute(delete(Professor).where(Professor.id == prof_id))
     log_seg(db, u["id"], "excluir_professor", p.email, ip_cliente(request))
     db.commit()
+    esquecer_contas()
     _cache_ativas["t"] = 0
     return {"ok": True}
 
@@ -2113,6 +2220,7 @@ def adm_aluno_editar(aluno_id: int, b: AlunoEdicaoIn, request: Request, u: dict 
         raise HTTPException(422, "Nada para alterar.")
     log_seg(db, u["id"], "editar_aluno", f"aluno={aluno_id}; " + "; ".join(mudancas), ip_cliente(request))
     db.commit()
+    esquecer_contas()  # status "inativo" vale já para quem está com a sessão aberta
     return {"ok": True}
 
 
@@ -2130,6 +2238,7 @@ def adm_aluno_excluir(aluno_id: int, request: Request, u: dict = Depends(so_admi
     db.execute(delete(Aluno).where(Aluno.id == aluno_id))
     log_seg(db, u["id"], "excluir_aluno", f"aluno={aluno_id}; matricula={a.matricula}", ip_cliente(request))
     db.commit()
+    esquecer_contas()
     return {"ok": True}
 
 

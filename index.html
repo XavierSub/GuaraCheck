@@ -347,7 +347,7 @@ async function api(path, {method='GET', body} = {}){
   catch { throw new Error('Sem conexão com o servidor. Verifique sua internet.'); }
   let d = null; try { d = await r.json(); } catch {}
   if (!r.ok){
-    if (r.status === 401 && S.token){ sair('Sessão expirada. Entre novamente.'); }
+    if (r.status === 401 && S.token){ sair(typeof d?.detail === 'string' ? d.detail : 'Sessão expirada. Entre novamente.'); }  // inclui "conta desativada ou removida"
     throw new Error(typeof d?.detail === 'string' ? d.detail : r.status === 422 ? 'Dados inválidos. Confira os campos.' : 'Erro ' + r.status);
   }
   return d;
