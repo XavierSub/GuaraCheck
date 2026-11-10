@@ -5,6 +5,7 @@ Presença acadêmica por geolocalização (geofencing) - FastAPI + SQLAlchemy.
 Local:     python app.py            -> http://localhost:8000
 Produção:  uvicorn app:app --host 0.0.0.0 --port $PORT --workers 2
 """
+import base64
 import csv
 import hashlib
 import hmac
@@ -18,15 +19,16 @@ import secrets
 import time
 import unicodedata
 import urllib.request
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 import jwt
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import (Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text,
                         UniqueConstraint, create_engine, delete, event, func, inspect,
@@ -1092,9 +1094,17 @@ CSP_PAGINA = ("default-src 'self'; "
               "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'")
 
 
+LIMITE_CORPO_API = 8 * 1024 * 1024  # nenhuma requisição da API passa disso (o maior envio é o arquivo de matrículas, 5 MB + base64)
+
+
 @app.middleware("http")
 async def cabecalhos_de_seguranca(request: Request, call_next):
-    resp = await call_next(request)
+    tam = request.headers.get("content-length") or ""
+    if request.url.path.startswith("/api/") and tam.isdigit() and int(tam) > LIMITE_CORPO_API:
+        # recusa antes de ler o corpo: ninguém (logado ou não) enche a memória do servidor com um envio gigante
+        resp = JSONResponse({"detail": "Envio grande demais."}, status_code=413)
+    else:
+        resp = await call_next(request)
     h = resp.headers
     h.setdefault("X-Content-Type-Options", "nosniff")
     h.setdefault("X-Frame-Options", "DENY")
@@ -2340,6 +2350,430 @@ def adm_matriculas_importar(b: MatriculasIn, request: Request, u: dict = Depends
         raise HTTPException(409, "Outra importação estava em andamento. Tente de novo.")
     return {"adicionadas": adicionadas, "ja_existiam": len(existentes), "invalidas": len(invalidas),
             "exemplos_invalidas": invalidas[:15]}
+
+
+# ---- Importação de matrículas por ARQUIVO (CSV, TXT ou XLSX do sistema da faculdade) ----
+# Só duas colunas são lidas: matrícula e curso. Nome, CPF, e-mail etc. são ignorados e nunca guardados nem registrados.
+ARQ_MAX_BYTES = 5 * 1024 * 1024          # tamanho do arquivo
+ARQ_B64_MAX = ARQ_MAX_BYTES * 4 // 3 + 16  # o mesmo limite, já em base64
+ARQ_MAX_LINHAS = 20000
+ARQ_MAX_COLUNAS = 60
+ARQ_XLSX_MAX_DESCOMPACTADO = 60 * 1024 * 1024  # trava contra "zip bomb"
+
+_CAB_MATRICULA = {"matricula", "ra", "ra aluno", "ra do aluno", "registro academico", "reg academico", "registro",
+                  "cod aluno", "codigo aluno", "codigo do aluno", "cod do aluno", "n matricula", "no matricula",
+                  "nr matricula", "num matricula", "numero matricula", "numero da matricula", "matricula aluno",
+                  "matricula do aluno", "id aluno"}
+_CAB_MATRICULA_NAO = {"data", "dt", "situacao", "status", "ano", "periodo", "curso", "turno", "tipo", "forma",
+                      "ingresso", "anterior"}
+_CAB_CURSO = {"curso", "nome curso", "nome do curso", "curso aluno", "curso do aluno", "descricao curso",
+              "descricao do curso", "graduacao", "nome da graduacao"}
+_CAB_CURSO_NAO = {"codigo", "cod", "id", "situacao", "status", "periodo", "turno", "sigla", "data", "dt", "ingresso",
+                  "anterior", "tipo"}
+# colunas que nunca viram matrícula nem curso (dados pessoais): a importação recusa em vez de gravar um CPF por engano
+_CAB_PESSOAL = {"cpf", "rg", "senha", "nascimento", "telefone", "celular", "email", "mail", "mae", "pai", "endereco"}
+_NOME_SEPARADOR = {";": "ponto e vírgula", "\t": "tabulação", ",": "vírgula", "|": "barra vertical"}
+
+
+def _chave_texto(s) -> str:
+    """'Gestão da TI ' e 'GESTAO  DA TI' viram a mesma chave: sem acento, minúsculas, espaços únicos."""
+    s = unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+
+def _pontos_cab_matricula(c) -> int:
+    k = _chave_texto(c)
+    toks = set(k.split())
+    if not k or toks & _CAB_PESSOAL:
+        return 0
+    if k in _CAB_MATRICULA:
+        return 3
+    return 2 if "matricula" in toks and not toks & _CAB_MATRICULA_NAO else 0
+
+
+def _pontos_cab_curso(c) -> int:
+    k = _chave_texto(c)
+    toks = set(k.split())
+    if not k or toks & _CAB_PESSOAL:
+        return 0
+    if k in _CAB_CURSO:
+        return 3
+    return 2 if "curso" in toks and not toks & _CAB_CURSO_NAO else 0
+
+
+def _parece_matricula(v: str) -> bool:
+    """Valor que se comporta como matrícula: formato válido, tem algum dígito, e não é data nem CPF com pontuação."""
+    v = (v or "").strip()
+    if not v or not any(ch.isdigit() for ch in v) or not matricula_valida(v):
+        return False
+    return not (re.fullmatch(r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}", v) or re.fullmatch(r"\d{3}\.\d{3}\.\d{3}-\d{2}", v))
+
+
+def _decodificar_texto(dados: bytes):
+    """UTF-8 (com ou sem BOM), UTF-16 (o 'Texto Unicode' do Excel) e Windows-1252 (o 'CSV' do Excel no Brasil)."""
+    if dados[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        try:
+            return dados.decode("utf-16"), "utf-16"
+        except UnicodeError:
+            raise HTTPException(422, "Não consegui ler este arquivo de texto. Salve-o como CSV (UTF-8) e envie de novo.")
+    if dados and dados.count(b"\x00") > len(dados) // 4:  # UTF-16 sem BOM, ou um arquivo que não é de texto
+        try:
+            t = dados.decode("utf-16-le")
+            if sum(1 for ch in t if ord(ch) < 256) >= 0.9 * len(t):
+                return t, "utf-16"
+        except UnicodeError:
+            pass
+        raise HTTPException(422, "Este arquivo não parece ser texto nem planilha. Envie um CSV, TXT ou XLSX.")
+    if dados[:3] == b"\xef\xbb\xbf":
+        dados = dados[3:]
+    try:
+        return dados.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        return dados.decode("cp1252", errors="replace"), "windows-1252"
+
+
+def _detectar_delimitador(texto: str) -> Optional[str]:
+    """Escolhe o separador que dá o número de colunas mais constante nas primeiras linhas (None = uma coluna só)."""
+    amostra = [l for l in texto.splitlines() if l.strip()][:40]
+    melhor, nota_melhor = None, (0, 0)
+    for d in (";", "\t", ",", "|"):
+        try:
+            tams = [len(r) for r in csv.reader(amostra, delimiter=d)]
+        except csv.Error:
+            continue
+        if not tams:
+            continue
+        moda = max(set(tams), key=lambda t: (tams.count(t), t))
+        consistencia = round(tams.count(moda) / len(tams), 2)
+        if moda < 2 or consistencia < 0.6:
+            continue
+        if (consistencia, moda) > nota_melhor:
+            melhor, nota_melhor = d, (consistencia, moda)
+    return melhor
+
+
+def _celula_texto(v) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "sim" if v else "nao"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):  # o Excel guarda 202610405 como número: 202610405.0 -> '202610405'
+        return str(int(v)) if v.is_integer() else repr(v)
+    if hasattr(v, "isoformat"):
+        return v.isoformat()[:10]
+    return str(v).strip()
+
+
+def _ler_xlsx(dados: bytes) -> list:
+    try:
+        import openpyxl
+    except ImportError:
+        raise HTTPException(422, "Este servidor ainda não consegue ler planilhas .xlsx. No Excel, use Arquivo > Salvar como > "
+                                 "CSV e envie o CSV.")
+    try:
+        with zipfile.ZipFile(io.BytesIO(dados)) as z:
+            itens = z.infolist()
+            if len(itens) > 400 or sum(i.file_size for i in itens) > ARQ_XLSX_MAX_DESCOMPACTADO:
+                raise HTTPException(413, "A planilha é grande demais para importar. Salve só as colunas necessárias e envie de novo.")
+            if "xl/workbook.xml" not in z.namelist():
+                raise HTTPException(422, "Este arquivo não é uma planilha do Excel (.xlsx). Envie um CSV, TXT ou XLSX.")
+        wb = openpyxl.load_workbook(io.BytesIO(dados), read_only=True, data_only=True)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(422, "Não consegui abrir a planilha. Ela pode estar protegida por senha ou danificada. "
+                                 "Salve como CSV e envie de novo.")
+    try:
+        for ws in wb.worksheets:
+            try:
+                ws.reset_dimensions()  # alguns sistemas gravam a dimensão errada e o Excel só mostra 1 linha
+            except Exception:
+                pass
+            linhas = []
+            for i, row in enumerate(ws.iter_rows(max_col=ARQ_MAX_COLUNAS, values_only=True)):
+                if i >= ARQ_MAX_LINHAS * 2:
+                    raise HTTPException(413, f"Importe no máximo {ARQ_MAX_LINHAS:,} linhas por vez.".replace(",", "."))
+                linhas.append([_celula_texto(v) for v in row])
+            if any(any(c for c in l) for l in linhas):
+                return linhas
+        return []
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(422, "Não consegui ler as linhas da planilha. Salve como CSV e envie de novo.")
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass
+
+
+def _tabela_do_arquivo(dados: bytes):
+    """Reconhece o tipo pelo CONTEÚDO (não pelo nome). Devolve (linhas, formato, codificacao, separador)."""
+    if dados[:4] == b"PK\x03\x04":
+        return _ler_xlsx(dados), "xlsx", None, None
+    if dados[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        raise HTTPException(422, "Este é um arquivo .xls antigo do Excel. Abra-o no Excel, use Arquivo > Salvar como e escolha "
+                                 "'Pasta de Trabalho do Excel (.xlsx)' ou 'CSV'.")
+    if dados[:4] == b"%PDF":
+        raise HTTPException(422, "PDF não pode ser importado. Peça ao sistema da faculdade a exportação em CSV ou Excel.")
+    if dados[:4] in (b"\x89PNG", b"GIF8") or dados[:3] == b"\xff\xd8\xff":
+        raise HTTPException(422, "Imagem não pode ser importada. Envie um CSV, TXT ou XLSX.")
+    texto, cod = _decodificar_texto(dados)
+    amostra_txt = texto[:20000]
+    if sum(1 for ch in amostra_txt if ord(ch) < 32 and ch not in "\t\r\n\f\x00") > max(3, len(amostra_txt) // 50):
+        raise HTTPException(422, "Este arquivo não parece ser texto nem planilha. Envie um CSV, TXT ou XLSX.")
+    if texto.lstrip()[:1] == "<" and "<table" in texto[:20000].lower():
+        raise HTTPException(422, "Este arquivo é uma página da web (HTML) com extensão de planilha. Abra-o no Excel e salve "
+                                 "como CSV ou .xlsx.")
+    texto = texto.replace("\x00", "")
+    delim = _detectar_delimitador(texto)
+    limite = ARQ_MAX_LINHAS * 2
+    if delim is None:
+        linhas = [[l.strip()] for l in texto.splitlines()[:limite + 1]]
+    else:
+        linhas = []
+        try:
+            for r in csv.reader(io.StringIO(texto), delimiter=delim):
+                linhas.append(r)
+                if len(linhas) > limite:
+                    break
+        except csv.Error:
+            raise HTTPException(422, "Não consegui separar as colunas deste arquivo. Salve-o como CSV e envie de novo.")
+    if len(linhas) > limite:
+        raise HTTPException(413, f"Importe no máximo {ARQ_MAX_LINHAS:,} linhas por vez.".replace(",", "."))
+    return [[c.strip() for c in l[:ARQ_MAX_COLUNAS]] for l in linhas], "csv", cod, delim
+
+
+def _nota_matricula(dados, j: int) -> float:
+    """0 a 1: quanto os valores da coluna j parecem matrículas (formato válido, com dígito, quase todos diferentes)."""
+    vals = [l[j].strip() for _, l in dados[:300] if j < len(l) and l[j].strip()]
+    if not vals:
+        return 0.0
+    boas = sum(1 for v in vals if _parece_matricula(v))
+    return (boas / len(vals)) * (len({v.upper() for v in vals}) / len(vals))
+
+
+def _coluna_matricula_por_dados(dados, ncols: int) -> Optional[int]:
+    """Sem cabeçalho: a coluna cujos valores mais parecem matrículas."""
+    melhor, nota_melhor = None, 0.5
+    for j in range(ncols):
+        nota = _nota_matricula(dados, j)
+        if nota >= nota_melhor and (melhor is None or nota > nota_melhor):
+            melhor, nota_melhor = j, nota
+    return melhor
+
+
+def _ler_matriculas(linhas, cursos: dict, padrao, mapa: dict, col_mat=None, col_curso=None) -> dict:
+    """Interpreta a tabela: acha o cabeçalho e as colunas de matrícula e curso (ou usa a escolha da coordenação) e
+    devolve as matrículas únicas com o curso de cada uma. Não mexe no banco."""
+    corpo = [(n, l) for n, l in enumerate(linhas, 1) if any(c.strip() for c in l)]
+    if not corpo:
+        raise HTTPException(422, "O arquivo está vazio.")
+    ncols = max(len(l) for _, l in corpo)
+    # cabeçalho pelo NOME das colunas (olha as 10 primeiras linhas: alguns sistemas põem um título antes)
+    cab_pos, melhor = None, 0
+    for pos, (_, l) in enumerate(corpo[:10]):
+        pts = max((_pontos_cab_matricula(c) for c in l), default=0)
+        if pts > melhor:
+            cab_pos, melhor = pos, pts
+    nomes = None
+    if cab_pos is not None:
+        nomes = list(corpo[cab_pos][1]) + [""] * (ncols - len(corpo[cab_pos][1]))
+        dados = corpo[cab_pos + 1:]
+        # várias colunas com nome de matrícula (ex.: 'RA' e 'Matrícula'): vale a que tem cara de matrícula nos dados
+        auto_mat = max((j for j in range(ncols) if _pontos_cab_matricula(nomes[j]) > 0),
+                       key=lambda j: (_nota_matricula(dados, j) >= 0.5, _pontos_cab_matricula(nomes[j]), _nota_matricula(dados, j), -j))
+    else:
+        dados = corpo
+        auto_mat = _coluna_matricula_por_dados(dados, ncols)
+
+    def nome_col(j):
+        return nomes[j] if nomes and j < len(nomes) else ""
+
+    if col_mat is not None:
+        if not 0 <= col_mat < ncols:
+            raise HTTPException(422, "A coluna escolhida para a matrícula não existe neste arquivo.")
+        if set(_chave_texto(nome_col(col_mat)).split()) & _CAB_PESSOAL:
+            raise HTTPException(422, f"A coluna '{nome_col(col_mat)[:40]}' parece ter dados pessoais (CPF, e-mail, telefone...) "
+                                     "e não é importada. Escolha a coluna da matrícula.")
+        mat = col_mat
+    else:
+        mat = auto_mat
+    tem_cab_nome = cab_pos is not None
+    if mat is None:
+        cols = [nome_col(j) or f"Coluna {j + 1}" for j in range(ncols)]
+        return {"precisa_coluna": True, "tem_cabecalho": False, "colunas": [c[:60] for c in cols],
+                "linhas_lidas": len(dados), "amostra_bruta": [[c[:30] for c in l[:8]] for _, l in dados[:4]]}
+    # sem nome de coluna conhecido: se a 1ª linha não tem dígito na coluna da matrícula, ela é o cabeçalho
+    implicito = False
+    if cab_pos is None and dados:
+        primeira = dados[0][1]
+        if not any(ch.isdigit() for ch in (primeira[mat] if mat < len(primeira) else "")):
+            implicito = True
+            nomes = list(primeira) + [""] * (ncols - len(primeira))
+            dados = dados[1:]
+    # coluna do curso
+    if col_curso is not None:
+        if col_curso == -1:
+            curso_col = -1
+        elif not 0 <= col_curso < ncols or col_curso == mat:
+            raise HTTPException(422, "A coluna escolhida para o curso não existe neste arquivo ou é a mesma da matrícula.")
+        elif set(_chave_texto(nome_col(col_curso)).split()) & _CAB_PESSOAL:
+            raise HTTPException(422, f"A coluna '{nome_col(col_curso)[:40]}' parece ter dados pessoais e não pode ser o curso.")
+        else:
+            curso_col = col_curso
+    else:
+        curso_col = -1
+        if nomes:
+            cand = max((j for j in range(ncols) if j != mat), key=lambda j: (_pontos_cab_curso(nome_col(j)), -j), default=None)
+            if cand is not None and _pontos_cab_curso(nome_col(cand)) > 0:
+                curso_col = cand
+        if curso_col == -1 and cab_pos is None and not implicito and ncols == 2 and mat in (0, 1):
+            # lista simples "matrícula;curso" sem cabeçalho (formato da importação por texto)
+            cand = 1 - mat
+            vs = [l[cand].strip() for _, l in dados if cand < len(l) and l[cand].strip()]
+            if vs and len({_chave_texto(v) for v in vs}) <= max(20, len(vs) // 3):
+                curso_col = cand
+    itens, repetidas, sem_matricula = {}, 0, 0
+    invalidas, n_invalidas, desconhecidos, amostra = [], 0, {}, []
+    for n, l in dados:
+        bruto = l[mat].strip() if mat < len(l) else ""
+        if not bruto:
+            sem_matricula += 1
+            continue
+        ctexto = l[curso_col].strip() if 0 <= curso_col < len(l) else ""
+        if re.fullmatch(r"\d+[.,]0+", bruto):  # '202610405.0': sobra de planilha que tratou a matrícula como número
+            bruto = re.split(r"[.,]", bruto)[0]
+        mat_n = normalizar_matricula(bruto)
+        valida = matricula_valida(mat_n)
+        if len(amostra) < 6:
+            amostra.append({"matricula": bruto[:30], "curso": ctexto[:60], "valida": valida})
+        if not valida:
+            n_invalidas += 1
+            if len(invalidas) < 15:
+                cientifica = re.fullmatch(r"\d+[.,]?\d*E[+-]?\d+", mat_n) is not None
+                invalidas.append(f"linha {n}: matrícula em notação científica ({bruto[:20]}); no Excel, formate a coluna como "
+                                 "Texto e salve de novo" if cientifica else f"linha {n}: matrícula inválida ({mat_n[:20]})")
+            continue
+        if mat_n in itens:
+            repetidas += 1
+            continue
+        cid = padrao
+        chave = _chave_texto(ctexto)
+        if chave:
+            if chave in mapa:
+                cid = mapa[chave] if mapa[chave] is not None else padrao
+            elif chave in cursos:
+                cid = cursos[chave][0]
+            else:
+                d = desconhecidos.setdefault(chave, [ctexto[:60], 0])
+                d[1] += 1
+        itens[mat_n] = cid
+    colunas = [(nome_col(j) or f"Coluna {j + 1}")[:60] for j in range(ncols)]
+    return {"precisa_coluna": False, "tem_cabecalho": tem_cab_nome or implicito, "colunas": colunas, "col_matricula": mat,
+            "col_curso": curso_col, "linhas_lidas": len(dados), "itens": itens, "repetidas": repetidas,
+            "sem_matricula": sem_matricula, "n_invalidas": n_invalidas, "exemplos_invalidas": invalidas,
+            "desconhecidos": desconhecidos, "amostra": amostra}
+
+
+class ArquivoMatriculasIn(BaseModel):
+    nome: str = Field("", max_length=200)
+    dados: str = Field(max_length=ARQ_B64_MAX)  # o arquivo em base64
+    confirmar: bool = False                     # False = só a prévia (nada é gravado)
+    curso_id: Optional[int] = None              # curso para as linhas sem curso (ou com curso não reconhecido)
+    col_matricula: Optional[int] = Field(None, ge=0, le=ARQ_MAX_COLUNAS)
+    col_curso: Optional[int] = Field(None, ge=-1, le=ARQ_MAX_COLUNAS)  # -1 = não usar o curso do arquivo
+    mapa_cursos: Dict[str, Optional[int]] = Field(default_factory=dict)  # curso do arquivo -> curso daqui
+    atualizar_cursos: bool = False              # corrige o curso das matrículas que já estavam na lista (e não foram usadas)
+
+
+@app.post("/api/admin/matriculas/arquivo")
+def adm_matriculas_arquivo(b: ArquivoMatriculasIn, request: Request, u: dict = Depends(so_admin),
+                           db: Session = Depends(get_db)):
+    """Prévia (confirmar=False) e importação (confirmar=True) de matrículas a partir de um arquivo CSV, TXT ou XLSX."""
+    limitar_tentativas(f"arqmat:{u['id']}", 40, 600)
+    if len(b.mapa_cursos) > 500:
+        raise HTTPException(422, "Correspondências de curso demais.")
+    try:
+        dados = base64.b64decode(b.dados, validate=True)
+    except ValueError:
+        raise HTTPException(422, "Não consegui ler o arquivo enviado. Escolha o arquivo de novo.")
+    if not dados:
+        raise HTTPException(422, "O arquivo está vazio.")
+    if len(dados) > ARQ_MAX_BYTES:
+        raise HTTPException(413, "Arquivo grande demais (máximo 5 MB).")
+    padrao = None
+    if b.curso_id is not None:
+        if not db.get(Curso, b.curso_id):
+            raise HTTPException(422, "Curso inválido.")
+        padrao = b.curso_id
+    cursos_db = {c.id: c.nome for c in db.scalars(select(Curso))}
+    cursos = {_chave_texto(nome): (cid, nome) for cid, nome in cursos_db.items()}
+    mapa = {}
+    for k, v in b.mapa_cursos.items():
+        if v is not None and v not in cursos_db:
+            raise HTTPException(422, "Curso inválido na correspondência de cursos.")
+        mapa[_chave_texto(k)] = v
+    linhas, formato, cod, delim = _tabela_do_arquivo(dados)
+    r = _ler_matriculas(linhas, cursos, padrao, mapa, b.col_matricula, b.col_curso)
+    base = {"formato": formato, "codificacao": cod, "separador": _NOME_SEPARADOR.get(delim), "importado": False}
+    if r["precisa_coluna"]:
+        if b.confirmar:
+            raise HTTPException(422, "Não achei a coluna da matrícula. Escolha qual coluna é a matrícula e confira a prévia.")
+        return {**base, **r}
+    if len(r["itens"]) + r["repetidas"] + r["n_invalidas"] > ARQ_MAX_LINHAS:
+        raise HTTPException(413, f"Importe no máximo {ARQ_MAX_LINHAS:,} linhas por vez.".replace(",", "."))
+    itens = r["itens"]
+    M = MatriculasAutorizadas
+    chaves = list(itens)
+    existentes, com_aluno = {}, set()
+    for i in range(0, len(chaves), 500):
+        bloco = chaves[i:i + 500]
+        for mat, cid, usada in db.execute(select(M.matricula, M.curso_id, M.utilizada).where(M.matricula.in_(bloco))):
+            existentes[mat] = (cid, usada)
+        com_aluno.update(db.scalars(select(Aluno.matricula).where(Aluno.matricula.in_(bloco))))
+    novas = [m for m in chaves if m not in existentes]
+    atualizaveis = {m: itens[m] for m, (cid, usada) in existentes.items() if not usada and itens[m] is not None and itens[m] != cid}
+    por_curso = {}
+    for cid in itens.values():
+        nome = cursos_db.get(cid, "Qualquer curso") if cid is not None else "Qualquer curso"
+        por_curso[nome] = por_curso.get(nome, 0) + 1
+    desc = sorted(r["desconhecidos"].items(), key=lambda kv: -kv[1][1])
+    resumo = {**base, "precisa_coluna": False, "tem_cabecalho": r["tem_cabecalho"], "colunas": r["colunas"],
+              "col_matricula": r["col_matricula"], "col_curso": r["col_curso"], "linhas_lidas": r["linhas_lidas"],
+              "novas": len(novas), "ja_existiam": len(existentes), "atualizaveis": len(atualizaveis),
+              "repetidas": r["repetidas"], "sem_matricula": r["sem_matricula"], "invalidas": r["n_invalidas"],
+              "exemplos_invalidas": r["exemplos_invalidas"], "amostra": r["amostra"],
+              "por_curso": [{"curso": k, "quantidade": v} for k, v in sorted(por_curso.items(), key=lambda kv: -kv[1])],
+              "n_cursos_desconhecidos": len(desc),
+              "cursos_desconhecidos": [{"chave": k, "nome": v[0], "quantidade": v[1]} for k, v in desc[:40]]}
+    if not b.confirmar:
+        return resumo
+    for mat in novas:
+        # se já existe aluno com essa matrícula, ela entra como utilizada (não permite um 2º cadastro)
+        db.add(M(matricula=mat, curso_id=itens[mat], utilizada=mat in com_aluno))
+    atualizadas = 0
+    if b.atualizar_cursos and atualizaveis:
+        por_id = {}
+        for mat, cid in atualizaveis.items():
+            por_id.setdefault(cid, []).append(mat)
+        for cid, mats in por_id.items():
+            for i in range(0, len(mats), 500):
+                db.execute(update(M).where(M.matricula.in_(mats[i:i + 500]), M.utilizada.is_(False)).values(curso_id=cid))
+        atualizadas = len(atualizaveis)
+    nome_arq = re.sub(r"\d[\d.\-/]{5,}", "…", re.sub(r"[^\w.\- ]", "_", b.nome))[:60]  # sem números longos (CPF, matrícula) no log
+    log_seg(db, u["id"], "importar_matriculas",
+            f"arquivo {nome_arq or '(sem nome)'} ({formato}): {len(novas)} nova(s); {len(existentes)} já existiam; "
+            f"{atualizadas} curso(s) atualizado(s); {r['n_invalidas']} inválida(s)", ip_cliente(request))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Outra importação estava em andamento. Tente de novo.")
+    return {**resumo, "importado": True, "adicionadas": len(novas), "atualizadas": atualizadas}
 
 
 @app.delete("/api/admin/matriculas/{mid}")

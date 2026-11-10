@@ -16,6 +16,11 @@
 @media(prefers-color-scheme:dark){:root{--bg:#0f1a16;--card:#17241f;--ink:#e9f0ea;--mut:#9db0a5;--line:#2a3b33;--pri:#6dbb78;--pri-ink:#0b1a11;--azul:#8db8f0;--azulbg:#1c3252;--lima:#a7c758;--ok:#8fd69b;--okbg:#172f21;--err:#ff9b90;--errbg:#3a1d1a;--ring:#8db8f0;--warn:#f0c05a;--sombra:none}}
 *{box-sizing:border-box}[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.55 'Poppins',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+/* Marca d'água do curso (Sistemáticos): fixa no canto inferior esquerdo, bem clarinha e atrás de todo o conteúdo.
+   Para ajustar: opacity (força), width/height (tamanho) e left/bottom (posição). Para tirar, apague este bloco. */
+body::before{content:"";position:fixed;left:14px;bottom:14px;width:clamp(180px,30vw,340px);aspect-ratio:430/520;background:url(assets/logo-sistematicos.png) center/contain no-repeat;opacity:.11;z-index:-1;pointer-events:none}
+@media(prefers-color-scheme:dark){body::before{opacity:.15;filter:brightness(1.3)}}
+@media print{body::before{display:none}}
 header{background:var(--card);border-bottom:3px solid var(--lima)}
 .topo{max-width:1080px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:10px 20px;flex-wrap:wrap}
 .marcas{display:flex;align-items:center;gap:14px;padding:6px 14px;background:#fff;border:1px solid var(--line);border-radius:14px}
@@ -106,6 +111,11 @@ textarea{min-height:110px;resize:vertical}
 .pessoa.pend{border-color:var(--err)}.pessoa.pend .pessoa-acoes{align-items:center}.pessoa-acoes .btn{padding:8px 18px;font-size:14px}
 .pessoa dl{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0;font-size:13.5px}.pessoa dt{color:var(--mut)}.pessoa dd{margin:0;overflow-wrap:anywhere}
 .pessoa-acoes{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:auto;padding-top:12px;border-top:1px solid var(--line);font-size:14px}
+/* importação de matrículas por arquivo */
+.previa{border:1.5px solid var(--lima);border-radius:16px;padding:16px;margin-top:14px;background:var(--card)}.previa h3{margin:0 0 4px}.previa h4{margin:16px 0 4px;font-size:15px;font-weight:600}
+.previa .stats{margin:12px 0 4px}.previa .grid2 label{margin-top:8px}.previa td select{min-width:150px}.previa .ck{display:flex;gap:8px;align-items:flex-start;font-weight:400;font-size:14px;margin:14px 0 0}.previa .ck input{width:auto;flex:none;margin-top:4px}
+.previa .bad{color:var(--err);font-size:13.5px;margin:6px 0 0}.previa .acoes{margin-top:16px}
+details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
 @media(max-width:860px){.entrada{grid-template-columns:1fr;gap:20px}.geo{display:none}.hero p{margin-bottom:6px}}
 @media(max-width:560px){.row input,.row select{min-width:100%}.atabs button{padding:7px 13px}.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}main{padding:20px 16px 40px}.topo{padding:10px 16px}.marcas{gap:10px;padding:6px 10px}.marcas img{height:34px}.marcas img.curso{width:34px}.card{padding:18px}}
 </style>
@@ -949,6 +959,58 @@ const pager = (total, sufixo) => { const n = Math.max(1, Math.ceil(total / 50));
   return `<div class="row"><button class="btn alt" data-act="pag" data-v="-1"${ADM.pag <= 1 ? ' disabled' : ''}>‹ Anterior</button>
     <span class="mut">Página ${ADM.pag} de ${n} · ${total} ${sufixo}</span>
     <button class="btn alt" data-act="pag" data-v="1"${ADM.pag >= n ? ' disabled' : ''}>Próxima ›</button></div>`; };
+/* Importação de matrículas por arquivo (CSV, TXT, XLSX): lê o arquivo, mostra a prévia e só grava depois do "Importar". */
+const MAT = {nome:'', b64:'', mapa:{}, ultimo:null, atualizar:false, usado:null};
+const MAT_MAX = 5 * 1024 * 1024;
+function arquivoParaB64(f){
+  return new Promise((ok, no) => {
+    const fr = new FileReader();
+    fr.onerror = () => no(new Error('Não consegui ler o arquivo. Escolha-o de novo.'));
+    fr.onload = () => { const u = new Uint8Array(fr.result); let b = ''; for (let i = 0; i < u.length; i += 0x8000) b += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); ok(btoa(b)); };
+    fr.readAsArrayBuffer(f);
+  });
+}
+function matCorpo(confirmar){
+  const cm = $('#mat-col-mat'), cc = $('#mat-col-curso'), at = $('#mat-atualiza');
+  const mapa = {}; document.querySelectorAll('#mat-previa select[data-chave]').forEach(x => { mapa[x.dataset.chave] = x.value ? +x.value : null; });
+  if (Object.keys(mapa).length) MAT.mapa = {...MAT.mapa, ...mapa};
+  if (at) MAT.atualizar = at.checked;
+  const cp = $('#mat-curso-arq');
+  return {nome:MAT.nome, dados:MAT.b64, confirmar, curso_id:cp && cp.value ? +cp.value : null,
+    col_matricula:cm && cm.value !== '' ? +cm.value : null, col_curso:cc && cc.value !== '' ? +cc.value : null,
+    mapa_cursos:MAT.mapa, atualizar_cursos:MAT.atualizar};
+}
+const matRotuloOk = r => r.novas > 0 ? `Importar ${r.novas} matrícula(s)` : (MAT.atualizar && r.atualizaveis > 0 ? `Atualizar o curso de ${r.atualizaveis} matrícula(s)` : 'Nada novo para importar');
+const matSemNada = r => r.novas === 0 && !(MAT.atualizar && r.atualizaveis > 0);
+function matPreviaHtml(r, cs){
+  if (!r) return '';
+  const opcCol = (sel, vazio) => (vazio ? `<option value=""${sel == null ? ' selected' : ''}>${vazio}</option>` : '') + r.colunas.map((c, j) => `<option value="${j}"${sel === j ? ' selected' : ''}>${j + 1}. ${esc(c)}</option>`).join('');
+  const topo = `<h3>Prévia do arquivo: ${esc(MAT.nome || 'sem nome')}</h3>
+    <p class="mut">Lido como ${r.formato === 'xlsx' ? 'planilha Excel' : 'texto (CSV/TXT)'}${r.codificacao ? `, acentuação ${esc(r.codificacao)}` : ''}${r.separador ? `, colunas separadas por ${esc(r.separador)}` : ''}. ${r.tem_cabecalho ? 'A primeira linha foi tratada como cabeçalho.' : 'O arquivo não tem cabeçalho.'} ${r.linhas_lidas} linha(s) com dados. Só a matrícula e o curso são lidos; nome, CPF e o resto são ignorados e não ficam guardados.</p>`;
+  if (r.precisa_coluna){
+    return `<div class="previa">${topo}<div class="msg err">Não consegui descobrir qual coluna é a matrícula. Escolha abaixo.</div>
+      <label for="mat-col-mat">Coluna da matrícula</label><select id="mat-col-mat">${opcCol(null, 'Escolha a coluna…')}</select>
+      ${tb(r.colunas.map(c => esc(c)), (r.amostra_bruta || []).map(l => `<tr>${r.colunas.map((_, j) => `<td>${esc(l[j] || '')}</td>`).join('')}</tr>`))}
+      <div class="acoes"><button class="btn" data-act="mat-arq-reler">Usar esta coluna</button><button class="btn alt" data-act="mat-arq-cancela">Cancelar</button></div></div>`;
+  }
+  const desc = r.cursos_desconhecidos.length ? `<h4>Cursos do arquivo que não existem aqui (${r.n_cursos_desconhecidos})</h4>
+    <p class="mut">Escolha o curso daqui que corresponde a cada um. Sem escolha, a matrícula fica como "Qualquer curso" e o aluno escolhe o curso ao se cadastrar. Se o curso estiver definido, o aluno só consegue se cadastrar naquele curso.</p>` +
+    tb(['Curso no arquivo', 'Matrículas', 'Corresponde a'], r.cursos_desconhecidos.map(d => `<tr><td>${esc(d.nome)}</td><td>${d.quantidade}</td><td><select data-chave="${esc(d.chave)}"><option value="">Qualquer curso</option>${opcCursos(cs, MAT.mapa[d.chave] ?? 0)}</select></td></tr>`)) +
+    (r.n_cursos_desconhecidos > r.cursos_desconhecidos.length ? `<p class="mut">Mostrando os ${r.cursos_desconhecidos.length} mais frequentes.</p>` : '') : '';
+  return `<div class="previa">${topo}
+    <div class="grid2"><div><label for="mat-col-mat">Coluna da matrícula</label><select id="mat-col-mat">${opcCol(r.col_matricula)}</select></div>
+      <div><label for="mat-col-curso">Coluna do curso</label><select id="mat-col-curso"><option value="-1"${r.col_curso === -1 ? ' selected' : ''}>Não usar o curso do arquivo</option>${opcCol(r.col_curso)}</select></div></div>
+    <div class="acoes"><button class="btn alt" data-act="mat-arq-reler">Ler de novo com estas colunas</button></div>
+    <div class="stats"><div class="stat"><b>${r.novas}</b>matrículas novas</div><div class="stat"><b>${r.ja_existiam}</b>já estavam na lista</div><div class="stat"><b>${r.repetidas}</b>repetidas no arquivo</div><div class="stat"><b>${r.invalidas}</b>inválidas</div></div>
+    ${r.sem_matricula ? `<p class="mut">${r.sem_matricula} linha(s) sem matrícula foram ignoradas.</p>` : ''}
+    <h4>As primeiras linhas, como foram lidas</h4>
+    ${tb(['Matrícula', 'Curso no arquivo', 'Situação'], r.amostra.map(a => `<tr><td>${esc(a.matricula)}</td><td>${esc(a.curso || '—')}</td><td>${a.valida ? 'Válida' : '<span style="color:var(--err)">Inválida</span>'}</td></tr>`))}
+    ${r.invalidas ? `<p class="bad">${r.exemplos_invalidas.slice(0, 5).map(esc).join('<br>')}${r.invalidas > 5 ? `<br>… e mais ${r.invalidas - Math.min(5, r.exemplos_invalidas.length)}` : ''}</p>` : ''}
+    <h4>Matrículas por curso</h4>${tb(['Curso', 'Matrículas'], r.por_curso.map(c => `<tr><td>${esc(c.curso)}</td><td>${c.quantidade}</td></tr>`))}
+    ${desc}
+    ${r.atualizaveis > 0 ? `<label class="ck"><input type="checkbox" id="mat-atualiza"${MAT.atualizar ? ' checked' : ''}><span>Atualizar o curso de ${r.atualizaveis} matrícula(s) que já estavam na lista e ainda não foram usadas por um aluno (hoje o curso delas é diferente do arquivo).</span></label>` : ''}
+    <div class="acoes"><button class="btn" data-act="mat-arq-ok"${matSemNada(r) ? ' disabled' : ''}>${matRotuloOk(r)}</button><button class="btn alt" data-act="mat-arq-cancela">Cancelar</button></div></div>`;
+}
 const ACAO = {exportar_chamada:'Exportou chamada (CSV)', excluir_aula:'Excluiu aula', excluir_todas_aulas:'Excluiu todas as aulas', excluir_aula_admin:'Coordenação excluiu aula',
   pedido_senha:'Pediu nova senha', login_admin:'Login da coordenação', login_admin_falha:'Falha de login da coordenação', cadastro_professor:'Professor se cadastrou', criar_professor:'Coordenação criou professor',
   autorizar_professor:'Autorizou professor', recusar_professor:'Recusou cadastro de professor', excluir_professor:'Excluiu professor', criar_coordenacao:'Criou conta da coordenação', professor_coordenacao:'Mudou papel na coordenação', professor_ativo:'Ativou/desativou professor', criar_curso:'Criou curso', curso_ativo:'Ativou/desativou curso', editar_aluno:'Editou aluno',
@@ -998,9 +1060,13 @@ const ADM_ABAS = {
   async matriculas(){
     const [cs, r] = await Promise.all([api('/cursos'), api(`/admin/matriculas?q=${encodeURIComponent(ADM.q)}&pagina=${ADM.pag}`)]);
     return (r.obrigatoria ? '' : '<div class="msg">A lista está DESLIGADA por enquanto: qualquer matrícula numérica pode se cadastrar. Você já pode importar a lista; ela só passa a valer quando você definir MATRICULA_OBRIGATORIA=1 na Render.</div>') + `<h3>Importar matrículas autorizadas</h3>
-      <p class="mut">Cole uma matrícula por linha (ou <code>matrícula;nome do curso</code>). Só quem tem a matrícula nesta lista consegue criar conta, e cada matrícula vale para um único e-mail.</p>
+      <p class="mut">Só quem tem a matrícula nesta lista consegue criar conta, e cada matrícula vale para um único e-mail. Envie o arquivo que o sistema da faculdade exporta (CSV, TXT ou Excel .xlsx, até 5 MB): eu descubro sozinho o separador, os acentos e a coluna da matrícula, e você confere a prévia antes de importar.</p>
+      <div class="row"><input type="file" id="mat-arq" accept=".csv,.txt,.tsv,.xlsx,text/csv,text/plain" aria-label="Arquivo de matrículas"><select id="mat-curso-arq" aria-label="Curso para linhas sem curso"><option value="">Linhas sem curso: qualquer curso</option>${opcCursos(cs, 0)}</select><button class="btn" data-act="mat-arq-ler">Ler arquivo</button></div>
+      <div id="mat-previa">${matPreviaHtml(MAT.ultimo, cs)}</div>
+      <details class="cola"><summary>Ou cole uma lista de matrículas</summary>
+      <p class="mut">Uma matrícula por linha (ou <code>matrícula;nome do curso</code>).</p>
       <textarea id="mat-texto" placeholder="202610405&#10;GTI202610406&#10;202610407;Engenharia de Software"></textarea>
-      <div class="row"><select id="mat-curso"><option value="">Curso: o que estiver na linha (ou qualquer)</option>${opcCursos(cs, 0)}</select><button class="btn" data-act="mat-imp">Importar</button></div>
+      <div class="row"><select id="mat-curso"><option value="">Curso: o que estiver na linha (ou qualquer)</option>${opcCursos(cs, 0)}</select><button class="btn" data-act="mat-imp">Importar</button></div></details>
       <h3 style="margin-top:16px">Lista (${r.total_geral} no total · ${r.utilizadas} já vinculadas)</h3>
       <div class="row"><input id="adm-q" value="${esc(ADM.q)}" placeholder="Buscar matrícula"><button class="btn" data-act="busca-mat">Buscar</button></div>` +
       tb(['Matrícula','Curso','Situação',''], r.itens.map(m => `<tr><td>${esc(m.matricula)}</td><td>${esc(m.curso || 'Qualquer')}</td><td>${m.utilizada ? 'Vinculada a um aluno' : 'Disponível'}</td>
@@ -1081,6 +1147,41 @@ $('#adm-corpo').onclick = async e => {
     else if (act === 'aula-del'){ if (!confirm(`Excluir "${t}" e as ${n} presença(s) dela? Não pode ser desfeito.`)) return; await api(`/admin/aulas/${id}`, {method:'DELETE'}); }
     else if (act === 'aula-fim'){ if (!confirm('Encerrar esta chamada?')) return; await api(`/admin/aulas/${id}/encerrar`, {method:'POST'}); }
     else if (act === 'aula-csv'){ await baixarCSV(id, t => msg(m, t, 'err')); return; }
+    else if (act === 'mat-arq-ler'){
+      const f = $('#mat-arq').files[0]; if (!f) return msg(m, 'Escolha o arquivo de matrículas primeiro.', 'err');
+      if (f.size > MAT_MAX) return msg(m, 'O arquivo tem mais de 5 MB. Deixe só as colunas da matrícula e do curso e tente de novo.', 'err');
+      if (!f.size) return msg(m, 'O arquivo está vazio.', 'err');
+      b.disabled = true; msg(m, 'Lendo o arquivo…', '');
+      try { MAT.b64 = await arquivoParaB64(f); MAT.nome = f.name; MAT.mapa = {}; MAT.atualizar = false;
+        const c0 = matCorpo(false); MAT.ultimo = await api('/admin/matriculas/arquivo', {method:'POST', body:c0}); MAT.usado = {curso_id:c0.curso_id}; }
+      catch (x) { MAT.ultimo = null; $('#mat-previa').innerHTML = ''; return msg(m, x.message, 'err'); }
+      finally { b.disabled = false; }
+      msg(m, '');
+      $('#mat-previa').innerHTML = matPreviaHtml(MAT.ultimo, S.cursos || []); $('#mat-previa').scrollIntoView({block:'nearest', behavior:'smooth'}); return;
+    }
+    else if (act === 'mat-arq-reler'){
+      if (!MAT.b64) return;
+      const corpo = matCorpo(false);
+      if (corpo.col_matricula === null) return msg(m, 'Escolha a coluna da matrícula.', 'err');
+      b.disabled = true;
+      try { MAT.ultimo = await api('/admin/matriculas/arquivo', {method:'POST', body:corpo}); MAT.usado = {curso_id:corpo.curso_id}; }
+      catch (x) { return msg(m, x.message, 'err'); }
+      finally { b.disabled = false; }
+      $('#mat-previa').innerHTML = matPreviaHtml(MAT.ultimo, S.cursos || []); return;
+    }
+    else if (act === 'mat-arq-cancela'){ MAT.b64 = ''; MAT.nome = ''; MAT.ultimo = null; MAT.mapa = {}; MAT.atualizar = false; $('#mat-previa').innerHTML = ''; const fi = $('#mat-arq'); if (fi) fi.value = ''; return; }
+    else if (act === 'mat-arq-ok'){
+      if (!MAT.b64) return;
+      const corpo = matCorpo(true), pre = MAT.ultimo;
+      if ((corpo.col_matricula !== pre.col_matricula && pre.col_matricula != null) || (corpo.col_curso !== pre.col_curso && pre.col_curso != null) || corpo.curso_id !== (MAT.usado || {}).curso_id)
+        return msg(m, 'Você mudou as colunas ou o curso padrão depois da prévia. Clique em "Ler de novo com estas colunas" e confira antes de importar.', 'err');
+      if (!confirm(`${pre.novas ? `Importar ${pre.novas} matrícula(s) nova(s)` : 'Atualizar cursos'} do arquivo "${MAT.nome}"${corpo.atualizar_cursos && pre.atualizaveis ? `${pre.novas ? ' e' : ':'} atualizar o curso de ${pre.atualizaveis} que já estavam na lista` : ''}? Isso passa a valer para o cadastro de alunos.`)) return;
+      b.disabled = true;
+      let r; try { r = await api('/admin/matriculas/arquivo', {method:'POST', body:corpo}); } catch (x) { b.disabled = false; return msg(m, x.message, 'err'); }
+      MAT.b64 = ''; MAT.nome = ''; MAT.ultimo = null; MAT.mapa = {}; MAT.atualizar = false;
+      await admRender();
+      return msg(m, `${r.adicionadas} matrícula(s) adicionada(s), ${r.ja_existiam} já estavam na lista${r.atualizadas ? `, ${r.atualizadas} curso(s) atualizado(s)` : ''}, ${r.repetidas} repetida(s) e ${r.invalidas} inválida(s) no arquivo.`, 'ok');
+    }
     else if (act === 'mat-imp'){
       const texto = $('#mat-texto').value.trim(); if (!texto) return msg(m, 'Cole as matrículas na caixa de texto.', 'err');
       const r = await api('/admin/matriculas/importar', {method:'POST', body:{texto, curso_id:$('#mat-curso').value ? +$('#mat-curso').value : null}});
@@ -1095,6 +1196,10 @@ $('#adm-corpo').onclick = async e => {
   } catch (x) { msg(m, x.message, 'err'); }
 };
 $('#adm-corpo').onchange = async e => {
+  if (e.target.id === 'mat-atualiza' && MAT.ultimo){
+    MAT.atualizar = e.target.checked; const bt = $('#mat-previa [data-act="mat-arq-ok"]');
+    if (bt){ bt.disabled = matSemNada(MAT.ultimo); bt.textContent = matRotuloOk(MAT.ultimo); } return;
+  }
   const s = e.target.closest('select[data-id]'); if (!s) return;
   const f = s.dataset.f, body = {}; body[f] = f === 'status' ? s.value : +s.value;
   try { await api(`/admin/alunos/${s.dataset.id}`, {method:'PATCH', body}); msg($('#msg-adm'), 'Aluno atualizado.', 'ok'); }
