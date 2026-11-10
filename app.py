@@ -1071,7 +1071,7 @@ def excluir_aula(aula_id: int, request: Request, u: dict = Depends(so_professor)
 @app.delete("/api/aulas")
 def excluir_todas_as_aulas(request: Request, confirmar: str = "", u: dict = Depends(so_professor),
                            db: Session = Depends(get_db)):
-    """Exclusão de emergência: apaga TODAS as aulas do professor e, em cascata, as presenças delas."""
+    """Apaga TODAS as aulas do PROFESSOR LOGADO (nunca as de outros professores) e, em cascata, as presenças delas."""
     if confirmar != "EXCLUIR":
         raise HTTPException(400, "Confirmação ausente. Envie confirmar=EXCLUIR.")
     ids = select(Aula.id).where(Aula.professor_id == u["id"])

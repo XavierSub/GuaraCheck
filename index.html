@@ -260,7 +260,7 @@ textarea{min-height:110px;resize:vertical}
   </div>
 
   <div class="card">
-    <div class="top"><h3>Minhas aulas recentes</h3><button class="btn alt" id="btn-del-todos" type="button" style="color:var(--err)">Excluir Todos os Eventos</button></div>
+    <div class="top"><h3>Minhas aulas recentes</h3><button class="btn alt" id="btn-del-todos" type="button" style="color:var(--err);border-color:var(--err)" title="Apaga só os eventos criados por você, não os de outros professores">Excluir meus eventos</button></div>
     <ul id="hist"></ul>
   </div>
 </section>
@@ -756,12 +756,13 @@ $('#btn-del').onclick = () => { if (S.aula) excluirAula(S.aula.id, S.aula.titulo
 $('#btn-del-todos').onclick = async () => {
   const m = $('#msg-prof');
   if (!S.hist.length) return msg(m, 'Você não tem eventos para excluir.', 'err');
-  if (!confirm('Excluir TODOS os seus eventos e todas as presenças registradas neles?\n\nEsta ação não pode ser desfeita.')) return;
+  const nPres = S.hist.reduce((t, a) => t + (a.total || 0), 0);
+  if (!confirm(`Excluir os ${S.hist.length} evento(s) criados por ${S.user.nome} e as ${nPres} presença(s) registradas neles?\n\nSó os SEUS eventos serão apagados: os de outros professores não são afetados.\nEsta ação não pode ser desfeita.`)) return;
   if ((prompt('Para confirmar, digite EXCLUIR:') || '').trim().toUpperCase() !== 'EXCLUIR') return msg(m, 'Exclusão cancelada: a confirmação não conferiu.', 'err');
   try {
     const r = await api('/aulas?confirmar=EXCLUIR', {method:'DELETE'});
     clearInterval(S.poll); S.aula = null; $('#painel').hidden = true;
-    msg(m, `${r.aulas_removidas} evento(s) e ${r.presencas_removidas} presença(s) excluídos.`, 'ok'); recarregarHist();
+    msg(m, `${r.aulas_removidas} evento(s) seus e ${r.presencas_removidas} presença(s) excluídos. Os eventos de outros professores não foram alterados.`, 'ok'); recarregarHist();
   } catch (x) { msg(m, x.message, 'err'); }
 };
 async function recarregarHist(retomar){
