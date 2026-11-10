@@ -16,10 +16,11 @@
 @media(prefers-color-scheme:dark){:root{--bg:#0f1a16;--card:#17241f;--ink:#e9f0ea;--mut:#9db0a5;--line:#2a3b33;--pri:#6dbb78;--pri-ink:#0b1a11;--azul:#8db8f0;--azulbg:#1c3252;--lima:#a7c758;--ok:#8fd69b;--okbg:#172f21;--err:#ff9b90;--errbg:#3a1d1a;--ring:#8db8f0;--warn:#f0c05a;--sombra:none}}
 *{box-sizing:border-box}[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.55 'Poppins',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
-/* Marca d'água do curso (Sistemáticos): fixa no canto inferior esquerdo, bem clarinha e atrás de todo o conteúdo.
-   Para ajustar: opacity (força), width/height (tamanho) e left/bottom (posição). Para tirar, apague este bloco. */
-body::before{content:"";position:fixed;left:14px;bottom:14px;width:clamp(180px,30vw,340px);aspect-ratio:430/520;background:url(assets/logo-sistematicos.png) center/contain no-repeat;opacity:.11;z-index:-1;pointer-events:none}
-@media(prefers-color-scheme:dark){body::before{opacity:.15;filter:brightness(1.3)}}
+/* Marca d'água do curso (Sistemáticos): logo grande no fundo, do lado esquerdo, translúcida e sem cor (cinza), atrás de todo o conteúdo.
+   Para ajustar: opacity (quanto aparece), --marca-h (tamanho; a largura acompanha), left/bottom (posição; para o lado direito troque
+   left por right) e grayscale (tire o filtro para voltar às cores). Para tirar a marca, apague este bloco. */
+body::before{--marca-h:min(96vh,120vw);content:"";position:fixed;left:2vw;bottom:2vh;height:var(--marca-h);width:calc(var(--marca-h) * .8264);background:url(assets/logo-sistematicos.png) center/contain no-repeat;opacity:.09;filter:grayscale(1);z-index:-1;pointer-events:none}
+@media(prefers-color-scheme:dark){body::before{opacity:.12;filter:grayscale(1) brightness(1.4)}}
 @media print{body::before{display:none}}
 header{background:var(--card);border-bottom:3px solid var(--lima)}
 .topo{max-width:1080px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:10px 20px;flex-wrap:wrap}
