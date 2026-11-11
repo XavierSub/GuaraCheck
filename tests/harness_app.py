@@ -15,6 +15,7 @@ import hmac
 import io
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -75,6 +76,10 @@ NOMES = {
     "AulaIn", "aula_dict", "CODIGO_RE", "BRT", "normalizar_codigo", "gerar_codigo", "_aulas_ativas",
     "_aula_do_professor", "abrir_aula", "encerrar_aula", "excluir_aula", "excluir_todas_as_aulas", "minhas_aulas",
     "aulas_ativas", "adm_aulas", "adm_aula_encerrar", "adm_aula_excluir", "aula_aberta", "encerrar_vencidas",
+    # --- Funcionalidade 4: registro de presença (GPS e antifraude) ---
+    "haversine", "casas_decimais", "avaliar_risco", "ip_e_vpn", "_cache_ip", "VPN_CACHE_S", "VPN_FALHA_CACHE_S",
+    "registrar_tentativa", "PresencaIn",
+    "registrar_presenca",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
@@ -255,6 +260,7 @@ class Modelo:
     _padroes: dict = {}
     _unicos: tuple = ()
     _unicos_parciais: tuple = ()      # ((campos, condição), ...): UNIQUE (campos) WHERE condição (índice parcial)
+    _fks: dict = {}                   # {coluna: nome do modelo}: FOREIGN KEY checada ao inserir
 
     def __init__(self, **kw):
         for k, v in kw.items():
@@ -302,11 +308,20 @@ class Aula(Modelo):
 
 
 class Presenca(Modelo):
-    id, aula_id, aluno_id = (Col() for _ in range(3))
+    (id, aula_id, aluno_id, latitude, longitude, distancia_m, precisao_m, device_id, fp_hash, ip, alertas,
+     registrado_em) = (Col() for _ in range(12))
+    _unicos = (("aula_id", "aluno_id"), ("aula_id", "device_id"))        # uq_presenca_aula_aluno / uq_presenca_aula_device
+    _carimbos = ("registrado_em",)
+    _fks = {"aula_id": "Aula"}                                           # FOREIGN KEY (aula_id) REFERENCES aulas
 
 
 class Tentativa(Modelo):
-    id, aula_id, aluno_id = (Col() for _ in range(3))
+    (id, aula_id, aluno_id, motivo, detalhe, latitude, longitude, distancia_m, precisao_m, ip, quantidade, criado_em,
+     ultima_em) = (Col() for _ in range(13))
+    _padroes = {"quantidade": 1}
+    _unicos = (("aula_id", "aluno_id", "motivo"),)                       # uq_tentativa
+    _carimbos = ("criado_em", "ultima_em")
+    _fks = {"aula_id": "Aula"}
 
 
 class NotaAluno(Modelo):
@@ -428,6 +443,11 @@ class FakeDB:
     def _persistir(self):
         novos = [o for o in self.pending if o not in self.tables[type(o)]]
         for i, o in enumerate(novos):
+            for col, nome_modelo in o._fks.items():
+                alvo = next(m for m in self.tables if m.__name__ == nome_modelo)
+                if getattr(o, col) is not None and not any(r.id == getattr(o, col) for r in self.tables[alvo]):
+                    self.pending.clear()
+                    raise IntegrityError(f"FOREIGN KEY {col}={getattr(o, col)}")
             for campo in o._unicos:
                 campos = campo if isinstance(campo, tuple) else (campo,)
                 v = tuple(getattr(o, c) for c in campos)
@@ -579,9 +599,14 @@ class FakeDB:
         return linhas if q.limite is None else linhas[:q.limite]
 
     def scalars(self, q):
+        if q.juncoes or q.agrupar:
+            return Resultado(l[0] for l in self._executar_com_juncoes(q))
         return Resultado(self._valor(q.alvos[0], r) for r in self._linhas(q))
 
     def scalar(self, q):
+        if q.juncoes or q.agrupar:
+            r = self._executar_com_juncoes(q)
+            return r[0][0] if r else None
         a, linhas = q.alvos[0], self._linhas(q)
         if isinstance(a, Func):
             if a.kind == "count":
@@ -613,7 +638,7 @@ def novo_ns(**env):
     try:
         ns = dict(
             __file__=str(APP), __name__="app_extraido", os=os, re=re, time=FakeTime(), hashlib=hashlib, hmac=hmac,
-            secrets=secrets, ipaddress=ipaddress, json=json, unicodedata=unicodedata, urllib=urllib, jwt=jwt,
+            secrets=secrets, ipaddress=ipaddress, math=math, json=json, unicodedata=unicodedata, urllib=urllib, jwt=jwt,
             datetime=datetime, timedelta=timedelta, timezone=timezone, Path=Path, Dict=Dict, List=List,
             Literal=Literal, Optional=Optional, BaseModel=BaseModel, Field=Field,
             load_dotenv=lambda *a, **k: None, print=lambda *a, **k: None, HTTPException=HTTPException,

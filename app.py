@@ -553,7 +553,9 @@ def ip_em_rede_permitida(ip: str) -> bool:
     return any(addr in n for n in IPS_PERMITIDOS)
 
 
-_cache_ip: dict = {}
+_cache_ip: dict = {}   # ip -> (expira em time.monotonic(), True/False/None)
+VPN_CACHE_S = 6 * 3600       # resposta válida do provedor
+VPN_FALHA_CACHE_S = 60       # sem resposta (fora do ar, cota esgotada, chave errada): não insiste a cada aluno
 
 
 def ip_e_vpn(ip: str) -> Optional[bool]:
@@ -566,21 +568,24 @@ def ip_e_vpn(ip: str) -> Optional[bool]:
         return None
     if addr.is_private or addr.is_loopback or addr.is_link_local or any(addr in n for n in IPS_PERMITIDOS):
         return False
+    agora = time.monotonic()
     hit = _cache_ip.get(ip)
-    if hit and time.monotonic() - hit[0] < 6 * 3600:
+    if hit and agora < hit[0]:
         return hit[1]
+    resultado = None
     try:
         with urllib.request.urlopen(f"https://proxycheck.io/v2/{ip}?key={PROXYCHECK_KEY}&vpn=1", timeout=2.5) as r:
             dados = json.load(r)
         info = next((v for v in dados.values() if isinstance(v, dict)), None)
-        if dados.get("status") not in ("ok", "warning") or info is None:
-            return None
-        resultado = str(info.get("proxy", "")).lower() == "yes"
+        if dados.get("status") in ("ok", "warning") and info is not None:
+            resultado = str(info.get("proxy", "")).lower() == "yes"
     except Exception:
-        return None
+        resultado = None
     if len(_cache_ip) > 20000:
         _cache_ip.clear()
-    _cache_ip[ip] = (time.monotonic(), resultado)
+    # Lembrar também a FALHA: cada consulta sem resposta custa até 2,5 s e segura uma thread e uma conexão do banco; sem isto,
+    # com o provedor fora do ar a turma inteira esperaria 2,5 s no check-in.
+    _cache_ip[ip] = (agora + (VPN_CACHE_S if resultado is not None else VPN_FALHA_CACHE_S), resultado)
     return resultado
 
 
@@ -862,12 +867,14 @@ class AulaIn(BaseModel):
 
 
 class PresencaIn(BaseModel):
-    latitude: float = Field(ge=-90, le=90)
-    longitude: float = Field(ge=-180, le=180)
-    precisao_m: Optional[float] = Field(None, ge=0, le=1_000_000)
-    pos_ts: float                                   # instante da leitura do GPS (ms desde 1970)
+    # allow_inf_nan=False: o json do Python aceita NaN/Infinity; NaN em pos_ts fazia "abs(agora - pos_ts) > limite" dar
+    # falso e pulava o teste de idade da leitura.
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    precisao_m: Optional[float] = Field(None, ge=0, le=1_000_000, allow_inf_nan=False)
+    pos_ts: float = Field(allow_inf_nan=False)      # instante da leitura do GPS (ms desde 1970)
     amostras: int = Field(1, ge=1, le=50)           # nº de leituras de GPS coletadas
-    variacao_m: Optional[float] = Field(None, ge=0)  # maior distância entre as leituras
+    variacao_m: Optional[float] = Field(None, ge=0, allow_inf_nan=False)  # maior distância entre as leituras
     webdriver: bool = False                         # navigator.webdriver
     device_id: str = Field(pattern=r"^[A-Za-z0-9\-]{16,64}$")
     fp_hash: Optional[str] = Field(None, pattern=r"^[a-f0-9]{8,64}$")
@@ -2166,6 +2173,11 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
         raise HTTPException(403, f"Este evento é exclusivo para alunos de {nome}.")
     if aula.periodo is not None and al.periodo != aula.periodo:
         raise HTTPException(403, f"Este evento é exclusivo para alunos do {aula.periodo}º período.")
+    # Reenvio de quem JÁ está presente (duplo toque, aba antiga): responde como o primeiro envio. Sem isto, o reenvio passava
+    # pelo antifraude de novo e podia virar um "fora do raio" ou "GPS suspeito" falso no painel de quem já registrou.
+    ja = db.execute(select(Presenca.distancia_m).where(Presenca.aula_id == aula_id, Presenca.aluno_id == u["id"])).first()
+    if ja is not None:
+        return {"ok": True, "ja_registrado": True, "distancia_m": round(ja.distancia_m or 0, 1), "aula": aula.titulo}
 
     # 1) qualidade e coerência da leitura de GPS (barato, sem banco)
     if b.precisao_m is not None and b.precisao_m > PRECISAO_MAX_M:
@@ -2216,9 +2228,13 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
         db.commit()
     except IntegrityError:
         db.rollback()
+        # o professor excluiu o evento entre a checagem e o INSERT (chave estrangeira): não é "aparelho repetido"
+        atual = db.get(Aula, aula_id)
+        if atual is None:
+            raise HTTPException(404, "Aula não encontrada. O evento foi excluído.")
         # duplicata do próprio aluno (duplo clique) -> idempotente; senão, o aparelho já foi usado por outro aluno
         if db.scalar(select(Presenca.id).where(Presenca.aula_id == aula_id, Presenca.aluno_id == u["id"])):
-            return {"ok": True, "ja_registrado": True, "distancia_m": round(dist, 1), "aula": aula.titulo}
+            return {"ok": True, "ja_registrado": True, "distancia_m": round(dist, 1), "aula": atual.titulo}
         outro = db.scalar(select(Aluno.nome).join(Presenca, Presenca.aluno_id == Aluno.id)
                           .where(Presenca.aula_id == aula_id, Presenca.device_id == b.device_id))
         registrar_tentativa(db, aula_id, u["id"], "aparelho_repetido",
