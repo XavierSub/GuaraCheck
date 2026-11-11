@@ -70,7 +70,7 @@ NOMES = {
     "_CAB_MATRICULA_NAO", "_CAB_CURSO", "_CAB_CURSO_NAO", "_CAB_PESSOAL", "_NOME_SEPARADOR", "_chave_texto",
     "_pontos_cab_matricula", "_pontos_cab_curso", "_parece_matricula", "_decodificar_texto", "_detectar_delimitador",
     "_celula_texto", "_ler_xlsx", "_tabela_do_arquivo", "_nota_matricula", "_coluna_matricula_por_dados",
-    "_ler_matriculas",
+    "_ler_matriculas", "marca_senha", "dados_conta", "_cpf_valido", "_coluna_parece_cpf", "_chave_curso",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",

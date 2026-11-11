@@ -1454,9 +1454,10 @@ $('#adm-corpo').onclick = async e => {
       if (!atual) return msg(m, 'Digite a senha atual.', 'err');
       if (nova.length < 8) return msg(m, 'A nova senha precisa ter pelo menos 8 caracteres.', 'err');
       if (nova !== nova2) return msg(m, 'As senhas novas não conferem. Digite a mesma senha nos dois campos.', 'err');
-      await api('/admin/minha-senha', {method:'POST', body:{senha_atual:atual, nova_senha:nova, confirmar_senha:nova2}});
+      const r = await api('/admin/minha-senha', {method:'POST', body:{senha_atual:atual, nova_senha:nova, confirmar_senha:nova2}});
+      if (r && r.token){ S.token = r.token; store.set(KT, r.token); } // esta sessão continua; as outras, com a senha antiga, caem
       await admRender();
-      return msg(m, 'Senha trocada. Use a nova senha no próximo acesso.', 'ok');
+      return msg(m, 'Senha trocada. Outros aparelhos conectados com a senha antiga foram desconectados.', 'ok');
     }
     else if (act === 'senha'){
       const s = prompt('Nova senha (mínimo 8 caracteres):'); if (!s) return;

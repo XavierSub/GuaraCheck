@@ -705,8 +705,15 @@ MSG_AGUARDANDO = ("Seu cadastro de professor foi recebido e está aguardando a a
                   "Você poderá entrar assim que ele for aprovado.")
 
 
+def marca_senha(senha_hash: Optional[str]) -> str:
+    """Impressão digital da senha atual (HMAC do hash): vai no token como 'pv'. Quando a senha muda, a marca muda e as
+    sessões abertas com a senha antiga deixam de valer. Não revela nada do hash."""
+    return hmac.new(SECRET_KEY.encode(), ("pv|" + (senha_hash or "")).encode(), hashlib.sha256).hexdigest()[:16]
+
+
 def resposta_token(u, perfil: str, curso: Optional[str] = None) -> dict:
-    claims = {"sub": str(u.id), "role": perfil, "nome": u.nome, "exp": utcnow() + timedelta(hours=TOKEN_HORAS)}
+    claims = {"sub": str(u.id), "role": perfil, "nome": u.nome, "pv": marca_senha(u.senha_hash),
+              "exp": utcnow() + timedelta(hours=TOKEN_HORAS)}
     if perfil == "aluno":
         claims["cid"] = u.curso_id
         claims["per"] = u.periodo
@@ -724,29 +731,37 @@ def esquecer_contas():
     _cache_contas.clear()
 
 
-def conta_liberada(db: Session, role: str, uid: int) -> bool:
+def dados_conta(db: Session, role: str, uid: int) -> Optional[dict]:
     """A conta do token ainda existe e continua liberada? Sem isso, quem foi desativado, excluído ou rebaixado
-    manteria a sessão até o token vencer (TOKEN_HORAS). O resultado fica 5 s em cache para não consultar o banco
-    a cada chamada da tela do aluno, que atualiza sozinha."""
+    manteria a sessão até o token vencer (TOKEN_HORAS). Devolve None se não estiver liberada; senão, os dados ATUAIS
+    da conta: a marca da senha (pv) e, para aluno, o curso e o período de hoje (o que a coordenação editou vale na
+    hora, sem esperar novo login). O resultado fica 5 s em cache para não consultar o banco a cada chamada da tela do
+    aluno, que atualiza sozinha; as rotas da coordenação limpam o cache quando mudam a conta."""
     chave, agora = (role, uid), time.monotonic()
     hit = _cache_contas.get(chave)
     if hit and agora - hit[0] < CONTA_CACHE_S:
         return hit[1]
+    dados = None
     if role == "aluno":
         a = db.get(Aluno, uid)
-        liberada = a is not None and a.status != "inativo"
+        if a is not None and a.status != "inativo":
+            dados = {"pv": marca_senha(a.senha_hash), "cid": a.curso_id, "per": a.periodo}
     elif role == "professor":
         p = db.get(Professor, uid)
-        liberada = p is not None and p.ativo is not False and not aguardando_autorizacao(p)
+        if p is not None and p.ativo is not False and not aguardando_autorizacao(p):
+            dados = {"pv": marca_senha(p.senha_hash)}
     elif role == "admin":
         p = db.get(Professor, uid)
-        liberada = p is not None and p.ativo is not False and eh_coordenacao(p)
-    else:
-        liberada = False
+        if p is not None and p.ativo is not False and eh_coordenacao(p):
+            dados = {"pv": marca_senha(p.senha_hash)}
     if len(_cache_contas) > 5000:
         _cache_contas.clear()
-    _cache_contas[chave] = (agora, liberada)
-    return liberada
+    _cache_contas[chave] = (agora, dados)
+    return dados
+
+
+def conta_liberada(db: Session, role: str, uid: int) -> bool:
+    return dados_conta(db, role, uid) is not None
 
 
 def usuario_atual(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)) -> dict:
@@ -759,8 +774,15 @@ def usuario_atual(authorization: Optional[str] = Header(None), db: Session = Dep
              "per": p.get("per"), "tem_per": "per" in p}
     except (jwt.PyJWTError, KeyError, ValueError):
         raise HTTPException(401, "Sessão expirada. Entre novamente.")
-    if not conta_liberada(db, u["role"], u["id"]):
+    dados = dados_conta(db, u["role"], u["id"])
+    if dados is None:
         raise HTTPException(401, "Esta conta foi desativada ou removida. Procure a coordenação.")
+    # Token com 'pv' (todos os emitidos a partir desta versão): a senha mudou depois do login = sessão encerrada.
+    # Tokens antigos, sem 'pv', valem até vencer (no máximo TOKEN_HORAS) e depois não existem mais.
+    if "pv" in p and not hmac.compare_digest(str(p["pv"]), dados["pv"]):
+        raise HTTPException(401, "A senha desta conta foi alterada. Entre novamente.")
+    if u["role"] == "aluno":  # curso e período de HOJE, não os de quando o token foi emitido
+        u["cid"], u["per"], u["tem_cid"], u["tem_per"] = dados["cid"], dados["per"], True, True
     return u
 
 
@@ -2208,7 +2230,7 @@ class MatriculasIn(BaseModel):
 
 
 def _resposta_admin(p: Professor) -> dict:
-    token = jwt.encode({"sub": str(p.id), "role": "admin", "nome": p.nome,
+    token = jwt.encode({"sub": str(p.id), "role": "admin", "nome": p.nome, "pv": marca_senha(p.senha_hash),
                         "exp": utcnow() + timedelta(hours=ADMIN_TOKEN_HORAS)}, SECRET_KEY, algorithm="HS256")
     return {"token": token, "usuario": {"id": p.id, "nome": p.nome, "email": p.email, "perfil": "admin", "curso": None}}
 
@@ -2358,12 +2380,22 @@ def adm_cursos(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
 
 @app.post("/api/admin/cursos")
 def adm_curso_novo(b: CursoIn, request: Request, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
-    nome = b.nome.strip()
-    if db.scalar(select(Curso.id).where(func.lower(Curso.nome) == nome.lower())):
-        raise HTTPException(409, "Já existe um curso com esse nome.")
+    nome = re.sub(r"\s+", " ", b.nome).strip()  # o Pydantic conta os espaços: '   ' passava e criava curso sem nome
+    chave = _chave_curso(nome)
+    if len(nome) < 2 or not chave:
+        raise HTTPException(422, "Informe o nome do curso (mínimo 2 letras ou números).")
+    # 'Gestão da TI', 'GESTAO  DA TI' e 'Gestao da T.I.' são o mesmo curso: a importação por arquivo compara assim, e dois
+    # cursos com a mesma chave fariam as matrículas caírem num deles sem aviso
+    for existente in db.scalars(select(Curso.nome)):
+        if _chave_curso(existente) == chave:
+            raise HTTPException(409, f"Já existe um curso com esse nome ({existente}).")
     db.add(Curso(nome=nome, departamento=(b.departamento or "").strip() or None))
     log_seg(db, u["id"], "criar_curso", nome, ip_cliente(request))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:  # outra requisição criou o mesmo curso no mesmo instante
+        db.rollback()
+        raise HTTPException(409, "Já existe um curso com esse nome.")
     return {"ok": True}
 
 
@@ -2599,7 +2631,8 @@ def adm_minha_senha(b: MinhaSenhaIn, request: Request, u: dict = Depends(so_admi
     p.senha_hash = hash_senha(b.nova_senha)
     log_seg(db, p.id, "trocar_senha_admin", "", ip)
     db.commit()
-    return {"ok": True}
+    esquecer_contas()  # as outras sessões desta conta (senha antiga) caem agora
+    return {"ok": True, "token": _resposta_admin(p)["token"]}  # esta sessão continua, com a marca da senha nova
 
 
 @app.post("/api/admin/senha")
@@ -2611,6 +2644,7 @@ def adm_senha(b: SenhaIn, request: Request, u: dict = Depends(so_admin), db: Ses
     alvo.senha_hash = hash_senha(b.nova_senha)
     log_seg(db, u["id"], "redefinir_senha", f"{b.perfil}={b.id}", ip_cliente(request))
     db.commit()
+    esquecer_contas()  # quem estava logado com a senha antiga (inclusive um invasor) é desconectado agora
     return {"ok": True}
 
 
@@ -2635,7 +2669,7 @@ def adm_matriculas_importar(b: MatriculasIn, request: Request, u: dict = Depends
         if not db.get(Curso, b.curso_id):
             raise HTTPException(422, "Curso inválido.")
         padrao = b.curso_id
-    cursos = {c.nome.lower(): c.id for c in db.scalars(select(Curso))}
+    cursos = {_chave_curso(c.nome): c.id for c in db.scalars(select(Curso))}  # mesma chave da importação por arquivo
     linhas = [l.strip() for l in b.texto.splitlines() if l.strip()]
     if len(linhas) > 20000:
         raise HTTPException(413, "Importe no máximo 20.000 linhas por vez.")
@@ -2647,7 +2681,7 @@ def adm_matriculas_importar(b: MatriculasIn, request: Request, u: dict = Depends
             invalidas.append(f"linha {i}: matrícula inválida ({mat[:20]})")
             continue
         if len(partes) > 1 and partes[1]:
-            cid = cursos.get(partes[1].lower())
+            cid = cursos.get(_chave_curso(partes[1]))
             if cid is None:
                 invalidas.append(f"linha {i}: curso '{partes[1][:40]}' não existe")
                 continue
@@ -2703,6 +2737,12 @@ def _chave_texto(s) -> str:
     """'Gestão da TI ' e 'GESTAO  DA TI' viram a mesma chave: sem acento, minúsculas, espaços únicos."""
     s = unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+
+def _chave_curso(s) -> str:
+    """Chave para comparar nomes de curso: 'Gestão da TI', 'GESTAO  DA T.I.' e 'gestao-da-ti' dão a mesma chave
+    (sem acento, sem espaço, sem pontuação). Os cabeçalhos continuam usando _chave_texto, que preserva as palavras."""
+    return _chave_texto(s).replace(" ", "")
 
 
 def _pontos_cab_matricula(c) -> int:
@@ -2871,19 +2911,41 @@ def _tabela_do_arquivo(dados: bytes):
     return [[c.strip() for c in l[:ARQ_MAX_COLUNAS]] for l in linhas], "csv", cod, delim
 
 
+def _cpf_valido(v: str) -> bool:
+    """CPF com os dois dígitos verificadores certos (com ou sem pontuação). Matrícula comum quase nunca passa nisso."""
+    v = (v or "").strip()
+    if not re.fullmatch(r"\d{3}\.?\d{3}\.?\d{3}-?\d{2}", v):
+        return False
+    d = re.sub(r"\D", "", v)
+    if d == d[0] * 11:
+        return False
+    for n in (9, 10):
+        if (sum(int(d[i]) * (n + 1 - i) for i in range(n)) * 10 % 11) % 10 != int(d[n]):
+            return False
+    return True
+
+
+def _coluna_parece_cpf(valores) -> bool:
+    """A coluna é de CPF se quase todos os valores (com dígito) são CPFs válidos. Pelo menos 2 valores."""
+    vs = [str(v).strip() for v in valores if v and any(ch.isdigit() for ch in str(v))]
+    return len(vs) >= 2 and sum(1 for v in vs if _cpf_valido(v)) / len(vs) >= 0.8
+
+
 def _nota_matricula(dados, j: int) -> float:
     """0 a 1: quanto os valores da coluna j parecem matrículas (formato válido, com dígito, quase todos diferentes)."""
     vals = [l[j].strip() for _, l in dados[:300] if j < len(l) and l[j].strip()]
-    if not vals:
+    if not vals or _coluna_parece_cpf(vals):
         return 0.0
     boas = sum(1 for v in vals if _parece_matricula(v))
     return (boas / len(vals)) * (len({v.upper() for v in vals}) / len(vals))
 
 
-def _coluna_matricula_por_dados(dados, ncols: int) -> Optional[int]:
-    """Sem cabeçalho: a coluna cujos valores mais parecem matrículas."""
+def _coluna_matricula_por_dados(dados, ncols: int, fora=frozenset()) -> Optional[int]:
+    """Sem cabeçalho: a coluna cujos valores mais parecem matrículas (menos as colunas em `fora`, de dados pessoais)."""
     melhor, nota_melhor = None, 0.5
     for j in range(ncols):
+        if j in fora:
+            continue
         nota = _nota_matricula(dados, j)
         if nota >= nota_melhor and (melhor is None or nota > nota_melhor):
             melhor, nota_melhor = j, nota
@@ -2912,17 +2974,26 @@ def _ler_matriculas(linhas, cursos: dict, padrao, mapa: dict, col_mat=None, col_
                        key=lambda j: (_nota_matricula(dados, j) >= 0.5, _pontos_cab_matricula(nomes[j]), _nota_matricula(dados, j), -j))
     else:
         dados = corpo
-        auto_mat = _coluna_matricula_por_dados(dados, ncols)
+        primeira = corpo[0][1]  # sem cabeçalho reconhecido: a 1ª linha pode ser um cabeçalho só de dados pessoais ("CPF")
+        fora = {j for j in range(ncols) if j < len(primeira) and set(_chave_texto(primeira[j]).split()) & _CAB_PESSOAL}
+        auto_mat = _coluna_matricula_por_dados(dados, ncols, fora)
 
     def nome_col(j):
         return nomes[j] if nomes and j < len(nomes) else ""
 
+    def pessoal(j):
+        """Coluna de dado pessoal (CPF, e-mail, telefone...): pelo cabeçalho (mesmo sem cabeçalho reconhecido, olha a
+        1ª linha) ou, no caso do CPF, pelo conteúdo."""
+        rotulo = nome_col(j) or (corpo[0][1][j] if cab_pos is None and j < len(corpo[0][1]) else "")
+        return bool(set(_chave_texto(rotulo).split()) & _CAB_PESSOAL) or \
+            _coluna_parece_cpf([l[j] for _, l in dados[:300] if j < len(l)])
+
     if col_mat is not None:
         if not 0 <= col_mat < ncols:
             raise HTTPException(422, "A coluna escolhida para a matrícula não existe neste arquivo.")
-        if set(_chave_texto(nome_col(col_mat)).split()) & _CAB_PESSOAL:
-            raise HTTPException(422, f"A coluna '{nome_col(col_mat)[:40]}' parece ter dados pessoais (CPF, e-mail, telefone...) "
-                                     "e não é importada. Escolha a coluna da matrícula.")
+        if pessoal(col_mat):
+            raise HTTPException(422, f"A coluna '{nome_col(col_mat)[:40] or col_mat + 1}' parece ter dados pessoais (CPF, e-mail, "
+                                     "telefone...) e não é importada. Escolha a coluna da matrícula.")
         mat = col_mat
     else:
         mat = auto_mat
@@ -2945,8 +3016,8 @@ def _ler_matriculas(linhas, cursos: dict, padrao, mapa: dict, col_mat=None, col_
             curso_col = -1
         elif not 0 <= col_curso < ncols or col_curso == mat:
             raise HTTPException(422, "A coluna escolhida para o curso não existe neste arquivo ou é a mesma da matrícula.")
-        elif set(_chave_texto(nome_col(col_curso)).split()) & _CAB_PESSOAL:
-            raise HTTPException(422, f"A coluna '{nome_col(col_curso)[:40]}' parece ter dados pessoais e não pode ser o curso.")
+        elif pessoal(col_curso):
+            raise HTTPException(422, f"A coluna '{nome_col(col_curso)[:40] or col_curso + 1}' parece ter dados pessoais e não pode ser o curso.")
         else:
             curso_col = col_curso
     else:
@@ -2986,7 +3057,7 @@ def _ler_matriculas(linhas, cursos: dict, padrao, mapa: dict, col_mat=None, col_
             repetidas += 1
             continue
         cid = padrao
-        chave = _chave_texto(ctexto)
+        chave = _chave_curso(ctexto)
         if chave:
             if chave in mapa:
                 cid = mapa[chave] if mapa[chave] is not None else padrao
@@ -3035,12 +3106,12 @@ def adm_matriculas_arquivo(b: ArquivoMatriculasIn, request: Request, u: dict = D
             raise HTTPException(422, "Curso inválido.")
         padrao = b.curso_id
     cursos_db = {c.id: c.nome for c in db.scalars(select(Curso))}
-    cursos = {_chave_texto(nome): (cid, nome) for cid, nome in cursos_db.items()}
+    cursos = {_chave_curso(nome): (cid, nome) for cid, nome in cursos_db.items()}
     mapa = {}
     for k, v in b.mapa_cursos.items():
         if v is not None and v not in cursos_db:
             raise HTTPException(422, "Curso inválido na correspondência de cursos.")
-        mapa[_chave_texto(k)] = v
+        mapa[_chave_curso(k)] = v
     linhas, formato, cod, delim = _tabela_do_arquivo(dados)
     r = _ler_matriculas(linhas, cursos, padrao, mapa, b.col_matricula, b.col_curso)
     base = {"formato": formato, "codificacao": cod, "separador": _NOME_SEPARADOR.get(delim), "importado": False}

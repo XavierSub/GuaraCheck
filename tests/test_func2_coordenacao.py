@@ -371,7 +371,7 @@ def test_ct124_redefinir_a_senha_derruba_as_sessoes_abertas_da_conta(adm):
     antiga = adm.login("aluno", EMAIL_ALUNO, SENHA)[1]["token"]                          # sessão de quem (talvez) invadiu a conta
     assert cod(adm.sessao(antiga)) == 200
     adm.rota("adm_senha", adm.corpo("SenhaIn", perfil="aluno", id=a.id, nova_senha=NOVA_SENHA))
-    adm.ns["esquecer_contas"]()
+    # sem esperar os 5 s do cache e sem limpar nada à mão: é a rota que tem de derrubar a sessão
     assert cod(adm.sessao(antiga)) == 401, "a sessão antiga continua valendo depois da redefinição da senha"
 
 
@@ -396,6 +396,13 @@ def test_ct125_trocar_a_propria_senha(adm):
     assert cod(c.admin_login(ADMIN_EMAIL, NOVA_SENHA)) == 200 and cod(c.admin_login(ADMIN_EMAIL, SENHA_PROV)) == 401
 
 
+def test_ct125b_trocar_a_propria_senha_devolve_token_novo_que_continua_valendo():
+    c = _adm_com_provisoria()
+    r = c.rota("adm_minha_senha", c.corpo("MinhaSenhaIn", senha_atual=SENHA_PROV, nova_senha=NOVA_SENHA))
+    assert cod(r) == 200 and r[1]["ok"] is True
+    assert cod(c.sessao(r[1]["token"])) == 200 and c.claims(r[1]["token"])["role"] == "admin"
+
+
 def test_ct126_trocar_senha_tem_freio_de_tentativas():
     c = _adm_com_provisoria()
     res = [cod(c.rota("adm_minha_senha", c.corpo("MinhaSenhaIn", senha_atual=f"errada-{i}-xx", nova_senha=NOVA_SENHA)))
@@ -408,7 +415,6 @@ def test_ct127_trocar_a_propria_senha_derruba_as_outras_sessoes():
     outra_sessao = c.admin_login(ADMIN_EMAIL, SENHA_PROV)[1]["token"]
     assert cod(c.sessao(outra_sessao)) == 200
     c.rota("adm_minha_senha", c.corpo("MinhaSenhaIn", senha_atual=SENHA_PROV, nova_senha=NOVA_SENHA))
-    c.ns["esquecer_contas"]()
     assert cod(c.sessao(outra_sessao)) == 401, "uma sessão aberta com a senha antiga sobrevive à troca de senha"
 
 
@@ -863,7 +869,6 @@ def test_ct224_mudar_curso_ou_periodo_vale_na_sessao_aberta_do_aluno(adm):
     dir_ = adm.curso_novo("Direito")
     tok = adm.login("aluno", EMAIL_ALUNO, SENHA)[1]["token"]
     _editar(adm, a.id, curso_id=dir_.id, periodo=7)
-    adm.ns["esquecer_contas"]()
     r = adm.sessao(tok)
     assert cod(r) == 200
     # /aulas/ativas filtra os eventos por estes dois valores: precisam ser os NOVOS, senão o aluno vê (e tenta
@@ -885,3 +890,96 @@ def test_ct225_excluir_aluno_apaga_so_os_dados_dele(adm):
     assert [r.aluno_id for r in adm.db.tables[NotaAluno]] == [b.id] and [r.id for r in adm.db.tables[Aluno]] == [b.id]
     assert cod(adm.sessao(tok)) == 401 and len(adm.logs("excluir_aluno")) == 1
     assert cod(adm.rota("adm_aluno_excluir", a.id)) == 404
+
+
+# =====================================================================================================
+# BLOCO H - Reparos do QA: marca da senha no token, CPF e nomes de curso
+# =====================================================================================================
+def test_ct128_marca_da_senha_no_token_e_tokens_antigos(adm):
+    a = adm.semear_aluno()
+    tok = adm.login("aluno", EMAIL_ALUNO, SENHA)[1]["token"]
+    c = adm.claims(tok)
+    assert len(c["pv"]) == 16 and a.senha_hash.split("$")[2][:16] not in c["pv"] and SENHA not in _json.dumps(c)
+    pv_certo = c["pv"]
+    base = {k: v for k, v in c.items() if k != "pv"}
+    adulterado = jwt.encode({**base, "pv": "0" * 16}, SEGREDO, algorithm="HS256")
+    legado = jwt.encode(base, SEGREDO, algorithm="HS256")                    # emitido antes desta versão: sem 'pv'
+    assert cod(adm.sessao(adulterado)) == 401
+    assert cod(adm.sessao(legado)) == 200                                    # vale até vencer (no máx. TOKEN_HORAS)
+    assert cod(adm.sessao(tok)) == 200 and c["pv"] == pv_certo
+
+
+def test_ct129_marca_da_senha_vale_para_professor_e_coordenacao(adm):
+    p = adm.prof(email="prof@unicerrado.edu.br")
+    tp = adm.login("professor", "prof@unicerrado.edu.br", SENHA)[1]["token"]
+    ta = adm.token_admin()
+    assert cod(adm.sessao(tp)) == 200 and cod(adm.sessao(ta)) == 200
+    adm.rota("adm_senha", adm.corpo("SenhaIn", perfil="professor", id=p.id, nova_senha=NOVA_SENHA))
+    adm.rota("adm_senha", adm.corpo("SenhaIn", perfil="professor", id=adm.admin.id, nova_senha=NOVA_SENHA))
+    assert cod(adm.sessao(tp)) == 401 and cod(adm.sessao(ta)) == 401                       # sem esperar o cache de 5 s
+    assert cod(adm.sessao(adm.login("professor", "prof@unicerrado.edu.br", NOVA_SENHA)[1]["token"])) == 200
+
+
+def _cpfs(n, base=100000000):
+    """Gera n CPFs válidos (só dígitos) a partir de uma base, para o teste não depender de números decorados."""
+    saida = []
+    for i in range(n):
+        d = [int(x) for x in str(base + i * 7919)]
+        for k in (9, 10):
+            d.append((sum(v * (k + 1 - j) for j, v in enumerate(d)) * 10 % 11) % 10)
+        saida.append("".join(map(str, d)))
+    return saida
+
+
+_NOMES = ["Ana Souza", "Bruno Lima", "Carla Dias", "Diego Rocha", "Elisa Neves", "Fabio Cruz"]
+
+
+def test_ct191_cpf_sem_pontuacao_com_cabecalho_generico_nao_vira_matricula(adm):
+    cpfs = _cpfs(6)
+    assert all(adm.ns["_cpf_valido"](c) for c in cpfs)
+    arq = "Documento;Nome;Curso\n" + "\n".join(f"{c};{n};Gestão da TI" for c, n in zip(cpfs, _NOMES)) + "\n"
+    # sem coluna de matrícula de verdade: o app não adivinha (antes, o CPF só-dígitos era a "melhor" coluna)
+    r = adm.arquivo(arq.encode(), confirmar=True)
+    assert cod(r) == 422 and "coluna da matrícula" in r[1] and adm.db.tables[MatriculasAutorizadas] == [], r
+    prévia = adm.arquivo(arq.encode())
+    assert cod(prévia) == 200 and prévia[1]["precisa_coluna"] is True and prévia[1]["importado"] is False
+    # escolher a coluna do CPF à mão também é recusado
+    r = adm.arquivo(arq.encode(), confirmar=True, col_matricula=0)
+    assert cod(r) == 422 and "dados pessoais" in r[1] and adm.db.tables[MatriculasAutorizadas] == []
+    # o mesmo arquivo em planilha (a célula vem como número)
+    dados = xlsx([["Documento", "Nome"]] + [[int(c), n] for c, n in zip(cpfs, _NOMES)])
+    r = adm.arquivo(dados, nome="a.xlsx", confirmar=True)
+    assert cod(r) == 422 and adm.db.tables[MatriculasAutorizadas] == [], r
+
+
+def test_ct191b_sem_cabecalho_com_cpf_antes_da_matricula_escolhe_a_matricula(adm):
+    cpfs = _cpfs(6)
+    arq = "\n".join(f"{c};2026{i:05d};{n}" for i, (c, n) in enumerate(zip(cpfs, _NOMES))) + "\n"
+    r = adm.arquivo(arq.encode(), confirmar=True)
+    assert cod(r) == 200 and r[1]["col_matricula"] == 1 and r[1]["adicionadas"] == 6, r
+    guardadas = set(adm.mats())
+    assert guardadas == {f"2026{i:05d}" for i in range(6)} and not guardadas & set(cpfs)
+
+
+def test_ct192_matriculas_de_11_digitos_nao_sao_confundidas_com_cpf(adm):
+    mats = [f"2026104{i:04d}" for i in range(50)]                                         # 11 dígitos, sequenciais
+    assert not adm.ns["_coluna_parece_cpf"](mats)
+    r = adm.arquivo(("Matrícula;Curso\n" + "\n".join(f"{m};Gestão da TI" for m in mats)).encode(), confirmar=True)
+    assert cod(r) == 200 and r[1]["adicionadas"] == 50
+    for c in ("111.111.111-11", "123", "abc", "12345678900", ""):
+        assert not adm.ns["_cpf_valido"](c), c
+    assert adm.ns["_cpf_valido"](_cpfs(1)[0]) and adm.ns["_cpf_valido"](
+        f"{_cpfs(1)[0][:3]}.{_cpfs(1)[0][3:6]}.{_cpfs(1)[0][6:9]}-{_cpfs(1)[0][9:]}")
+
+
+def test_ct193_importacao_por_texto_reconhece_curso_com_outra_grafia(adm):
+    r = adm.texto("202610405;Gestao da TI\n202610406;GESTÃO  DA  T.I.")
+    assert cod(r) == 200 and r[1]["adicionadas"] == 2 and r[1]["invalidas"] == 0, r
+    assert {m.curso_id for m in adm.mats().values()} == {adm.curso.id}
+
+
+def test_ct193b_curso_com_pontuacao_diferente_conta_como_duplicado(adm):
+    for nome in ("Gestao da T.I.", "GESTÃO-DA-TI", "  gestão   da   ti "):
+        r = adm.rota("adm_curso_novo", adm.corpo("CursoIn", nome=nome))
+        assert cod(r) == 409 and adm.curso.nome in r[1], (nome, r)
+    assert cod(adm.rota("adm_curso_novo", adm.corpo("CursoIn", nome="Gestão da Qualidade"))) == 200
