@@ -116,6 +116,41 @@ textarea{min-height:110px;resize:vertical}
 .geo .faisca{display:none;fill:none;stroke:var(--lima);stroke-width:3.2;stroke-linecap:round;stroke-dasharray:10 90}
 @media(prefers-reduced-motion:no-preference){.geo .faisca{display:inline;animation:faisca 5s linear infinite;animation-delay:var(--d,0s)}}
 @keyframes faisca{from{stroke-dashoffset:10}to{stroke-dashoffset:-90}}
+/* Faixa de boas-vindas das telas de aluno, professor e coordenação: a marca em branco sobre o azul, com trilhas de circuito saindo dela e faíscas correndo,
+   o mesmo enfeite da tela de entrada. Para tirar, apague o <div class="faixa"> de cada tela. */
+.faixa{position:relative;overflow:hidden;display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:178px;margin:0 0 24px;padding:22px 28px;border-radius:22px;color:#fff;background:radial-gradient(380px 250px at 86% 50%,rgba(96,148,238,.40),transparent 70%),linear-gradient(100deg,#071d4d 0%,#0b2a6b 55%,#0f3a86 100%);box-shadow:0 18px 36px -22px rgba(11,42,107,.7)}
+.faixa-txt{position:relative;z-index:1;min-width:0;max-width:46ch}
+.faixa h1{margin:0 0 6px;color:#fff;font-size:clamp(26px,3.6vw,36px)}
+.faixa p{margin:0;font-size:15.5px;line-height:1.5;color:rgba(255,255,255,.86)}
+.faixa-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.faixa-chips:empty{display:none}
+.faixa-chips span{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);font-size:13px;font-weight:500;line-height:1.3}
+.faixa-chips .vivo::before{content:"";flex:none;width:8px;height:8px;border-radius:50%;background:#9aa8c8}
+.faixa-chips .vivo.on::before{background:var(--lima);box-shadow:0 0 0 0 rgba(167,199,88,.65)}
+.faixa-logo{position:relative;z-index:1;flex:none;width:auto;height:clamp(104px,14vw,148px);filter:drop-shadow(0 6px 18px rgba(0,0,0,.3))}
+.faixa-tec{position:absolute;top:0;right:0;height:100%;width:auto;aspect-ratio:640/200;pointer-events:none;-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 42%);mask-image:linear-gradient(90deg,transparent 0,#000 42%)}
+.fb{fill:none;stroke:#fff;stroke-opacity:.26;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.fb.lm{stroke:var(--lima);stroke-opacity:.5}
+.fb-pad{fill:#0b2a6b;stroke:var(--lima);stroke-opacity:.75;stroke-width:1.6}
+.fb-sp,.fg-sp{display:none;fill:none;stroke-linecap:round;stroke-dasharray:10 90}
+.fb-sp{stroke:#d3ec8e;stroke-width:3}.fg-sp{stroke:var(--lima);stroke-width:3.6}
+/* Fios espalhados pelo fundo das telas logadas (só em telas largas, onde sobra espaço nas laterais). */
+.fundo-tec{display:none;position:fixed;inset:0;z-index:0;pointer-events:none}
+.fundo-tec svg{position:absolute;top:0;height:100%;width:calc((100vw - var(--larg))/2 + 14px)}
+.fundo-tec .ft-e{left:0}.fundo-tec .ft-d{right:0}
+.fg{fill:none;stroke:var(--pri);stroke-opacity:.3;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.fg.az{stroke:var(--azul);stroke-opacity:.28}
+.fg-pad{fill:var(--bg);stroke:var(--pri);stroke-opacity:.55;stroke-width:1.6}.fg-pad.az{stroke:var(--azul)}
+@media(prefers-reduced-motion:no-preference){
+.fb-sp,.fg-sp{display:inline;animation:faisca var(--t,5s) linear infinite;animation-delay:var(--d,0s)}
+.faixa-chips .vivo.on::before{animation:pulso 2.2s ease-out infinite}}
+@keyframes pulso{0%{box-shadow:0 0 0 0 rgba(167,199,88,.65)}70%,100%{box-shadow:0 0 0 8px rgba(167,199,88,0)}}
+@media(min-width:1440px){body[data-tela="aluno"] .fundo-tec,body[data-tela="prof"] .fundo-tec,body[data-tela="admin"] .fundo-tec{display:block}}
+main{position:relative;z-index:1}header{position:relative;z-index:2}
+#v-aluno>h2{position:relative;padding-bottom:10px;margin-bottom:8px}
+#v-aluno>h2::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--line),transparent 85%)}
+@media(prefers-reduced-motion:no-preference){#v-aluno>h2::before{content:"";position:absolute;z-index:1;bottom:0;left:-70px;width:70px;height:2px;border-radius:2px;background:linear-gradient(90deg,transparent,var(--lima));animation:corre 7s linear infinite}
+#v-aluno>h2:nth-of-type(2)::before{animation-delay:2.3s}#v-aluno>h2:nth-of-type(3)::before{animation-delay:4.6s}}
+@keyframes corre{0%{left:-70px}55%,100%{left:100%}}
+.stat{position:relative}.stat::before{content:"";position:absolute;top:0;left:14px;width:30px;height:3px;border-radius:0 0 3px 3px;background:linear-gradient(90deg,var(--pri),var(--lima))}
 /* telas grandes (PC): cabeçalho e tela de entrada maiores. O tamanho vem de --k, no começo do CSS. */
 @media(min-width:1280px){
 .marcas{gap:calc(14px*var(--k));padding:calc(4px*var(--k)) 0}
@@ -123,6 +158,7 @@ textarea{min-height:110px;resize:vertical}
 .produto{gap:calc(10px*var(--k));padding:calc(4px*var(--k)) 0}.produto .p-icone{height:calc(46px*var(--k))}.produto .p-nome{height:calc(26px*var(--k))}.ver{font-size:calc(12px*var(--k))}
 .lema{font-size:calc(14px*var(--k));gap:calc(10px*var(--k));padding:calc(7px*var(--k)) calc(16px*var(--k)) calc(7px*var(--k)) calc(12px*var(--k))}.lema img{height:calc(34px*var(--k))}
 #user{font-size:calc(14px*var(--k))}
+.faixa{min-height:calc(178px*var(--k));padding:calc(22px*var(--k)) calc(28px*var(--k));border-radius:calc(22px*var(--k));margin-bottom:calc(24px*var(--k))}.faixa h1{font-size:calc(34px*var(--k))}.faixa p{font-size:calc(15.5px*var(--k))}.faixa-chips span{font-size:calc(13px*var(--k))}.faixa-logo{height:calc(148px*var(--k))}
 .entrada{gap:calc(56px*var(--k))}
 .entrada h1{font-size:calc(40px*var(--k))}
 .hero p{font-size:calc(17px*var(--k));margin-bottom:calc(22px*var(--k))}
@@ -160,10 +196,43 @@ textarea{min-height:110px;resize:vertical}
 .previa .bad{color:var(--err);font-size:13.5px;margin:6px 0 0}.previa .acoes{margin-top:16px}
 details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
 @media(max-width:860px){.entrada{grid-template-columns:1fr;gap:20px}.geo{display:none}.hero p{margin-bottom:6px}}
-@media(max-width:560px){.row input,.row select{min-width:100%}.atabs button{padding:7px 13px}.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}main{padding:20px 16px 40px}.topo{padding:10px 16px}.marcas{gap:10px;padding:4px 0}.marcas img{height:34px}.marcas img.curso{height:46px}.produto{gap:8px;padding:4px 0}.produto .p-icone{height:36px}.produto .p-nome{height:20px}.lema{display:none}.card{padding:18px}}
+@media(max-width:560px){.row input,.row select{min-width:100%}.atabs button{padding:7px 13px}.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}main{padding:20px 16px 40px}.topo{padding:10px 16px}.marcas{gap:10px;padding:4px 0}.marcas img{height:34px}.marcas img.curso{height:46px}.produto{gap:8px;padding:4px 0}.produto .p-icone{height:36px}.produto .p-nome{height:20px}.lema{display:none}.card{padding:18px}.faixa{min-height:150px;padding:18px 16px;gap:8px;border-radius:18px;margin-bottom:18px}.faixa h1{font-size:24px}.faixa p{font-size:14px}.faixa-chips{margin-top:10px}.faixa-chips span{font-size:12px;padding:4px 10px}.faixa-logo{height:92px}.faixa-tec{opacity:.7;-webkit-mask-image:linear-gradient(90deg,transparent 22%,#000 70%);mask-image:linear-gradient(90deg,transparent 22%,#000 70%)}}
 </style>
 </head>
 <body>
+<!-- Desenhos reutilizados pela faixa de boas-vindas e pelos fios do fundo (trilhas e faíscas). pathLength=100 deixa todas as faíscas com o mesmo ritmo. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+  <path id="fb1" pathLength="100" d="M560 100H500L486 86H380L366 72H250L236 58H120"/>
+  <path id="fb2" pathLength="100" d="M560 128H520L506 142H420L406 156H300L286 170H190"/>
+  <path id="fb3" pathLength="100" d="M560 74H530L516 60H450L436 46H330L316 32H210"/>
+  <path id="fb4" pathLength="100" d="M560 154H540L526 168H470L456 182H360"/>
+  <path id="fb5" pathLength="100" d="M560 46H545L531 32H470L456 18H400"/>
+  <g id="circ-faixa">
+    <use class="fb lm" href="#fb1"/><use class="fb" href="#fb2"/><use class="fb" href="#fb3"/><use class="fb lm" href="#fb4"/><use class="fb" href="#fb5"/>
+    <circle class="fb-pad" cx="120" cy="58" r="3.8"/><circle class="fb-pad" cx="190" cy="170" r="3.8"/><circle class="fb-pad" cx="210" cy="32" r="3.8"/><circle class="fb-pad" cx="360" cy="182" r="3.8"/><circle class="fb-pad" cx="400" cy="18" r="3.8"/>
+    <use class="fb-sp" href="#fb1" style="--d:0s;--t:4s"/><use class="fb-sp" href="#fb3" style="--d:.9s;--t:4.4s"/><use class="fb-sp" href="#fb2" style="--d:1.8s;--t:4.8s"/><use class="fb-sp" href="#fb5" style="--d:2.6s;--t:4.2s"/><use class="fb-sp" href="#fb4" style="--d:3.3s;--t:4.6s"/>
+  </g>
+  <path id="g1" pathLength="100" d="M0 70H28L42 84H76L90 98V170"/>
+  <path id="g2" pathLength="100" d="M0 210H20L34 224H64L78 210H110"/>
+  <path id="g3" pathLength="100" d="M0 330H34L48 344H88L102 358V430"/>
+  <path id="g4" pathLength="100" d="M0 480H24L38 466H72L86 480H104"/>
+  <path id="g5" pathLength="100" d="M0 590H40L54 604H92L106 618V672"/>
+  <path id="g6" pathLength="100" d="M0 720H30L44 706H80"/>
+  <g id="fios-e">
+    <use class="fg" href="#g1"/><use class="fg az" href="#g2"/><use class="fg" href="#g3"/><use class="fg az" href="#g4"/><use class="fg" href="#g5"/><use class="fg az" href="#g6"/>
+    <circle class="fg-pad" cx="90" cy="170" r="3.6"/><circle class="fg-pad az" cx="110" cy="210" r="3.6"/><circle class="fg-pad" cx="102" cy="430" r="3.6"/><circle class="fg-pad az" cx="104" cy="480" r="3.6"/><circle class="fg-pad" cx="106" cy="672" r="3.6"/><circle class="fg-pad az" cx="80" cy="706" r="3.6"/>
+    <use class="fg-sp" href="#g1" style="--d:0s;--t:6s"/><use class="fg-sp" href="#g3" style="--d:1.7s;--t:6.4s"/><use class="fg-sp" href="#g5" style="--d:3.1s;--t:5.8s"/><use class="fg-sp" href="#g2" style="--d:4.4s;--t:6.2s"/><use class="fg-sp" href="#g6" style="--d:2.3s;--t:6s"/>
+  </g>
+  <g id="fios-d">
+    <use class="fg az" href="#g1"/><use class="fg" href="#g2"/><use class="fg az" href="#g3"/><use class="fg" href="#g4"/><use class="fg az" href="#g5"/><use class="fg" href="#g6"/>
+    <circle class="fg-pad az" cx="90" cy="170" r="3.6"/><circle class="fg-pad" cx="110" cy="210" r="3.6"/><circle class="fg-pad az" cx="102" cy="430" r="3.6"/><circle class="fg-pad" cx="104" cy="480" r="3.6"/><circle class="fg-pad az" cx="106" cy="672" r="3.6"/><circle class="fg-pad" cx="80" cy="706" r="3.6"/>
+    <use class="fg-sp" href="#g2" style="--d:.8s;--t:6.2s"/><use class="fg-sp" href="#g4" style="--d:2.4s;--t:5.9s"/><use class="fg-sp" href="#g6" style="--d:3.9s;--t:6.3s"/><use class="fg-sp" href="#g1" style="--d:5s;--t:6s"/><use class="fg-sp" href="#g5" style="--d:1.2s;--t:6.4s"/>
+  </g>
+</defs></svg>
+<div class="fundo-tec" aria-hidden="true">
+  <svg class="ft-e" viewBox="0 0 140 760" preserveAspectRatio="xMinYMid meet"><use href="#fios-e"/></svg>
+  <svg class="ft-d" viewBox="0 0 140 760" preserveAspectRatio="xMaxYMid meet"><g transform="translate(140 0) scale(-1 1)"><use href="#fios-d"/></g></svg>
+</div>
 <header>
   <div class="topo">
     <!-- LOGOS: troque o arquivo na pasta assets/ mantendo o mesmo nome (ou mude o src abaixo) -->
@@ -265,6 +334,11 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
 
 <!-- ============ ALUNO ============ -->
 <section id="v-aluno" hidden>
+  <div class="faixa" id="faixa-aluno">
+    <svg class="faixa-tec" viewBox="0 0 640 200" preserveAspectRatio="xMaxYMid meet" aria-hidden="true"><use href="#circ-faixa"/></svg>
+    <div class="faixa-txt"><h1>Olá, <span class="faixa-nome"></span></h1><p>Chegou ao local do evento? Registre sua presença logo abaixo.</p><div class="faixa-chips" id="chips-aluno"><span class="vivo" id="chip-vivo">Procurando chamadas…</span></div></div>
+    <img class="faixa-logo" src="assets/guara-logo-branca.png" alt="Guará Check. Sua presença, no lugar certo.">
+  </div>
   <h2>Aulas com chamada aberta</h2>
   <p class="mut" id="aluno-info">O navegador vai pedir permissão para usar sua localização. O botão Registrar Presença só libera quando você está dentro da área da aula. Use o seu próprio celular.</p>
   <div class="msg" id="msg-aluno" hidden></div>
@@ -290,6 +364,11 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
 
 <!-- ============ PROFESSOR ============ -->
 <section id="v-prof" hidden>
+  <div class="faixa" id="faixa-prof">
+    <svg class="faixa-tec" viewBox="0 0 640 200" preserveAspectRatio="xMaxYMid meet" aria-hidden="true"><use href="#circ-faixa"/></svg>
+    <div class="faixa-txt"><h1>Olá, <span class="faixa-nome"></span></h1><p>Marque o local e o raio, abra a chamada e acompanhe quem chega.</p><div class="faixa-chips" id="chips-prof"></div></div>
+    <img class="faixa-logo" src="assets/guara-logo-branca.png" alt="Guará Check. Sua presença, no lugar certo.">
+  </div>
   <div class="card">
     <h2>Cadastrar evento e abrir chamada</h2>
     <form id="form-aula" novalidate>
@@ -373,7 +452,12 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
 </section>
 <!-- ============ PAINEL DA COORDENAÇÃO (o login fica na aba Coordenação da tela inicial) ============ -->
 <section id="v-admin" hidden>
-  <h2>Painel da coordenação</h2>
+  <div class="faixa" id="faixa-admin">
+    <svg class="faixa-tec" viewBox="0 0 640 200" preserveAspectRatio="xMaxYMid meet" aria-hidden="true"><use href="#circ-faixa"/></svg>
+    <div class="faixa-txt"><h1>Olá, <span class="faixa-nome"></span></h1><p>Painel da coordenação: cursos, professores, alunos, matrículas e alertas num só lugar.</p><div class="faixa-chips" id="chips-admin"></div></div>
+    <img class="faixa-logo" src="assets/guara-logo-branca.png" alt="Guará Check. Sua presença, no lugar certo.">
+  </div>
+
   <div class="atabs" id="adm-tabs">
     <button data-t="resumo" class="on">Resumo</button><button data-t="cursos">Cursos</button>
     <button data-t="professores">Professores</button><button data-t="alunos">Alunos</button>
@@ -429,7 +513,7 @@ function renderSite(){
 }
 renderSite();
 function msg(el, txt, tipo){ el.textContent = txt || ''; el.className = 'msg ' + (tipo || ''); el.hidden = !txt; }
-function show(v){ ['auth','aluno','prof','admin'].forEach(x => $('#v-'+x).hidden = x !== v); $('#user').hidden = v === 'auth'; }
+function show(v){ ['auth','aluno','prof','admin'].forEach(x => $('#v-'+x).hidden = x !== v); $('#user').hidden = v === 'auth'; document.body.dataset.tela = v; }
 
 async function api(path, {method='GET', body} = {}){
   const h = {'Content-Type':'application/json'}; if (S.token) h.Authorization = 'Bearer ' + S.token;
@@ -575,8 +659,17 @@ $('#form-auth').onsubmit = async e => {
   } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; }
 };
 
+function faixaPreencher(){  // nome e etiquetas da faixa de boas-vindas (textContent: nada do que vem do servidor vira HTML)
+  const n = S.user.nome.split(' ')[0];
+  document.querySelectorAll('.faixa-nome').forEach(e => e.textContent = n);
+  const et = {aluno: [S.user.curso, S.user.periodo ? S.user.periodo + 'º período' : ''], prof: [S.user.departamento], admin: []};
+  const perfil = S.user.perfil === 'admin' ? 'admin' : S.user.perfil === 'aluno' ? 'aluno' : 'prof';
+  const box = $('#chips-' + perfil); if (!box) return;
+  box.querySelectorAll('span:not(.vivo)').forEach(e => e.remove());
+  (et[perfil] || []).filter(Boolean).forEach(t => { const e = document.createElement('span'); e.textContent = t; box.insertBefore(e, box.querySelector('.vivo')); });
+}
 function iniciar(){
-  $('#user-nome').textContent = S.user.nome.split(' ')[0];
+  $('#user-nome').textContent = S.user.nome.split(' ')[0]; faixaPreencher();
   if (S.user.perfil === 'admin'){ Object.assign(ADM, {aba:'resumo', pag:1, q:'', curso:0}); show('admin'); admRender(); } // sempre abre no Resumo (onde fica o aviso da senha provisória)
   else if (S.user.perfil === 'aluno'){
     show('aluno'); carregarAulas(); carregarComprovantes(); carregarNotas();
@@ -602,6 +695,7 @@ async function carregarAulas(){
       ${a.ja_registrou ? '<div class="ok-badge">✓ Presença registrada</div>'
                        : `<button class="btn big fora" data-id="${a.id}" data-lat="${a.latitude}" data-lon="${a.longitude}" data-raio="${a.raio_metros}" disabled>Verificando sua localização…</button><div class="zona"></div>`}</article>`).join('')
       : '<div class="card vazio mut">Nenhuma chamada aberta agora. Esta tela atualiza sozinha quando o professor abrir a chamada.</div>';
+    const cv = $('#chip-vivo'); if (cv){ cv.classList.toggle('on', l.length > 0); cv.textContent = l.length ? (l.length === 1 ? '1 chamada aberta agora' : l.length + ' chamadas abertas agora') : 'Nenhuma chamada aberta no momento'; }
     atualizarZona();
     if (l.some(a => !a.ja_registrou)) geoLigar(); else geoDesligar();  // GPS ligado só enquanto há presença a registrar
   } catch (x) { msg($('#msg-aluno'), x.message, 'err'); }
