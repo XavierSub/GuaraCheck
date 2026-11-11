@@ -80,6 +80,10 @@ NOMES = {
     "haversine", "casas_decimais", "avaliar_risco", "ip_e_vpn", "_cache_ip", "VPN_CACHE_S", "VPN_FALHA_CACHE_S",
     "registrar_tentativa", "PresencaIn",
     "registrar_presenca",
+    # --- Funcionalidade 5: chamada e comprovantes ---
+    "assinatura_presenca", "_l1", "_pdf_marca", "gerar_pdf_comprovante", "conferir_comprovante", "presencas_da_aula",
+    "tentativas_da_aula", "ausentes_da_aula", "_cond_ausentes", "minhas_presencas", "comprovante_pdf", "meu_perfil",
+    "gerar_codigo", "LIMITE_PRESENCAS_POR_CONSULTA", "_quebrar_texto",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
@@ -180,6 +184,12 @@ class Col:
     def in_(self, vs):
         return Cmp(self, "in", vs if isinstance(vs, Select) else list(vs))
 
+    def not_in(self, vs):
+        return Cmp(self, "not_in", vs if isinstance(vs, Select) else list(vs))
+
+    def __ne__(self, o):
+        return Cmp(self, "ne", o)
+
     def __gt__(self, o):
         return Cmp(self, "gt", o)
 
@@ -252,8 +262,28 @@ class Cmp:
             return v is not None and v < self.val
         if self.op == "gt":
             return v is not None and v > self.val
+        if self.op == "ne":
+            return v is not None and self.val is not None and v != self.val   # SQL: NULL != x não é verdadeiro
         vals = list(db.scalars(self.val)) if isinstance(self.val, Select) else self.val       # IN (lista ou subconsulta)
-        return v in vals
+        return (v not in vals) if self.op == "not_in" else (v in vals)
+
+    def label(self, nome):
+        return _RotuloCmp(self, nome)
+
+
+class _RotuloCmp:
+    """(coluna IN subconsulta).label('x'): uma coluna booleana calculada por linha."""
+
+    def __init__(self, cmp, nome):
+        self.cmp, self.name, self.owner = cmp, nome, cmp.col.owner
+
+
+class Or:
+    def __init__(self, conds):
+        self.conds = conds
+
+    def test(self, row, db=None):
+        return any(c.test(row, db) for c in self.conds)
 
 
 class Modelo:
@@ -298,13 +328,11 @@ class MatriculasAutorizadas(Modelo):
 
 
 class Aula(Modelo):
-    id, professor_id, titulo, ativa, curso_id, periodo, aberta_em = (Col() for _ in range(7))
+    (id, professor_id, titulo, ativa, curso_id, periodo, aberta_em, codigo_validacao, tipo, local_tipo, local_descricao,
+     disciplina, latitude, longitude, raio_metros, encerrada_em) = (Col() for _ in range(16))
     _padroes = {"ativa": True}
     _carimbos = ("aberta_em",)                                   # default=utcnow no modelo real
     _unicos_parciais = ((("professor_id",), lambda r: r.ativa is not False),)   # uq_aula_ativa_prof: uma ativa por professor
-    # colunas que o aula_dict lê e que o banco devolveria como NULL quando ninguém preencheu
-    latitude = longitude = raio_metros = tipo = local_tipo = local_descricao = disciplina = None
-    codigo_validacao = encerrada_em = None
 
 
 class Presenca(Modelo):
@@ -528,10 +556,14 @@ class FakeDB:
     def get(self, modelo, pk):
         return next((r for r in self.tables[modelo] if r.id == pk), None)
 
-    @staticmethod
-    def _v_combo(col, combo):
+    def _v_combo(self, col, combo):
         r = combo.get(col.owner)
+        if isinstance(col, _RotuloCmp):
+            return None if r is None else col.cmp.test(r, self)
         return None if r is None else col.valor(r)
+
+    def refresh(self, o):
+        pass
 
     def _casar(self, combo, modelo, cond):
         """Linhas de `modelo` que casam com a condição de junção (Tabela.col == OutraTabela.col) para esta linha."""
@@ -563,6 +595,8 @@ class FakeDB:
             itens = [[c] for c in combos]
         for o in reversed(q.ordem):
             itens.sort(key=lambda g: (self._v_combo(o.col, g[0]) is None, self._v_combo(o.col, g[0])), reverse=o.desc)
+        if q.deslocar < 0:
+            raise ValueError("OFFSET não pode ser negativo")            # o PostgreSQL recusa; antes o fatiamento do Python escondia o erro
         itens = itens[q.deslocar:]
         itens = itens if q.limite is None else itens[:q.limite]
         nomes = tuple(getattr(a, "name", None) for a in q.alvos)
@@ -595,6 +629,8 @@ class FakeDB:
         linhas = [r for r in self.tables[self._modelo(q)] if all(c.test(r, self) for c in q.conds)]
         for o in reversed(q.ordem):
             linhas.sort(key=lambda r: (o.col.valor(r) is None, o.col.valor(r)), reverse=o.desc)
+        if q.deslocar < 0:
+            raise ValueError("OFFSET não pode ser negativo")
         linhas = linhas[q.deslocar:]
         return linhas if q.limite is None else linhas[:q.limite]
 
@@ -644,7 +680,9 @@ def novo_ns(**env):
             load_dotenv=lambda *a, **k: None, print=lambda *a, **k: None, HTTPException=HTTPException,
             IntegrityError=IntegrityError, Request=FakeReq, Session=object, Header=lambda *a, **k: None,
             Depends=lambda *a, **k: None, get_db=lambda: None, select=lambda *a: Select(*a), func=_FuncNS(),
-            update=lambda m: UpdateStmt(m), delete=lambda m: DeleteStmt(m), CadastroPendente=CadastroPendente,
+            update=lambda m: UpdateStmt(m), delete=lambda m: DeleteStmt(m), or_=lambda *c: Or(c),
+            Response=lambda content=None, media_type=None, headers=None, status_code=200: types.SimpleNamespace(
+                body=content, media_type=media_type, headers=headers or {}, status_code=status_code), CadastroPendente=CadastroPendente,
             base64=base64, csv=csv, io=io, zipfile=zipfile, Aula=Aula, Presenca=Presenca, Tentativa=Tentativa,
             NotaAluno=NotaAluno, Aluno=Aluno, Professor=Professor, Curso=Curso, LogSeguranca=LogSeguranca,
             MatriculasAutorizadas=MatriculasAutorizadas)

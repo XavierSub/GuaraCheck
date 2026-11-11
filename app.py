@@ -68,6 +68,7 @@ try:
 except ValueError:
     AULA_MAX_HORAS = 12.0
 HIST_POR_PAGINA = 30        # eventos por página no histórico do professor e no painel da coordenação (60)
+COMPROVANTES_POR_PAGINA = 20  # comprovantes do aluno por página (?pagina=2 traz os mais antigos)
 AULAS_ATIVAS_MAX = 500      # teto da lista de chamadas abertas (filtrada por curso/período depois, por aluno)
 
 # Matrícula (Pasta 1): formato numérico + lista pré-aprovada (tabela MatriculasAutorizadas)
@@ -988,7 +989,7 @@ def gerar_pdf_comprovante(d: dict) -> bytes:
         y -= 14
         c.setFillColor(escuro)
         c.setFont("Helvetica-Bold", 12)
-        for lin in simpleSplit(_l1(valor), "Helvetica-Bold", 12, W - 2 * M):
+        for lin in _quebrar_texto(valor, "Helvetica-Bold", 12, W - 2 * M):  # parte também um endereço sem espaços
             c.drawString(M, y, lin)
             y -= 15
         y -= 7
@@ -1033,7 +1034,7 @@ def gerar_pdf_comprovante(d: dict) -> bytes:
              + f", registrei presença no evento \"{d['titulo']}\""
              + (f", disciplina {d['disciplina']}" if d.get("disciplina") else "")
              + f", em {quando.strftime('%d/%m/%Y')} às {quando.strftime('%H:%M')}.")
-    linhas = simpleSplit(_l1(frase), "Helvetica", 10.5, W - 2 * M - 16)
+    linhas = _quebrar_texto(frase, "Helvetica", 10.5, W - 2 * M - 16)
     alt = len(linhas) * 14 + 12
     c.setFillColor(colors.HexColor("#f3f6f4"))
     c.rect(M, y - alt + 12, W - 2 * M, alt, stroke=0, fill=1)
@@ -1994,14 +1995,17 @@ def meu_perfil(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
 
 
 @app.get("/api/aluno/presencas")
-def minhas_presencas(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
-    """Comprovantes: as 20 últimas presenças do aluno (continuam visíveis depois que a chamada fecha)."""
+def minhas_presencas(u: dict = Depends(so_aluno), db: Session = Depends(get_db), pagina: int = 1):
+    """Comprovantes do aluno, do mais novo ao mais antigo, COMPROVANTES_POR_PAGINA por página (?pagina=2 traz os mais
+    antigos). Continuam visíveis depois que a chamada fecha; sem paginação o aluno perdia o acesso ao 21º em diante."""
+    pagina = min(max(pagina, 1), 10_000)
     rows = db.execute(
         select(Presenca.id, Presenca.registrado_em, Aula.titulo, Aula.tipo, Aula.local_tipo, Aula.disciplina,
                Aula.periodo, Professor.nome.label("professor"))
         .select_from(Presenca).join(Aula, Aula.id == Presenca.aula_id)
         .join(Professor, Professor.id == Aula.professor_id)
-        .where(Presenca.aluno_id == u["id"]).order_by(Presenca.id.desc()).limit(20)).all()
+        .where(Presenca.aluno_id == u["id"]).order_by(Presenca.id.desc())
+        .limit(COMPROVANTES_POR_PAGINA).offset((pagina - 1) * COMPROVANTES_POR_PAGINA)).all()
     return [{"id": r.id, "registrado_em": iso(r.registrado_em), "titulo": r.titulo, "tipo": r.tipo or "aula",
              "local_tipo": r.local_tipo or "dentro", "disciplina": r.disciplina, "periodo": r.periodo,
              "professor": r.professor} for r in rows]

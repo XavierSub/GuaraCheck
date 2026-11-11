@@ -933,19 +933,32 @@ async function baixarPdfDe(url, nomeArquivo, btn, aviso){
   finally { btn.disabled = false; btn.textContent = rot; }
 }
 
+const COMP_PAG = 20;  // o servidor devolve 20 comprovantes por página
+function renderComprovantes(destacar){
+  const box = $('#comprov'), me = S.me, l = S.comp;
+  box.innerHTML = (l.length ? l.map((p, i) => `<article class="card comp${destacar && i === 0 ? ' novo' : ''}">
+      <h3>✓ Presença registrada · Protocolo nº ${p.id}</h3>
+      <p>O aluno <b>${esc(me.nome)}</b>${me.matricula ? `, matrícula <b>${esc(me.matricula)}</b>` : ''}${me.curso ? `, do curso de ${esc(me.curso)}` : ''}${me.periodo ? `, ${me.periodo}º período` : ''}, registrou presença em <b>${esc(p.titulo)}</b>${p.disciplina ? ` (disciplina ${esc(p.disciplina)})` : ''} (${p.tipo === 'palestra' ? 'palestra' : 'aula'} · ${p.local_tipo === 'fora' ? 'fora da faculdade' : 'dentro da faculdade'}), com o(a) prof. ${esc(p.professor)}, em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.</p>
+      <div class="acoes"><button class="btn" type="button" data-m="${i}">Mostrar ao professor</button><button class="btn alt" type="button" data-pdf="${p.id}">Baixar PDF</button><button class="btn alt" type="button" data-nota="${p.id}">Anotar</button></div>
+    </article>`).join('') : '<div class="card vazio mut">Você ainda não registrou nenhuma presença.</div>')
+    + (S.compMais ? '<button class="btn alt" type="button" id="comp-mais">Ver comprovantes mais antigos</button>' : '');
+  montarSelectNotas();
+}
 async function carregarComprovantes(destacar){
   const box = $('#comprov');
   try {
     const [me, l] = await Promise.all([api('/me'), api('/aluno/presencas')]);
-    S.me = me; S.comp = l;
-    box.innerHTML = l.length ? l.map((p, i) => `<article class="card comp${destacar && i === 0 ? ' novo' : ''}">
-      <h3>✓ Presença registrada · Protocolo nº ${p.id}</h3>
-      <p>O aluno <b>${esc(me.nome)}</b>${me.matricula ? `, matrícula <b>${esc(me.matricula)}</b>` : ''}${me.curso ? `, do curso de ${esc(me.curso)}` : ''}${me.periodo ? `, ${me.periodo}º período` : ''}, registrou presença em <b>${esc(p.titulo)}</b>${p.disciplina ? ` (disciplina ${esc(p.disciplina)})` : ''} (${p.tipo === 'palestra' ? 'palestra' : 'aula'} · ${p.local_tipo === 'fora' ? 'fora da faculdade' : 'dentro da faculdade'}), com o(a) prof. ${esc(p.professor)}, em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.</p>
-      <div class="acoes"><button class="btn" type="button" data-m="${i}">Mostrar ao professor</button><button class="btn alt" type="button" data-pdf="${p.id}">Baixar PDF</button><button class="btn alt" type="button" data-nota="${p.id}">Anotar</button></div>
-    </article>`).join('') : '<div class="card vazio mut">Você ainda não registrou nenhuma presença.</div>';
-    montarSelectNotas();
+    S.me = me; S.comp = l; S.compPag = 1; S.compMais = l.length >= COMP_PAG;
+    renderComprovantes(destacar);
     if (destacar) box.scrollIntoView({behavior:'smooth', block:'start'});
   } catch (x) { box.innerHTML = `<div class="msg err">${esc(x.message)}</div>`; }
+}
+async function carregarMaisComprovantes(b){
+  b.disabled = true;
+  try {
+    const mais = await api('/aluno/presencas?pagina=' + (S.compPag + 1)), ja = new Set(S.comp.map(p => p.id));
+    S.compPag++; S.comp = S.comp.concat(mais.filter(p => !ja.has(p.id))); S.compMais = mais.length >= COMP_PAG; renderComprovantes(false);
+  } catch (x) { msg($('#msg-aluno'), x.message, 'err'); b.disabled = false; }
 }
 
 /* Comprovante em tela cheia para o aluno mostrar ao professor. O relógio ao vivo mostra que a tela não é um print antigo. */
@@ -967,6 +980,7 @@ function fecharMostrar(){ clearInterval(S.relogio); $('#mostrar').hidden = true;
 $('#m-fechar').onclick = fecharMostrar;
 document.addEventListener('keydown', e => { if (e.key === 'Escape') fecharMostrar(); });
 $('#comprov').addEventListener('click', e => {
+  const mais = e.target.closest('#comp-mais'); if (mais) carregarMaisComprovantes(mais);
   const b = e.target.closest('button[data-m]'); if (b) mostrarAoProfessor(+b.dataset.m);
   const p = e.target.closest('button[data-pdf]'); if (p) baixarPDF(+p.dataset.pdf, p, $('#msg-aluno'));
   const n = e.target.closest('button[data-nota]'); if (n) abrirNota(+n.dataset.nota);
