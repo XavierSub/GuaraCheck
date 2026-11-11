@@ -25,12 +25,12 @@
 body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.55 'Poppins',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 header{background:var(--card);border-bottom:3px solid var(--lima)}
 .topo{max-width:var(--larg);margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:10px 20px;flex-wrap:wrap}
-.marcas{display:flex;align-items:center;gap:14px;padding:6px 14px;background:#fff;border:1px solid var(--line);border-radius:14px}
+.marcas{display:flex;align-items:center;gap:14px;padding:4px 0}
 .marcas img{height:46px;width:auto;display:block}
 .marcas img.curso{height:62px}
 .marcas i{width:1px;height:32px;background:#d9dfcd}
 /* Guará Check: ícone do lobo-guará + nome + versão, numa caixa branca (fica legível também no modo escuro) */
-.produto{display:flex;align-items:center;gap:10px;padding:6px 14px;background:#fff;border:1px solid var(--line);border-radius:14px}
+.produto{display:flex;align-items:center;gap:10px;padding:4px 0}
 .produto .p-icone{height:46px;width:auto;display:block}
 .produto .p-nome{height:26px;width:auto;display:block}
 .ver{font-size:12px;font-weight:700;color:#4d5f56;border:1px solid #cfd8c2;border-radius:999px;padding:1px 9px;letter-spacing:.02em}
@@ -118,9 +118,9 @@ textarea{min-height:110px;resize:vertical}
 @keyframes faisca{from{stroke-dashoffset:10}to{stroke-dashoffset:-90}}
 /* telas grandes (PC): cabeçalho e tela de entrada maiores. O tamanho vem de --k, no começo do CSS. */
 @media(min-width:1280px){
-.marcas{gap:calc(14px*var(--k));padding:calc(6px*var(--k)) calc(14px*var(--k));border-radius:calc(14px*var(--k))}
+.marcas{gap:calc(14px*var(--k));padding:calc(4px*var(--k)) 0}
 .marcas img{height:calc(46px*var(--k))}.marcas img.curso{height:calc(62px*var(--k))}.marcas i{height:calc(32px*var(--k))}
-.produto{gap:calc(10px*var(--k));padding:calc(6px*var(--k)) calc(14px*var(--k));border-radius:calc(14px*var(--k))}.produto .p-icone{height:calc(46px*var(--k))}.produto .p-nome{height:calc(26px*var(--k))}.ver{font-size:calc(12px*var(--k))}
+.produto{gap:calc(10px*var(--k));padding:calc(4px*var(--k)) 0}.produto .p-icone{height:calc(46px*var(--k))}.produto .p-nome{height:calc(26px*var(--k))}.ver{font-size:calc(12px*var(--k))}
 .lema{font-size:calc(14px*var(--k));gap:calc(10px*var(--k));padding:calc(7px*var(--k)) calc(16px*var(--k)) calc(7px*var(--k)) calc(12px*var(--k))}.lema img{height:calc(34px*var(--k))}
 #user{font-size:calc(14px*var(--k))}
 .entrada{gap:calc(56px*var(--k))}
@@ -160,7 +160,7 @@ textarea{min-height:110px;resize:vertical}
 .previa .bad{color:var(--err);font-size:13.5px;margin:6px 0 0}.previa .acoes{margin-top:16px}
 details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
 @media(max-width:860px){.entrada{grid-template-columns:1fr;gap:20px}.geo{display:none}.hero p{margin-bottom:6px}}
-@media(max-width:560px){.row input,.row select{min-width:100%}.atabs button{padding:7px 13px}.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}main{padding:20px 16px 40px}.topo{padding:10px 16px}.marcas{gap:10px;padding:6px 10px}.marcas img{height:34px}.marcas img.curso{height:46px}.produto{gap:8px;padding:5px 10px}.produto .p-icone{height:36px}.produto .p-nome{height:20px}.lema{display:none}.card{padding:18px}}
+@media(max-width:560px){.row input,.row select{min-width:100%}.atabs button{padding:7px 13px}.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}main{padding:20px 16px 40px}.topo{padding:10px 16px}.marcas{gap:10px;padding:4px 0}.marcas img{height:34px}.marcas img.curso{height:46px}.produto{gap:8px;padding:4px 0}.produto .p-icone{height:36px}.produto .p-nome{height:20px}.lema{display:none}.card{padding:18px}}
 </style>
 </head>
 <body>
