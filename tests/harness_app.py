@@ -77,7 +77,8 @@ NOMES = {
     "_aula_do_professor", "abrir_aula", "encerrar_aula", "excluir_aula", "excluir_todas_as_aulas", "minhas_aulas",
     "aulas_ativas", "adm_aulas", "adm_aula_encerrar", "adm_aula_excluir", "aula_aberta", "encerrar_vencidas",
     # --- Funcionalidade 4: registro de presença (GPS e antifraude) ---
-    "haversine", "casas_decimais", "avaliar_risco", "ip_e_vpn", "_cache_ip", "VPN_CACHE_S", "VPN_FALHA_CACHE_S",
+    "haversine", "casas_decimais", "avaliar_risco", "ip_e_vpn", "_cache_ip", "VPN_CACHE_S", "VPN_FALHA_CACHE_S", "VPN_DISJUNTOR_FALHAS", "VPN_DISJUNTOR_S", "_vpn_disjuntor",
+    "TENTATIVAS_MAX_CHAVES", "TENTATIVAS_RETENCAO_S", "_podar_tentativas",
     "registrar_tentativa", "PresencaIn",
     "registrar_presenca",
     # --- Funcionalidade 5: chamada e comprovantes ---

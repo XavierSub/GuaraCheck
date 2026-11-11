@@ -837,7 +837,7 @@ function iniciar(){
   else if (S.user.perfil === 'aluno'){
     show('aluno'); carregarAulas(); carregarComprovantes(); carregarNotas();
     $('#aluno-info').textContent = (S.user.curso ? S.user.curso + ' · ' : '') + (S.user.periodo ? S.user.periodo + 'º período · ' : '') + 'Use o seu próprio celular e fique dentro da sala. O navegador vai pedir permissão para usar a localização.';
-    S.timer = setInterval(() => { if (!document.hidden) carregarAulas(); }, 10000);
+    agendarAtualizacao(true);
   } else { show('prof'); initMapa(); recarregarHist(true); }
 }
 function sair(aviso){
@@ -849,6 +849,21 @@ function sair(aviso){
 $('#btn-sair').onclick = () => sair();
 
 /* ---------------- Aluno ---------------- */
+/* Atualização automática da lista de chamadas. Duas regras para o servidor aguentar a turma inteira:
+   1) o intervalo é de 10 s com variação aleatória de ±20%: todos entram juntos no começo da aula e, com um relógio fixo,
+      todos os celulares perguntariam no mesmo segundo, de 10 em 10 s;
+   2) se o servidor falhar (lento, erro, sem rede), a espera dobra (20, 40, até 60 s) em vez de insistir a cada 10 s e piorar a
+      fila; ao primeiro acerto, volta aos 10 s. Com a aba escondida, não pergunta nada. */
+const ATUALIZA_MS = 10000, ATUALIZA_MAX_MS = 60000;
+function agendarAtualizacao(ok){
+  clearTimeout(S.timer);
+  S.espera = ok ? ATUALIZA_MS : Math.min((S.espera || ATUALIZA_MS) * 2, ATUALIZA_MAX_MS);
+  S.timer = setTimeout(async () => {
+    if (!S.token) return;
+    const deuCerto = document.hidden ? true : await carregarAulas();
+    if (S.token) agendarAtualizacao(deuCerto);
+  }, S.espera * (0.8 + Math.random() * 0.4));
+}
 async function carregarAulas(){
   try {
     const l = await api('/aulas/ativas');
@@ -861,7 +876,12 @@ async function carregarAulas(){
     const cv = $('#chip-vivo'); if (cv){ cv.classList.toggle('on', l.length > 0); cv.textContent = l.length ? (l.length === 1 ? '1 chamada aberta agora' : l.length + ' chamadas abertas agora') : 'Nenhuma chamada aberta no momento'; }
     atualizarZona();
     if (l.some(a => !a.ja_registrou)) geoLigar(); else geoDesligar();  // GPS ligado só enquanto há presença a registrar
-  } catch (x) { msg($('#msg-aluno'), x.message, 'err'); }
+  } catch (x) { msg($('#msg-aluno'), x.message, 'err'); S.erroAulas = x.message; return false; }
+  if (S.erroAulas){   // o servidor voltou: tira o aviso de erro da atualização (só se ainda for ele que está na tela)
+    if ($('#msg-aluno').textContent === S.erroAulas) msg($('#msg-aluno'), '');
+    S.erroAulas = null;
+  }
+  return true;
 }
 
 /* Posição ao vivo + trava do botão: fora do raio da aula o botão fica cinza e desabilitado. O navegador só avisa;

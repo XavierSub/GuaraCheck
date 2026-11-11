@@ -1,0 +1,15 @@
+-- Uma transação de check-in como o app faz (app.py registrar_presenca): get da aula, dados do aluno, duplicata,
+-- último check-in, INSERT e COMMIT. Cada transação usa um aluno diferente (sequência 1..5000).
+-- :espera_ms = tempo que a consulta de VPN segura a conexão do banco (0 = depois da correção).
+\set aid random(1, 5000)
+SELECT nextval('seq_f9') AS n \gset
+\set aid :n
+BEGIN;
+SELECT * FROM aulas WHERE id = :aula;
+SELECT curso_id, periodo, status FROM alunos WHERE id = :aid;
+SELECT distancia_m FROM presencas WHERE aula_id = :aula AND aluno_id = :aid;
+SELECT latitude, longitude, registrado_em FROM presencas WHERE aluno_id = :aid ORDER BY id DESC LIMIT 1;
+\sleep :espera_ms ms
+INSERT INTO presencas (aula_id, aluno_id, latitude, longitude, distancia_m, precisao_m, device_id, fp_hash, ip, alertas, registrado_em)
+  VALUES (:aula, :aid, -18.4157, -49.2183, 12.5, 10, 'dev-bench-' || :aid || '-' || :aula, 'fp', '200.1.1.1', NULL, now());
+COMMIT;

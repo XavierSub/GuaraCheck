@@ -948,7 +948,7 @@ def test_ct488_a_ordem_das_etapas_no_codigo():
     fn = next(n for n in arvore.body if isinstance(n, _ast.FunctionDef) and n.name == "registrar_presenca")
     src = _ast.get_source_segment(APP.read_text(encoding="utf-8"), fn)
     ordem = ["aula_aberta(aula)", "al.status", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "avaliar_risco(b)", "haversine(b.latitude",
-             "VELOCIDADE_MAX_MS", "ip_e_vpn(ip)", "db.add(Presenca("]
+             "VELOCIDADE_MAX_MS", "ip_e_vpn(ip, db.commit)", "db.add(Presenca("]
     pos = [src.index(t) for t in ordem]
     assert pos == sorted(pos), dict(zip(ordem, pos))
     assert "so_aluno" in src

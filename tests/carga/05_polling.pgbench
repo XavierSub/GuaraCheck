@@ -1,0 +1,5 @@
+-- O que um aluno conectado faz a cada 10 s (GET /api/aulas/ativas): dados da conta + aulas ativas + "já registrei?".
+\set aid random(1, 5000)
+SELECT * FROM alunos WHERE id = :aid;
+SELECT a.*, p.nome, c.nome FROM aulas a JOIN professores p ON p.id = a.professor_id LEFT JOIN cursos c ON c.id = a.curso_id WHERE a.ativa ORDER BY a.id DESC LIMIT 500;
+SELECT aula_id FROM presencas WHERE aluno_id = :aid AND aula_id IN (1601, 1602);

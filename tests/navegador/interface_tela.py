@@ -374,6 +374,10 @@ with sync_playwright() as pw:
             break
         pg.wait_for_timeout(100)
     conf(estado.get("post_aula", {}).get("codigo_validacao") == "ab12cd", f"CT-931 | o código de validação digitado pelo professor vai para a API → {estado.get('post_aula', {}).get('codigo_validacao')!r}")
+    for _ in range(30):                       # o campo só é limpo depois que a resposta chega ao navegador
+        if campo.input_value() == "":
+            break
+        pg.wait_for_timeout(100)
     conf(campo.input_value() == "", "CT-932 | depois de abrir a chamada, o campo do código é limpo")
     conf(pg.input_value("#codigo") == "" if pg.locator("#codigo").count() else True, "CT-933 | o campo de código do cadastro (escondido) continua intocado")
     estado.pop("post_aula", None)

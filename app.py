@@ -557,10 +557,19 @@ def ip_em_rede_permitida(ip: str) -> bool:
 _cache_ip: dict = {}   # ip -> (expira em time.monotonic(), True/False/None)
 VPN_CACHE_S = 6 * 3600       # resposta válida do provedor
 VPN_FALHA_CACHE_S = 60       # sem resposta (fora do ar, cota esgotada, chave errada): não insiste a cada aluno
+# Disjuntor: o cache acima é por IP, e cada aluno em dados móveis tem um IP diferente. Com o provedor fora do ar, cada um
+# esperaria 2,5 s (uma thread presa por consulta). Depois de VPN_DISJUNTOR_FALHAS falhas seguidas, NENHUM IP é consultado por
+# VPN_DISJUNTOR_S segundos (todos passam como "não verificado", sem bloquear ninguém). Ao fim da pausa, uma falha basta para
+# voltar a pausar; uma resposta boa zera a contagem.
+VPN_DISJUNTOR_FALHAS = 5
+VPN_DISJUNTOR_S = 60
+_vpn_disjuntor = {"falhas": 0, "aberto_ate": 0.0}
 
 
-def ip_e_vpn(ip: str) -> Optional[bool]:
-    """True = VPN/proxy; False = limpo; None = não foi possível verificar (nunca bloqueia nesse caso)."""
+def ip_e_vpn(ip: str, liberar_conexao=None) -> Optional[bool]:
+    """True = VPN/proxy; False = limpo; None = não foi possível verificar (nunca bloqueia nesse caso).
+    `liberar_conexao` (ex.: db.commit) é chamada só quando vai haver consulta externa: ela pode levar até 2,5 s, e esse
+    tempo não pode prender uma das poucas conexões do banco (o professor e os outros alunos ficariam sem conexão)."""
     if not PROXYCHECK_KEY or not ip:
         return None
     try:
@@ -573,6 +582,10 @@ def ip_e_vpn(ip: str) -> Optional[bool]:
     hit = _cache_ip.get(ip)
     if hit and agora < hit[0]:
         return hit[1]
+    if agora < _vpn_disjuntor["aberto_ate"]:
+        return None        # provedor fora do ar: não consulta e não guarda no cache (a recuperação é imediata)
+    if liberar_conexao is not None:
+        liberar_conexao()
     resultado = None
     try:
         with urllib.request.urlopen(f"https://proxycheck.io/v2/{ip}?key={PROXYCHECK_KEY}&vpn=1", timeout=2.5) as r:
@@ -587,16 +600,39 @@ def ip_e_vpn(ip: str) -> Optional[bool]:
     # Lembrar também a FALHA: cada consulta sem resposta custa até 2,5 s e segura uma thread e uma conexão do banco; sem isto,
     # com o provedor fora do ar a turma inteira esperaria 2,5 s no check-in.
     _cache_ip[ip] = (agora + (VPN_CACHE_S if resultado is not None else VPN_FALHA_CACHE_S), resultado)
+    if resultado is None:
+        _vpn_disjuntor["falhas"] += 1
+        if _vpn_disjuntor["falhas"] >= VPN_DISJUNTOR_FALHAS:
+            _vpn_disjuntor.update(aberto_ate=time.monotonic() + VPN_DISJUNTOR_S, falhas=VPN_DISJUNTOR_FALHAS - 1)
+    else:
+        _vpn_disjuntor["falhas"] = 0
     return resultado
 
 
 _tentativas: dict = {}
+TENTATIVAS_MAX_CHAVES = 5000
+TENTATIVAS_RETENCAO_S = max(3600, CADASTRO_ALUNO_JANELA_S)   # a maior janela de qualquer freio
+
+
+def _podar_tentativas(agora: float):
+    """Segura o tamanho do dicionário de freios SEM zerar as contagens que ainda valem. Antes, ao passar de 5.000 chaves
+    ele era apagado inteiro: uma turma grande (uma chave por aluno nas anotações, PDFs e conferência) fazia isso sozinha, e quem
+    estava travado por tentar senhas em excesso voltava a ter todas as tentativas. Agora: 1) some só o que já venceu;
+    2) se ainda passar do teto, descarta até sobrar metade dele, começando pelas chaves com MENOS tentativas (e, em empate, as
+    de uso mais antigo): quem está travado, com muitas tentativas, é o último a sair."""
+    if len(_tentativas) <= TENTATIVAS_MAX_CHAVES:
+        return
+    for k in [k for k, v in _tentativas.items() if not v or agora - v[-1] >= TENTATIVAS_RETENCAO_S]:
+        del _tentativas[k]
+    if len(_tentativas) > TENTATIVAS_MAX_CHAVES:
+        antigas = sorted(_tentativas, key=lambda k: (len(_tentativas[k]), _tentativas[k][-1]))[: len(_tentativas) - TENTATIVAS_MAX_CHAVES // 2]
+        for k in antigas:
+            del _tentativas[k]
 
 
 def limitar_tentativas(chave: str, maximo: int = 5, janela: int = 600):
     agora = time.monotonic()
-    if len(_tentativas) > 5000:
-        _tentativas.clear()
+    _podar_tentativas(agora)
     recentes = [t for t in _tentativas.get(chave, []) if agora - t < janela]
     if len(recentes) >= maximo:
         raise HTTPException(429, "Muitas tentativas. Aguarde alguns minutos e tente de novo.")
@@ -625,9 +661,9 @@ def checar_falhas(chave: str, maximo: int, janela: int):
 
 
 def registrar_falha(chave: str):
-    if len(_tentativas) > 5000:
-        _tentativas.clear()
-    _tentativas.setdefault(chave, []).append(time.monotonic())
+    agora = time.monotonic()
+    _podar_tentativas(agora)
+    _tentativas.setdefault(chave, []).append(agora)
 
 
 def esquecer_falhas(chave: str):
@@ -2220,7 +2256,7 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
                                      "Se for um engano, procure o professor.")
 
     # 4) VPN / proxy (consulta externa, só para quem passou nas etapas anteriores; resultado em cache)
-    if VPN_MODO != "off" and ip_e_vpn(ip) is True:
+    if VPN_MODO != "off" and ip_e_vpn(ip, db.commit) is True:   # db.commit solta a conexão antes da consulta externa
         if VPN_MODO == "bloquear":
             registrar_tentativa(db, aula_id, u["id"], "vpn", "Conexão por VPN ou proxy", b, dist, ip)
             raise HTTPException(403, "Conexão via VPN ou proxy detectada. Desative a VPN e use o Wi-Fi da "
@@ -3275,13 +3311,17 @@ def adm_aulas(u: dict = Depends(so_admin), db: Session = Depends(get_db), pagina
     """Eventos abertos primeiro (um esquecido aberto nunca some do painel), depois os mais novos; 60 por página."""
     encerrar_vencidas(db)
     pagina = min(max(pagina, 1), 10_000)
-    rows = db.execute(select(Aula, Professor.nome, func.count(Presenca.id), Curso.nome)
+    # Primeiro escolhe as 60 aulas da página; só então conta as presenças DELAS. Contar antes (JOIN + GROUP BY em todas as aulas)
+    # lia o histórico inteiro a cada abertura da aba: 163 ms com 1.600 aulas e 125 mil presenças, e crescendo a cada semestre.
+    rows = db.execute(select(Aula, Professor.nome, Curso.nome)
                       .join(Professor, Professor.id == Aula.professor_id)
-                      .outerjoin(Presenca, Presenca.aula_id == Aula.id)
                       .outerjoin(Curso, Curso.id == Aula.curso_id)
-                      .group_by(Aula.id, Professor.nome, Curso.nome).order_by(Aula.ativa.desc(), Aula.id.desc())
+                      .order_by(Aula.ativa.desc(), Aula.id.desc())
                       .limit(60).offset((pagina - 1) * 60)).all()
-    return [{**aula_dict(a, n, cn), "professor": nome} for a, nome, n, cn in rows]
+    ids = [a.id for a, _, _ in rows]
+    totais = dict(db.execute(select(Presenca.aula_id, func.count(Presenca.id)).where(Presenca.aula_id.in_(ids))
+                             .group_by(Presenca.aula_id)).all()) if ids else {}
+    return [{**aula_dict(a, totais.get(a.id, 0), cn), "professor": nome} for a, nome, cn in rows]
 
 
 @app.post("/api/admin/aulas/{aula_id}/encerrar")
