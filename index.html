@@ -36,7 +36,6 @@ header{background:var(--card);border-bottom:3px solid var(--lima)}
 .ver{font-size:12px;font-weight:700;color:#4d5f56;border:1px solid #cfd8c2;border-radius:999px;padding:1px 9px;letter-spacing:.02em}
 /* canto direito: o lema da marca (some quando o usuário entra e aparece o nome dele com o botão Sair) */
 .lema{margin-left:auto;display:flex;align-items:center;gap:10px;padding:7px 16px 7px 12px;background:#0b2a6b;color:#fff;border-radius:999px;font-size:14px;font-weight:600;font-style:italic;letter-spacing:.005em;line-height:1.2}
-.lema img{height:34px;width:auto;display:block}
 #user:not([hidden])~.lema{display:none}
 #user{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:14px}
 main{max-width:var(--larg);margin:0 auto;padding:28px 20px 48px}
@@ -119,7 +118,7 @@ textarea{min-height:110px;resize:vertical}
 /* Faixa de boas-vindas das telas de aluno, professor e coordenação: a marca em branco sobre o azul, com trilhas de circuito saindo dela e faíscas correndo,
    o mesmo enfeite da tela de entrada. Para tirar, apague o <div class="faixa"> de cada tela. */
 .faixa{position:relative;overflow:hidden;display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:178px;margin:0 0 24px;padding:22px 28px;border-radius:22px;color:#fff;background:radial-gradient(380px 250px at 86% 50%,rgba(96,148,238,.40),transparent 70%),linear-gradient(100deg,#071d4d 0%,#0b2a6b 55%,#0f3a86 100%);box-shadow:0 18px 36px -22px rgba(11,42,107,.7)}
-.faixa-txt{position:relative;z-index:1;min-width:0;max-width:46ch}
+.faixa-txt{position:relative;z-index:1;min-width:0;max-width:min(46ch,calc(100% - 230px))}
 .faixa h1{margin:0 0 6px;color:#fff;font-size:clamp(26px,3.6vw,36px)}
 .faixa p{margin:0;font-size:15.5px;line-height:1.5;color:rgba(255,255,255,.86)}
 .faixa-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
@@ -127,25 +126,59 @@ textarea{min-height:110px;resize:vertical}
 .faixa-chips span{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);font-size:13px;font-weight:500;line-height:1.3}
 .faixa-chips .vivo::before{content:"";flex:none;width:8px;height:8px;border-radius:50%;background:#9aa8c8}
 .faixa-chips .vivo.on::before{background:var(--lima);box-shadow:0 0 0 0 rgba(167,199,88,.65)}
-.faixa-logo{position:relative;z-index:1;flex:none;width:auto;height:clamp(104px,14vw,148px);filter:drop-shadow(0 6px 18px rgba(0,0,0,.3))}
-.faixa-tec{position:absolute;top:0;right:0;height:100%;width:auto;aspect-ratio:640/200;pointer-events:none;-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 42%);mask-image:linear-gradient(90deg,transparent 0,#000 42%)}
+.faixa-art{position:absolute;top:0;right:0;height:100%;aspect-ratio:640/200;pointer-events:none}
+.faixa-tec{position:absolute;inset:0;width:100%;height:100%;-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 30%);mask-image:linear-gradient(90deg,transparent 0,#000 30%)}
+.faixa-art .lig-wrap{left:75.8%;top:9%;width:14.1%}
+.faixa-art .nm{position:absolute;left:72.7%;top:76%;width:20.3%;height:auto}
+/* A LOGO QUE LIGA: começa apagada (cinza e transparente) e, quando a primeira faísca chega, acende em cores e fica acesa. --ign é o instante da chegada,
+   --per o intervalo entre as chegadas (o brilho pulsa a cada uma). Quem pediu "reduzir movimento" já vê a logo acesa. */
+.lig-wrap{position:absolute;pointer-events:none}
+.lig-wrap::before{content:"";position:absolute;inset:-26%;border-radius:50%;background:radial-gradient(circle,rgba(167,199,88,.55),rgba(255,214,102,.2) 45%,transparent 68%);opacity:0}
+.lig{position:relative;z-index:1;display:block;width:100%;height:auto;filter:grayscale(1) opacity(.3) brightness(1) drop-shadow(0 0 0 rgba(167,199,88,0))}
+.nm{opacity:.45}
+.faixa{--ign:3.45s;--per:3.4s}
+@media(prefers-reduced-motion:no-preference){
+.ativo .lig{animation:ligar .9s ease-out var(--ign) forwards}
+.ativo .nm{animation:acender .9s ease-out var(--ign) forwards}
+.ativo .lig-wrap::before{animation:brilho var(--per) linear calc(var(--ign) + .15s) infinite}}
+@media(prefers-reduced-motion:reduce){.lig{filter:none}.nm{opacity:1}}
+@keyframes ligar{0%{filter:grayscale(1) opacity(.3) brightness(1) drop-shadow(0 0 0 rgba(167,199,88,0))}40%{filter:grayscale(0) opacity(1) brightness(1.3) drop-shadow(0 0 12px rgba(167,199,88,.95))}100%{filter:grayscale(0) opacity(1) brightness(1) drop-shadow(0 0 5px rgba(167,199,88,.35))}}
+@keyframes acender{from{opacity:.45}to{opacity:1}}
+@keyframes brilho{0%{opacity:.95}14%{opacity:0}86%{opacity:0}100%{opacity:.95}}
+.ct{fill:none;stroke:var(--pri);stroke-opacity:.5;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.ct.az{stroke:var(--azul);stroke-opacity:.45}
+.ct-pad{fill:var(--bg);stroke:var(--pri);stroke-width:1.6}.ct-pad.az{stroke:var(--azul)}.ct-pino{fill:var(--lima)}
+.nd{fill:var(--nb,#fff);stroke:var(--nl,#dfe5d3);stroke-width:1.2}
 .fb{fill:none;stroke:#fff;stroke-opacity:.26;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.fb.lm{stroke:var(--lima);stroke-opacity:.5}
 .fb-pad{fill:#0b2a6b;stroke:var(--lima);stroke-opacity:.75;stroke-width:1.6}
-.fb-sp,.fg-sp{display:none;fill:none;stroke-linecap:round;stroke-dasharray:10 90}
-.fb-sp{stroke:#d3ec8e;stroke-width:3}.fg-sp{stroke:var(--lima);stroke-width:3.6}
+.fb-sp,.fg-sp,.cx-sp{display:none;fill:none;stroke-linecap:round;stroke-dasharray:10 90}
+.fb-sp{stroke:#d3ec8e;stroke-width:3}.fg-sp{stroke:var(--lima);stroke-width:3.6}.cx-sp{stroke:var(--lima);stroke-width:3.4}
 /* Fios espalhados pelo fundo das telas logadas (só em telas largas, onde sobra espaço nas laterais). */
 .fundo-tec{display:none;position:fixed;inset:0;z-index:0;pointer-events:none}
-.fundo-tec svg{position:absolute;top:0;height:100%;width:calc((100vw - var(--larg))/2 + 14px)}
+.fundo-tec>svg{position:absolute;top:0;height:100%;width:calc((100vw - var(--larg))/2 + 14px)}
+.fl-dir{position:absolute;right:0;top:50%;transform:translateY(-50%);width:calc((100vw - var(--larg))/2 + 14px);aspect-ratio:140/200;--ign:3.65s;--per:3.4s}
+.fl-dir>svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.fl-dir .lig-wrap{left:10%;top:25%;width:50%}
 .fundo-tec .ft-e{left:0}.fundo-tec .ft-d{right:0}
 .fg{fill:none;stroke:var(--pri);stroke-opacity:.3;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.fg.az{stroke:var(--azul);stroke-opacity:.28}
 .fg-pad{fill:var(--bg);stroke:var(--pri);stroke-opacity:.55;stroke-width:1.6}.fg-pad.az{stroke:var(--azul)}
 @media(prefers-reduced-motion:no-preference){
-.fb-sp,.fg-sp{display:inline;animation:faisca var(--t,5s) linear infinite;animation-delay:var(--d,0s)}
+.fb-sp,.fg-sp,.cx-sp{display:inline;animation-name:var(--an,none);animation-duration:var(--t,5s);animation-timing-function:linear;animation-iteration-count:infinite;animation-delay:var(--d,0s);animation-fill-mode:backwards}
+.fundo-tec,.ativo{--an:faisca}
+/* entrada no celular: faixa de circuito embaixo do cartão (no PC o circuito fica no cabeçalho e nas laterais) */
+.cx{position:relative;width:100%;aspect-ratio:4/1;max-width:420px;margin:12px auto 0;pointer-events:none}
+.cx>svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.cx-m{--ign:3.45s;--per:3.2s}.cx-m .lig-wrap{left:77.2%;top:15.6%;width:12.2%}
+@media(min-width:861px){.cx-m{display:none}}
+.fio-topo{flex:1 1 0;min-width:0;align-self:center;pointer-events:none;--ign:3.3s;--per:3s}
+.fio-topo svg{display:block;width:100%;height:44px;overflow:visible}
+.lema{--ign:3.3s;--per:3s}.lema .lig-wrap{position:relative;flex:none;display:block;width:24px;height:34px}
+.fio-topo,.lema{--an:faisca}
+#user:not([hidden])~.fio-topo{display:none}
 .faixa-chips .vivo.on::before{animation:pulso 2.2s ease-out infinite}}
 @keyframes pulso{0%{box-shadow:0 0 0 0 rgba(167,199,88,.65)}70%,100%{box-shadow:0 0 0 8px rgba(167,199,88,0)}}
-@media(min-width:1440px){body[data-tela="aluno"] .fundo-tec,body[data-tela="prof"] .fundo-tec,body[data-tela="admin"] .fundo-tec{display:block}}
+@media(min-width:1440px){body[data-tela="auth"] .fundo-tec,body[data-tela="aluno"] .fundo-tec,body[data-tela="prof"] .fundo-tec,body[data-tela="admin"] .fundo-tec{display:block}}
 main{position:relative;z-index:1}header{position:relative;z-index:2}
-#v-aluno>h2{position:relative;padding-bottom:10px;margin-bottom:8px}
+#v-aluno>h2{position:relative;overflow:hidden;padding-bottom:10px;margin-bottom:8px}
 #v-aluno>h2::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--line),transparent 85%)}
 @media(prefers-reduced-motion:no-preference){#v-aluno>h2::before{content:"";position:absolute;z-index:1;bottom:0;left:-70px;width:70px;height:2px;border-radius:2px;background:linear-gradient(90deg,transparent,var(--lima));animation:corre 7s linear infinite}
 #v-aluno>h2:nth-of-type(2)::before{animation-delay:2.3s}#v-aluno>h2:nth-of-type(3)::before{animation-delay:4.6s}}
@@ -156,9 +189,9 @@ main{position:relative;z-index:1}header{position:relative;z-index:2}
 .marcas{gap:calc(14px*var(--k));padding:calc(4px*var(--k)) 0}
 .marcas img{height:calc(46px*var(--k))}.marcas img.curso{height:calc(62px*var(--k))}.marcas i{height:calc(32px*var(--k))}
 .produto{gap:calc(10px*var(--k));padding:calc(4px*var(--k)) 0}.produto .p-icone{height:calc(46px*var(--k))}.produto .p-nome{height:calc(26px*var(--k))}.ver{font-size:calc(12px*var(--k))}
-.lema{font-size:calc(14px*var(--k));gap:calc(10px*var(--k));padding:calc(7px*var(--k)) calc(16px*var(--k)) calc(7px*var(--k)) calc(12px*var(--k))}.lema img{height:calc(34px*var(--k))}
+.lema{font-size:calc(14px*var(--k));gap:calc(10px*var(--k));padding:calc(7px*var(--k)) calc(16px*var(--k)) calc(7px*var(--k)) calc(12px*var(--k))}.lema .lig-wrap{width:calc(24px*var(--k));height:calc(34px*var(--k))}.fio-topo svg{height:calc(44px*var(--k))}
 #user{font-size:calc(14px*var(--k))}
-.faixa{min-height:calc(178px*var(--k));padding:calc(22px*var(--k)) calc(28px*var(--k));border-radius:calc(22px*var(--k));margin-bottom:calc(24px*var(--k))}.faixa h1{font-size:calc(34px*var(--k))}.faixa p{font-size:calc(15.5px*var(--k))}.faixa-chips span{font-size:calc(13px*var(--k))}.faixa-logo{height:calc(148px*var(--k))}
+.faixa{min-height:calc(178px*var(--k));padding:calc(22px*var(--k)) calc(28px*var(--k));border-radius:calc(22px*var(--k));margin-bottom:calc(24px*var(--k))}.faixa h1{font-size:calc(34px*var(--k))}.faixa p{font-size:calc(15.5px*var(--k))}.faixa-chips span{font-size:calc(13px*var(--k))}
 .entrada{gap:calc(56px*var(--k))}
 .entrada h1{font-size:calc(40px*var(--k))}
 .hero p{font-size:calc(17px*var(--k));margin-bottom:calc(22px*var(--k))}
@@ -195,23 +228,94 @@ main{position:relative;z-index:1}header{position:relative;z-index:2}
 .previa .stats{margin:12px 0 4px}.previa .grid2 label{margin-top:8px}.previa td select{min-width:150px}.previa .ck{display:flex;gap:8px;align-items:flex-start;font-weight:400;font-size:14px;margin:14px 0 0}.previa .ck input{width:auto;flex:none;margin-top:4px}
 .previa .bad{color:var(--err);font-size:13.5px;margin:6px 0 0}.previa .acoes{margin-top:16px}
 details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
-@media(max-width:860px){.entrada{grid-template-columns:1fr;gap:20px}.geo{display:none}.hero p{margin-bottom:6px}}
-@media(max-width:560px){.row input,.row select{min-width:100%}.atabs button{padding:7px 13px}.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}main{padding:20px 16px 40px}.topo{padding:10px 16px}.marcas{gap:10px;padding:4px 0}.marcas img{height:34px}.marcas img.curso{height:46px}.produto{gap:8px;padding:4px 0}.produto .p-icone{height:36px}.produto .p-nome{height:20px}.lema{display:none}.card{padding:18px}.faixa{min-height:150px;padding:18px 16px;gap:8px;border-radius:18px;margin-bottom:18px}.faixa h1{font-size:24px}.faixa p{font-size:14px}.faixa-chips{margin-top:10px}.faixa-chips span{font-size:12px;padding:4px 10px}.faixa-logo{height:92px}.faixa-tec{opacity:.7;-webkit-mask-image:linear-gradient(90deg,transparent 22%,#000 70%);mask-image:linear-gradient(90deg,transparent 22%,#000 70%)}}
+@media(max-width:860px){.entrada{grid-template-columns:1fr;gap:20px}.geo{display:none}.hero p{margin-bottom:6px}.fio-topo{display:none}}
+@media(max-width:560px){.row input,.row select{min-width:100%}.atabs button{padding:7px 13px}.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}main{padding:20px 16px 40px}.topo{padding:10px 16px}.marcas{gap:10px;padding:4px 0}.marcas img{height:34px}.marcas img.curso{height:46px}.produto{gap:8px;padding:4px 0}.produto .p-icone{height:36px}.produto .p-nome{height:20px}.lema{display:none}.card{padding:18px}.faixa{min-height:150px;padding:18px 16px;gap:8px;border-radius:18px;margin-bottom:18px}.faixa h1{font-size:24px}.faixa p{font-size:14px}.faixa-chips{margin-top:10px}.faixa-chips span{font-size:12px;padding:4px 10px}.faixa-art{top:50%;height:150px;transform:translateY(-50%)}.faixa-tec{-webkit-mask-image:linear-gradient(90deg,transparent 46%,#000 72%);mask-image:linear-gradient(90deg,transparent 46%,#000 72%)}.faixa-txt{max-width:58%}}
 </style>
 </head>
-<body>
-<!-- Desenhos reutilizados pela faixa de boas-vindas e pelos fios do fundo (trilhas e faíscas). pathLength=100 deixa todas as faíscas com o mesmo ritmo. -->
+<body data-tela="auth">
+<!-- Desenhos reutilizados pelas telas: ícones do cerrado, trilhas de circuito e faíscas. pathLength=100 deixa todas as faíscas com o mesmo ritmo.
+     A logo "liga" quando a primeira faísca chega: ver .lig e --ign no CSS. -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
-  <path id="fb1" pathLength="100" d="M560 100H500L486 86H380L366 72H250L236 58H120"/>
-  <path id="fb2" pathLength="100" d="M560 128H520L506 142H420L406 156H300L286 170H190"/>
-  <path id="fb3" pathLength="100" d="M560 74H530L516 60H450L436 46H330L316 32H210"/>
-  <path id="fb4" pathLength="100" d="M560 154H540L526 168H470L456 182H360"/>
-  <path id="fb5" pathLength="100" d="M560 46H545L531 32H470L456 18H400"/>
+  <symbol id="ic-arvore" viewBox="0 0 24 24">
+  <path d="M12 22.2V15.6M12 17.4C10.6 16.6 9.6 15.4 9.1 13.8M12 15.9C13.1 15 14.1 13.9 14.8 12.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M3.4 11.4C2.6 8.9 4.7 6.7 7.3 7.1 8.2 4.7 11.3 3.7 13.5 5.1 15.5 4 18.5 4.9 19.1 7.4 21.5 8 21.9 10.8 20 11.8 18.5 12.7 16.5 12 15 11.6 13.4 12.4 10.9 12.4 9.4 11.6 7.5 12.4 4.7 12.6 3.4 11.4Z" fill="var(--f,rgba(47,125,64,.18))" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+</symbol>
+<symbol id="ic-ipe" viewBox="0 0 24 24">
+  <g transform="translate(12 12)" fill="#f6c231" stroke="#c98a0b" stroke-width="1.2" stroke-linejoin="round">
+    <path d="M0 -1.6C-3.2 -3.4 -3.6 -7.6 0 -9.6 3.6 -7.6 3.2 -3.4 0 -1.6Z"/>
+    <path d="M0 -1.6C-3.2 -3.4 -3.6 -7.6 0 -9.6 3.6 -7.6 3.2 -3.4 0 -1.6Z" transform="rotate(72)"/>
+    <path d="M0 -1.6C-3.2 -3.4 -3.6 -7.6 0 -9.6 3.6 -7.6 3.2 -3.4 0 -1.6Z" transform="rotate(144)"/>
+    <path d="M0 -1.6C-3.2 -3.4 -3.6 -7.6 0 -9.6 3.6 -7.6 3.2 -3.4 0 -1.6Z" transform="rotate(216)"/>
+    <path d="M0 -1.6C-3.2 -3.4 -3.6 -7.6 0 -9.6 3.6 -7.6 3.2 -3.4 0 -1.6Z" transform="rotate(288)"/>
+    <circle r="1.7" fill="#e07a10" stroke="none"/>
+  </g>
+</symbol>
+<symbol id="ic-capim" viewBox="0 0 24 24">
+  <g fill="none" stroke="#d9a014" stroke-width="1.5" stroke-linecap="round">
+    <path d="M12 22V9.5"/><path d="M12 22C10.4 17.5 8.2 14 6.2 9.4"/><path d="M12 22C13.6 17.5 15.8 14 17.8 9.4"/><path d="M12 22C8.6 19.4 5.2 16.6 3.4 12.4"/><path d="M12 22C15.4 19.4 18.8 16.6 20.6 12.4"/>
+  </g>
+  <g fill="#f3c63b" stroke="#c98a0b" stroke-width="1"><circle cx="12" cy="8.4" r="1.7"/><circle cx="6.2" cy="8.4" r="1.5"/><circle cx="17.8" cy="8.4" r="1.5"/><circle cx="3.2" cy="11.4" r="1.4"/><circle cx="20.8" cy="11.4" r="1.4"/></g>
+</symbol>
+<symbol id="ic-buriti" viewBox="0 0 24 24">
+  <path d="M12 22.2V12.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 12C8.6 11.8 5.4 9.8 3.6 6.4"/><path d="M12 12C9.6 9.8 8.8 6.8 9.4 3.4"/><path d="M12 12V2.8"/><path d="M12 12C14.4 9.8 15.2 6.8 14.6 3.4"/><path d="M12 12C15.4 11.8 18.6 9.8 20.4 6.4"/>
+    <path d="M12 12C8.8 13 5.8 12.8 3.4 11.2"/><path d="M12 12C15.2 13 18.2 12.8 20.6 11.2"/>
+  </g>
+</symbol>
+<symbol id="ic-pequi" viewBox="0 0 24 24">
+  <path d="M12 7.6C12 5.6 13 4.2 15 3.6 15.2 5.6 14 7.2 12 7.6Z" fill="var(--f,rgba(47,125,64,.3))" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+  <circle cx="12" cy="14" r="6.6" fill="#cfdc4a" stroke="#7a9420" stroke-width="1.5"/>
+  <path d="M8.3 12.6C8.8 11 10.1 10 11.7 9.9" fill="none" stroke="#f6fad0" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M10 8.9L12 7.9L14 8.9" fill="none" stroke="#7a9420" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+</symbol>
+
+  <symbol id="no-arvore" viewBox="0 0 32 32"><rect class="nd" x=".6" y=".6" width="30.8" height="30.8" rx="9"/><use href="#ic-arvore" x="4.5" y="4.5" width="23" height="23"/></symbol>
+  <symbol id="no-ipe" viewBox="0 0 32 32"><rect class="nd" x=".6" y=".6" width="30.8" height="30.8" rx="9"/><use href="#ic-ipe" x="4.5" y="4.5" width="23" height="23"/></symbol>
+  <symbol id="no-capim" viewBox="0 0 32 32"><rect class="nd" x=".6" y=".6" width="30.8" height="30.8" rx="9"/><use href="#ic-capim" x="4.5" y="4.5" width="23" height="23"/></symbol>
+  <symbol id="no-buriti" viewBox="0 0 32 32"><rect class="nd" x=".6" y=".6" width="30.8" height="30.8" rx="9"/><use href="#ic-buriti" x="4.5" y="4.5" width="23" height="23"/></symbol>
+  <symbol id="no-pequi" viewBox="0 0 32 32"><rect class="nd" x=".6" y=".6" width="30.8" height="30.8" rx="9"/><use href="#ic-pequi" x="4.5" y="4.5" width="23" height="23"/></symbol>
+  <!-- faixa das telas logadas: as trilhas saem dos ícones do cerrado e chegam na logo -->
+  <path id="fb1" pathLength="100" d="M277 34H350L364 48H430L444 62H484"/>
+  <path id="fb2" pathLength="100" d="M333 100H392L406 86H452L466 100H484"/>
+  <path id="fb3" pathLength="100" d="M255 150H338L352 136H418L432 122H484"/>
+  <path id="fb4" pathLength="100" d="M367 184H420L434 170H458"/>
+  <path id="fb5" pathLength="100" d="M315 16H382L396 30H440L454 44H484"/>
   <g id="circ-faixa">
     <use class="fb lm" href="#fb1"/><use class="fb" href="#fb2"/><use class="fb" href="#fb3"/><use class="fb lm" href="#fb4"/><use class="fb" href="#fb5"/>
-    <circle class="fb-pad" cx="120" cy="58" r="3.8"/><circle class="fb-pad" cx="190" cy="170" r="3.8"/><circle class="fb-pad" cx="210" cy="32" r="3.8"/><circle class="fb-pad" cx="360" cy="182" r="3.8"/><circle class="fb-pad" cx="400" cy="18" r="3.8"/>
-    <use class="fb-sp" href="#fb1" style="--d:0s;--t:4s"/><use class="fb-sp" href="#fb3" style="--d:.9s;--t:4.4s"/><use class="fb-sp" href="#fb2" style="--d:1.8s;--t:4.8s"/><use class="fb-sp" href="#fb5" style="--d:2.6s;--t:4.2s"/><use class="fb-sp" href="#fb4" style="--d:3.3s;--t:4.6s"/>
+    <circle class="fb-pad" cx="484" cy="62" r="3.4"/><circle class="fb-pad" cx="484" cy="100" r="3.4"/><circle class="fb-pad" cx="484" cy="122" r="3.4"/><circle class="fb-pad" cx="484" cy="44" r="3.4"/><circle class="fb-pad" cx="458" cy="170" r="3.4"/>
+    <use href="#no-arvore" x="248" y="20" width="28" height="28" style="color:#cfe88a;--nb:rgba(255,255,255,.1);--nl:rgba(167,199,88,.6)"/><use href="#no-ipe" x="304" y="86" width="28" height="28" style="color:#cfe88a;--nb:rgba(255,255,255,.1);--nl:rgba(167,199,88,.6)"/><use href="#no-capim" x="226" y="136" width="28" height="28" style="color:#cfe88a;--nb:rgba(255,255,255,.1);--nl:rgba(167,199,88,.6)"/><use href="#no-buriti" x="338" y="170" width="28" height="28" style="color:#cfe88a;--nb:rgba(255,255,255,.1);--nl:rgba(167,199,88,.6)"/><use href="#no-pequi" x="286" y="2" width="28" height="28" style="color:#cfe88a;--nb:rgba(255,255,255,.1);--nl:rgba(167,199,88,.6)"/>
+    <use class="fb-sp" href="#fb1" style="--d:.2s;--t:3.4s"/><use class="fb-sp" href="#fb2" style="--d:.9s;--t:4s"/><use class="fb-sp" href="#fb5" style="--d:1.5s;--t:3.8s"/><use class="fb-sp" href="#fb3" style="--d:2.1s;--t:4.4s"/><use class="fb-sp" href="#fb4" style="--d:2.8s;--t:4s"/>
   </g>
+  <!-- entrada no celular: faixa embaixo do cartão, dos ícones do cerrado até a logo -->
+  <path id="m1" pathLength="100" d="M38 22H118L130 34H196L208 45H276"/>
+  <path id="m2" pathLength="100" d="M38 68H100L112 56H176L190 45H214"/>
+  <g id="circ-m">
+    <use class="ct" href="#m1"/><use class="ct az" href="#m2"/>
+    <circle class="ct-pad" cx="276" cy="45" r="3.2"/><circle class="ct-pad az" cx="208" cy="45" r="3.2"/>
+    <use href="#no-arvore" x="9" y="9" width="26" height="26"/><use href="#no-capim" x="9" y="55" width="26" height="26"/>
+    <use class="cx-sp" href="#m1" style="--d:.3s;--t:3.2s"/><use class="cx-sp" href="#m2" style="--d:1.4s;--t:3.6s"/>
+  </g>
+  <!-- cabeçalho da tela de entrada: duas trilhas dos ícones do cerrado até a etiqueta azul, onde a logo acende -->
+  <path id="h1" pathLength="100" d="M27 11H80L91 22H150L161 33H198L209 22H240"/>
+  <path id="h2" pathLength="100" d="M27 33H62L73 22H91"/>
+  <g id="circ-topo">
+    <use class="ct" href="#h1"/><use class="ct az" href="#h2"/>
+    <circle class="ct-pad" cx="91" cy="22" r="3"/>
+    <use href="#no-arvore" x="2" y="0" width="22" height="22"/><use href="#no-ipe" x="2" y="22" width="22" height="22"/>
+    <use class="cx-sp" href="#h2" style="--d:1.2s;--t:3s"/><use class="cx-sp" href="#h1" style="--d:.3s;--t:3s"/>
+  </g>
+  <!-- lateral direita das telas largas: três trilhas dos ícones do cerrado até a logo -->
+  <path id="gd1" pathLength="100" d="M105 44H94L84 54V62"/>
+  <path id="gd2" pathLength="100" d="M105 104H90"/>
+  <path id="gd3" pathLength="100" d="M105 164H90L78 152H64"/>
+  <g id="circ-gd">
+    <use class="ct" href="#gd1"/><use class="ct az" href="#gd2"/><use class="ct" href="#gd3"/>
+    <circle class="ct-pad" cx="84" cy="62" r="3.2"/><circle class="ct-pad az" cx="90" cy="104" r="3.2"/><circle class="ct-pad" cx="64" cy="152" r="3.2"/>
+    <use href="#no-ipe" x="106" y="32" width="24" height="24"/><use href="#no-pequi" x="106" y="92" width="24" height="24"/><use href="#no-arvore" x="106" y="152" width="24" height="24"/>
+    <use class="cx-sp" href="#gd2" style="--d:.4s;--t:3.4s"/><use class="cx-sp" href="#gd1" style="--d:1.3s;--t:4s"/><use class="cx-sp" href="#gd3" style="--d:2.2s;--t:3.8s"/>
+  </g>
+  <!-- fios do fundo, nas laterais das telas largas -->
   <path id="g1" pathLength="100" d="M0 70H28L42 84H76L90 98V170"/>
   <path id="g2" pathLength="100" d="M0 210H20L34 224H64L78 210H110"/>
   <path id="g3" pathLength="100" d="M0 330H34L48 344H88L102 358V430"/>
@@ -220,18 +324,21 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
   <path id="g6" pathLength="100" d="M0 720H30L44 706H80"/>
   <g id="fios-e">
     <use class="fg" href="#g1"/><use class="fg az" href="#g2"/><use class="fg" href="#g3"/><use class="fg az" href="#g4"/><use class="fg" href="#g5"/><use class="fg az" href="#g6"/>
-    <circle class="fg-pad" cx="90" cy="170" r="3.6"/><circle class="fg-pad az" cx="110" cy="210" r="3.6"/><circle class="fg-pad" cx="102" cy="430" r="3.6"/><circle class="fg-pad az" cx="104" cy="480" r="3.6"/><circle class="fg-pad" cx="106" cy="672" r="3.6"/><circle class="fg-pad az" cx="80" cy="706" r="3.6"/>
+    <circle class="fg-pad az" cx="110" cy="210" r="3.6"/><circle class="fg-pad az" cx="104" cy="480" r="3.6"/>
+    <use href="#no-arvore" x="77" y="157" width="26" height="26"/><use href="#no-ipe" x="89" y="417" width="26" height="26"/><use href="#no-capim" x="93" y="659" width="26" height="26"/><use href="#no-pequi" x="67" y="693" width="26" height="26"/>
     <use class="fg-sp" href="#g1" style="--d:0s;--t:6s"/><use class="fg-sp" href="#g3" style="--d:1.7s;--t:6.4s"/><use class="fg-sp" href="#g5" style="--d:3.1s;--t:5.8s"/><use class="fg-sp" href="#g2" style="--d:4.4s;--t:6.2s"/><use class="fg-sp" href="#g6" style="--d:2.3s;--t:6s"/>
   </g>
   <g id="fios-d">
-    <use class="fg az" href="#g1"/><use class="fg" href="#g2"/><use class="fg az" href="#g3"/><use class="fg" href="#g4"/><use class="fg az" href="#g5"/><use class="fg" href="#g6"/>
-    <circle class="fg-pad az" cx="90" cy="170" r="3.6"/><circle class="fg-pad" cx="110" cy="210" r="3.6"/><circle class="fg-pad az" cx="102" cy="430" r="3.6"/><circle class="fg-pad" cx="104" cy="480" r="3.6"/><circle class="fg-pad az" cx="106" cy="672" r="3.6"/><circle class="fg-pad" cx="80" cy="706" r="3.6"/>
-    <use class="fg-sp" href="#g2" style="--d:.8s;--t:6.2s"/><use class="fg-sp" href="#g4" style="--d:2.4s;--t:5.9s"/><use class="fg-sp" href="#g6" style="--d:3.9s;--t:6.3s"/><use class="fg-sp" href="#g1" style="--d:5s;--t:6s"/><use class="fg-sp" href="#g5" style="--d:1.2s;--t:6.4s"/>
+    <use class="fg az" href="#g1"/><use class="fg" href="#g2"/><use class="fg az" href="#g5"/><use class="fg" href="#g6"/>
+    <circle class="fg-pad" cx="110" cy="210" r="3.6"/>
+    <use href="#no-buriti" x="77" y="157" width="26" height="26"/><use href="#no-arvore" x="93" y="659" width="26" height="26"/><use href="#no-ipe" x="67" y="693" width="26" height="26"/>
+    <use class="fg-sp" href="#g2" style="--d:.8s;--t:6.2s"/><use class="fg-sp" href="#g6" style="--d:3.9s;--t:6.3s"/><use class="fg-sp" href="#g1" style="--d:5s;--t:6s"/><use class="fg-sp" href="#g5" style="--d:1.2s;--t:6.4s"/>
   </g>
 </defs></svg>
 <div class="fundo-tec" aria-hidden="true">
   <svg class="ft-e" viewBox="0 0 140 760" preserveAspectRatio="xMinYMid meet"><use href="#fios-e"/></svg>
   <svg class="ft-d" viewBox="0 0 140 760" preserveAspectRatio="xMaxYMid meet"><g transform="translate(140 0) scale(-1 1)"><use href="#fios-d"/></g></svg>
+  <div class="fl-dir ativo"><svg viewBox="0 0 140 200"><use href="#circ-gd"/></svg><div class="lig-wrap"><img class="lig" src="assets/guara-pino.png" alt=""></div></div>
 </div>
 <header>
   <div class="topo">
@@ -249,7 +356,8 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
       <span class="ver" id="versao">V1</span>
     </div>
     <div id="user" hidden><span id="user-nome"></span><button class="btn alt" id="btn-sair">Sair</button></div>
-    <div class="lema"><img src="assets/guara-marca-branca.png" alt=""><span>Sua presença, no lugar certo.</span></div>
+    <div class="fio-topo ativo" aria-hidden="true"><svg viewBox="0 0 240 44" preserveAspectRatio="xMaxYMid meet"><use href="#circ-topo"/></svg></div>
+    <div class="lema ativo"><span class="lig-wrap"><img class="lig" src="assets/guara-pino.png" alt=""></span><span>Sua presença, no lugar certo.</span></div>
   </div>
 </header>
 
@@ -260,7 +368,7 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
   <div class="hero">
     <h1>Registre sua presença no evento, pelo celular</h1>
     <p>O Guará Check confirma pelo GPS que você está no local. Entre com seu e-mail institucional para começar.</p>
-    <svg class="geo" viewBox="-70 -50 500 400" role="img" aria-label="Mapa: quem está dentro da área do evento pode registrar a presença; quem está fora da área não pode">
+    <svg class="geo" viewBox="-70 -50 510 400" role="img" aria-label="Mapa: quem está dentro da área do evento pode registrar a presença; quem está fora da área não pode">
       <defs>
         <pattern id="malha" width="30" height="30" patternUnits="userSpaceOnUse"><path class="malha" d="M30 0H0V30"/></pattern>
         <!-- trilhas do circuito (pathLength=100 deixa todas com o mesmo ritmo de faísca) -->
@@ -283,8 +391,8 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
           <rect class="pino" x="56.5" y="287" width="7" height="11" rx="2"/><rect class="pino" x="106.5" y="287" width="7" height="11" rx="2"/><rect class="pino" x="156.5" y="287" width="7" height="11" rx="2"/><rect class="pino" x="206.5" y="287" width="7" height="11" rx="2"/><rect class="pino" x="256.5" y="287" width="7" height="11" rx="2"/><rect class="pino" x="306.5" y="287" width="7" height="11" rx="2"/>
         </g>
         <use class="tr az" href="#t1"/><use class="tr" href="#t2"/><use class="tr az" href="#t3"/><use class="tr" href="#t4"/><use class="tr az" href="#t5"/><use class="tr" href="#t6"/><use class="tr az" href="#t7"/><use class="tr" href="#t8"/><use class="tr az" href="#t9"/><use class="tr" href="#t10"/>
-        <use class="faisca" href="#t1" style="--d:0s"/><use class="faisca" href="#t4" style="--d:1.1s"/><use class="faisca" href="#t7" style="--d:2.2s"/><use class="faisca" href="#t9" style="--d:3.3s"/><use class="faisca" href="#t10" style="--d:4.2s"/><use class="faisca" href="#t8" style="--d:.6s"/>
-        <circle class="pad az" cx="-48" cy="200" r="3.6"/><circle class="pad" cx="190" cy="-34" r="3.6"/><circle class="pad az" cx="286" cy="-24" r="3.6"/><circle class="pad az" cx="402" cy="130" r="3.6"/><circle class="pad" cx="420" cy="232" r="3.6"/>
+        <use class="faisca" href="#t1" style="--d:0s"/><use class="faisca" href="#t4" style="--d:1.1s"/><use class="faisca" href="#t7" style="--d:2.2s"/><use class="faisca" href="#t9" style="--d:3.3s"/><use class="faisca" href="#t10" style="--d:4.2s"/><use class="faisca" href="#t8" style="--d:.6s"/><use class="faisca" href="#t2" style="--d:1.6s"/><use class="faisca" href="#t5" style="--d:2.8s"/><use class="faisca" href="#t3" style="--d:3.8s"/>
+        <use href="#no-arvore" x="-62" y="186" width="28" height="28"/><use href="#no-ipe" x="176" y="-48" width="28" height="28"/><use href="#no-capim" x="272" y="-38" width="28" height="28"/><use href="#no-buriti" x="388" y="116" width="28" height="28"/><use href="#no-pequi" x="406" y="218" width="28" height="28"/>
       </g>
       <rect class="fundo" x=".5" y=".5" width="359" height="289" rx="22"/><rect width="360" height="290" rx="22" fill="url(#malha)"/>
       <circle class="area" cx="150" cy="138" r="84"/>
@@ -330,14 +438,18 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
     <p id="p-esqueci" style="text-align:center;margin:14px 0 0"><button class="link" id="btn-esqueci" type="button">Esqueci minha senha</button></p>
     <p style="text-align:center;margin:10px 0 0"><button class="link" id="toggle" type="button"></button></p>
   </div>
+  <div class="cx cx-m" aria-hidden="true"><svg viewBox="0 0 360 90"><use href="#circ-m"/></svg><div class="lig-wrap"><img class="lig" src="assets/guara-pino.png" alt=""></div></div>
 </section>
 
 <!-- ============ ALUNO ============ -->
 <section id="v-aluno" hidden>
   <div class="faixa" id="faixa-aluno">
-    <svg class="faixa-tec" viewBox="0 0 640 200" preserveAspectRatio="xMaxYMid meet" aria-hidden="true"><use href="#circ-faixa"/></svg>
     <div class="faixa-txt"><h1>Olá, <span class="faixa-nome"></span></h1><p>Chegou ao local do evento? Registre sua presença logo abaixo.</p><div class="faixa-chips" id="chips-aluno"><span class="vivo" id="chip-vivo">Procurando chamadas…</span></div></div>
-    <img class="faixa-logo" src="assets/guara-logo-branca.png" alt="Guará Check. Sua presença, no lugar certo.">
+    <div class="faixa-art">
+      <svg class="faixa-tec" viewBox="0 0 640 200" aria-hidden="true"><use href="#circ-faixa"/></svg>
+      <div class="lig-wrap"><img class="lig" src="assets/guara-pino.png" alt=""></div>
+      <img class="nm" src="assets/guara-nome-branco.png" alt="Guará Check">
+    </div>
   </div>
   <h2>Aulas com chamada aberta</h2>
   <p class="mut" id="aluno-info">O navegador vai pedir permissão para usar sua localização. O botão Registrar Presença só libera quando você está dentro da área da aula. Use o seu próprio celular.</p>
@@ -365,9 +477,12 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
 <!-- ============ PROFESSOR ============ -->
 <section id="v-prof" hidden>
   <div class="faixa" id="faixa-prof">
-    <svg class="faixa-tec" viewBox="0 0 640 200" preserveAspectRatio="xMaxYMid meet" aria-hidden="true"><use href="#circ-faixa"/></svg>
     <div class="faixa-txt"><h1>Olá, <span class="faixa-nome"></span></h1><p>Marque o local e o raio, abra a chamada e acompanhe quem chega.</p><div class="faixa-chips" id="chips-prof"></div></div>
-    <img class="faixa-logo" src="assets/guara-logo-branca.png" alt="Guará Check. Sua presença, no lugar certo.">
+    <div class="faixa-art">
+      <svg class="faixa-tec" viewBox="0 0 640 200" aria-hidden="true"><use href="#circ-faixa"/></svg>
+      <div class="lig-wrap"><img class="lig" src="assets/guara-pino.png" alt=""></div>
+      <img class="nm" src="assets/guara-nome-branco.png" alt="Guará Check">
+    </div>
   </div>
   <div class="card">
     <h2>Cadastrar evento e abrir chamada</h2>
@@ -453,9 +568,12 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
 <!-- ============ PAINEL DA COORDENAÇÃO (o login fica na aba Coordenação da tela inicial) ============ -->
 <section id="v-admin" hidden>
   <div class="faixa" id="faixa-admin">
-    <svg class="faixa-tec" viewBox="0 0 640 200" preserveAspectRatio="xMaxYMid meet" aria-hidden="true"><use href="#circ-faixa"/></svg>
     <div class="faixa-txt"><h1>Olá, <span class="faixa-nome"></span></h1><p>Painel da coordenação: cursos, professores, alunos, matrículas e alertas num só lugar.</p><div class="faixa-chips" id="chips-admin"></div></div>
-    <img class="faixa-logo" src="assets/guara-logo-branca.png" alt="Guará Check. Sua presença, no lugar certo.">
+    <div class="faixa-art">
+      <svg class="faixa-tec" viewBox="0 0 640 200" aria-hidden="true"><use href="#circ-faixa"/></svg>
+      <div class="lig-wrap"><img class="lig" src="assets/guara-pino.png" alt=""></div>
+      <img class="nm" src="assets/guara-nome-branco.png" alt="Guará Check">
+    </div>
   </div>
 
   <div class="atabs" id="adm-tabs">
@@ -1395,6 +1513,14 @@ $('#adm-corpo').onchange = async e => {
   if (window.GC_ADMIN) S.perfil = 'admin'; // endereço /coordenacao abre direto na aba Coordenação
   if (S.token && S.user){ S.perfil = S.user.perfil; iniciar(); }
   else { S.token = S.user = null; renderAuth(); show('auth'); }
+})();
+
+/* Circuitos que ligam a logo: começam quando aparecem na tela (assim ninguém perde o acendimento) */
+(function(){
+  const alvos = document.querySelectorAll('.cx, .faixa');
+  if (!('IntersectionObserver' in window)){ alvos.forEach(e => e.classList.add('ativo')); return; }
+  const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting){ e.target.classList.add('ativo'); io.unobserve(e.target); } }), {threshold:.3});
+  alvos.forEach(e => io.observe(e));
 })();
 </script>
 </body>
