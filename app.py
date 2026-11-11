@@ -82,12 +82,12 @@ ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split("
 ADMIN_PATH = re.sub(r"[^A-Za-z0-9_\-]", "", os.getenv("ADMIN_PATH", "coordenacao")) or "coordenacao"
 ADMIN_TOKEN_HORAS = int(os.getenv("ADMIN_TOKEN_HORAS", "4"))
 
-# Conta PROVISÓRIA da coordenação: criada na inicialização SÓ se ainda não existir nenhuma conta da coordenação.
-# Serve para o primeiro acesso; a senha deve ser trocada logo na tela Resumo > "Trocar minha senha".
-# Para não deixar a senha no GitHub, defina COORD_SENHA na Render. COORD_PROVISORIA=0 desliga tudo isto.
+# Conta PROVISÓRIA da coordenação (opcional): só é criada se COORD_SENHA estiver definida no ambiente (Render) E ainda
+# não existir nenhuma conta da coordenação. NÃO há senha padrão no código. Sem COORD_SENHA, o primeiro acesso é feito
+# pela aba Coordenação, com a CHAVE_MASTER. Troque a senha logo em Resumo > "Trocar minha senha". COORD_PROVISORIA=0 desliga.
 COORD_PROVISORIA = os.getenv("COORD_PROVISORIA", "1").strip().lower() not in ("0", "false", "nao", "não", "off")
 COORD_EMAIL = os.getenv("COORD_EMAIL", "coordenacao355@unicerrado.edu.br").strip().lower()
-COORD_SENHA = os.getenv("COORD_SENHA", "coordenacao4558")
+COORD_SENHA = os.getenv("COORD_SENHA", "")
 
 # Anti-VPN/Proxy (opcional): consulta o proxycheck.io. Sem PROXYCHECK_KEY a verificação fica desligada.
 PROXYCHECK_KEY = os.getenv("PROXYCHECK_KEY", "").strip()
@@ -100,6 +100,15 @@ for _r in os.getenv("IPS_PERMITIDOS", "").split(","):
             IPS_PERMITIDOS.append(ipaddress.ip_network(_r.strip(), strict=False))
     except ValueError:
         print("IPS_PERMITIDOS: valor ignorado:", _r)
+
+# Freio do cadastro de ALUNO por IP (contas novas por janela). Alto de propósito: o Wi-Fi da faculdade sai por um IP só e
+# uma turma inteira se cadastra junto. Redes do campus listadas em IPS_PERMITIDOS não entram nessa conta.
+CADASTRO_ALUNO_MAX = int(os.getenv("CADASTRO_ALUNO_MAX", "100"))
+CADASTRO_ALUNO_JANELA_S = int(os.getenv("CADASTRO_ALUNO_JANELA_S", "3600"))
+# Login da coordenação: só as FALHAS contam. Por IP, por conta+IP e um teto geral por conta (contra chute vindo de muitos IPs).
+ADMIN_FALHAS_IP = int(os.getenv("ADMIN_FALHAS_IP", "10"))
+ADMIN_FALHAS_CONTA = int(os.getenv("ADMIN_FALHAS_CONTA", "8"))
+ADMIN_FALHAS_GERAL_HORA = int(os.getenv("ADMIN_FALHAS_GERAL_HORA", "100"))
 
 CURSOS_PADRAO = ["Administração", "Ciências Contábeis", "Direito", "Educação Física", "Enfermagem",
                  "Engenharia Civil", "Engenharia de Software", "Fisioterapia", "Gestão da TI",
@@ -168,6 +177,8 @@ class Aluno(Base):
     status: Mapped[Optional[str]] = mapped_column(String(10), default="ativo")             # ativo | inativo (interno)
     senha_hash: Mapped[str] = mapped_column(String(200))
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # uma matrícula, uma conta: a trava é do banco (à prova de dois cadastros ao mesmo tempo); NULL das contas da V1 pode repetir
+    __table_args__ = (Index("uq_alunos_matricula", "matricula", unique=True),)
 
 
 class Professor(Base):
@@ -184,6 +195,7 @@ class Professor(Base):
     email: Mapped[str] = mapped_column(String(160), unique=True, index=True)
     senha_hash: Mapped[str] = mapped_column(String(200))
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (Index("uq_professores_registro", "registro_funcional", unique=True),)
 
 
 class Aula(Base):
@@ -347,6 +359,15 @@ def migrar_esquema():
                         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_alunos_curso_id ON alunos (curso_id)"))
             except Exception as exc:  # outra instância pode ter feito ao mesmo tempo
                 print(f"Migração {tabela}.{nome}:", exc)
+    # Matrícula e registro funcional únicos no banco (create_all não mexe em tabela que já existe).
+    # Se já houver valores repetidos, o índice não é criado e o app segue funcionando: corrija os repetidos e reinicie.
+    for indice, tabela, coluna in (("uq_alunos_matricula", "alunos", "matricula"),
+                                   ("uq_professores_registro", "professores", "registro_funcional")):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {indice} ON {tabela} ({coluna})"))
+        except Exception as exc:
+            print(f"Índice único {indice} não criado (há {coluna} repetido?):", exc)
 
 
 def resetar_dados_de_teste():
@@ -465,6 +486,15 @@ def ip_cliente(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
+def ip_em_rede_permitida(ip: str) -> bool:
+    """True se o IP está numa rede de IPS_PERMITIDOS (ex.: o Wi-Fi do campus)."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in n for n in IPS_PERMITIDOS)
+
+
 _cache_ip: dict = {}
 
 
@@ -547,8 +577,18 @@ EMAIL_RE = re.compile(r"^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$")
 
 
 def normalizar_matricula(m: Optional[str]) -> str:
-    """Tira espaços e põe em maiúsculas, para 'gti 2026' e 'GTI2026' serem a mesma matrícula."""
-    return re.sub(r"\s+", "", m or "").upper()
+    """Tira espaços e põe as letras a-z em maiúsculas, para 'gti 2026' e 'GTI2026' serem a mesma matrícula.
+    Só ASCII: .upper() puro transformaria 'ſ' em 'S' e 'ı' em 'I', e a validação aceitaria o que não é letra a-z."""
+    return "".join(c.upper() if "a" <= c <= "z" else c for c in re.sub(r"\s+", "", m or ""))
+
+
+def nome_limpo(s: Optional[str]) -> str:
+    """Tira espaços sobrando. O nome precisa ter 3 caracteres de verdade: o Pydantic conta os espaços, então
+    '   ' passava e a conta era criada com nome vazio."""
+    n = re.sub(r"\s+", " ", s or "").strip()
+    if len(n) < 3:
+        raise HTTPException(422, "Informe o nome completo (mínimo 3 letras).")
+    return n
 
 
 def matricula_valida(m: Optional[str]) -> bool:
@@ -674,7 +714,7 @@ def usuario_atual(authorization: Optional[str] = Header(None), db: Session = Dep
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "Faça login para continuar.")
     try:
-        p = jwt.decode(authorization[7:], SECRET_KEY, algorithms=["HS256"])
+        p = jwt.decode(authorization[7:], SECRET_KEY, algorithms=["HS256"], options={"require": ["exp"]})
         u = {"id": int(p["sub"]), "role": p["role"], "nome": p.get("nome", ""),
              "cid": p.get("cid"), "tem_cid": "cid" in p,
              "per": p.get("per"), "tem_per": "per" in p}
@@ -1192,6 +1232,7 @@ def listar_cursos(db: Session = Depends(get_db)):
 def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
     if b.confirmar_senha is not None and b.confirmar_senha != b.senha:
         raise HTTPException(422, "As senhas não conferem. Digite a mesma senha nos dois campos.")
+    nome = nome_limpo(b.nome)
     email = b.email.strip().lower()
     if not email_permitido(email, b.perfil):
         esperado = (f"@{DOMINIO_ALUNOS}" if b.perfil == "aluno"
@@ -1211,6 +1252,7 @@ def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
             raise HTTPException(422, "Informe o Registro Funcional / ID Docente (ex.: DOC-2026-08).")
         if len(depto) < 2:
             raise HTTPException(422, "Informe o seu departamento ou área.")
+        registro = registro.upper()  # 'doc-2026-08' e 'DOC-2026-08' são o mesmo registro (já validado como ASCII acima)
         if db.scalar(select(Professor.id).where(Professor.registro_funcional == registro)):
             raise HTTPException(409, "Este registro funcional já está cadastrado. Procure a coordenação.")
     else:
@@ -1238,7 +1280,10 @@ def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
     Model = Aluno if b.perfil == "aluno" else Professor
     if db.scalar(select(Model.id).where(Model.email == email)):
         raise HTTPException(409, "Este e-mail já possui cadastro. Use a opção Entrar.")
-    u = Model(nome=b.nome.strip(), email=email, senha_hash=hash_senha(b.senha))
+    if b.perfil == "aluno" and not ip_em_rede_permitida(ip_cliente(request)):
+        # freio contra criação de contas em massa (alto, por causa do Wi-Fi do campus); vem antes do hash, que é caro
+        limitar_tentativas("cad:" + ip_cliente(request), CADASTRO_ALUNO_MAX, CADASTRO_ALUNO_JANELA_S)
+    u = Model(nome=nome, email=email, senha_hash=hash_senha(b.senha))
     if b.perfil == "aluno":
         u.matricula, u.curso_id, u.periodo, u.status = mat, curso.id, b.periodo, "ativo"
         if MATRICULA_OBRIGATORIA:
@@ -1258,6 +1303,11 @@ def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
         db.commit()
     except IntegrityError:
         db.rollback()
+        # a trava do banco pode ser do e-mail OU da matrícula / registro funcional (dois cadastros ao mesmo tempo)
+        if not db.scalar(select(Model.id).where(Model.email == email)):
+            if b.perfil == "aluno":
+                raise HTTPException(409, "Esta matrícula já está vinculada a outro e-mail. Procure a coordenação.")
+            raise HTTPException(409, "Este registro funcional já está cadastrado. Procure a coordenação.")
         raise HTTPException(409, "Este e-mail já possui cadastro. Use a opção Entrar.")
     if b.perfil == "professor":
         pendente = aguardando_autorizacao(u)
@@ -1283,7 +1333,7 @@ def esqueci_senha(b: EsqueciIn, request: Request, db: Session = Depends(get_db))
     """
     email, ref, ip = b.email.strip().lower(), b.referencia.strip(), ip_cliente(request)
     limitar_tentativas("esq-ip:" + ip, 8, 900)
-    limitar_tentativas("esq-em:" + email, 3, 900)
+    limitar_tentativas(f"esq-em:{email}|{ip}", 3, 900)  # e-mail+IP: um terceiro, de outro IP, não esgota o pedido da dona da conta
     if b.perfil == "aluno":
         u = db.scalar(select(Aluno).where(Aluno.email == email))
         confere = bool(u and u.matricula and u.matricula == normalizar_matricula(ref))
@@ -1932,12 +1982,19 @@ def _resposta_admin(p: Professor) -> dict:
 def admin_login(b: AdminLoginIn, request: Request, db: Session = Depends(get_db)):
     email = sem_acentos(b.email.strip().lower())
     ip = ip_cliente(request)
-    limitar_tentativas("adm-ip:" + ip, 8, 600)
-    limitar_tentativas("adm-em:" + email, 8, 600)
+    # Como no login comum, só as FALHAS contam. Três travas: por IP, por conta+IP (outra pessoa, de outro IP, não consegue
+    # trancar a coordenadora para fora) e um teto geral por conta por hora, contra chute espalhado por muitos IPs.
+    k_ip, k_conta, k_geral = "adm-ip:" + ip, f"adm-em:{email}|{ip}", "adm-ge:" + email
+    checar_falhas(k_ip, ADMIN_FALHAS_IP, 600)
+    checar_falhas(k_conta, ADMIN_FALHAS_CONTA, 600)
+    checar_falhas(k_geral, ADMIN_FALHAS_GERAL_HORA, 3600)
     p = db.scalar(select(Professor).where(Professor.email == email))
     if not p or p.ativo is False or not eh_coordenacao(p) or not senha_admin_confere(p, b.senha):
+        for k in (k_ip, k_conta, k_geral):
+            registrar_falha(k)
         log_seg(db, None, "login_admin_falha", email, ip, commit=True)
         raise HTTPException(401, "E-mail ou senha incorretos.")  # mesma resposta para qualquer falha
+    esquecer_falhas(k_conta)
     log_seg(db, p.id, "login_admin", "", ip, commit=True)
     return _resposta_admin(p)
 
@@ -1980,7 +2037,7 @@ def admin_registro(b: AdminRegistroIn, request: Request, db: Session = Depends(g
         p.coordenacao = True
         p.aprovado = True
     else:
-        p = Professor(nome=b.nome.strip(), email=email, senha_hash=hash_senha(b.senha),
+        p = Professor(nome=nome_limpo(b.nome), email=email, senha_hash=hash_senha(b.senha),
                       departamento="Coordenação", coordenacao=True)
         db.add(p)
     try:
@@ -2153,20 +2210,26 @@ def adm_professor_novo(b: ProfessorIn, request: Request, u: dict = Depends(so_ad
     depto = (b.departamento or "").strip() or ("Coordenação" if coord else "")
     if not email_permitido(email, "professor"):
         raise HTTPException(403, "Use um e-mail de professor: " + " ou ".join(f"@{d}" for d in DOMINIOS_PROFESSORES))
+    nome = nome_limpo(b.nome)
     if registro or not coord:  # professor sempre precisa de registro; coordenação só se informar
         if not REGISTRO_RE.fullmatch(registro):
             raise HTTPException(422, "Registro funcional inválido (ex.: DOC-2026-08).")
+        registro = registro.upper()
         if db.scalar(select(Professor.id).where(Professor.registro_funcional == registro)):
             raise HTTPException(409, "Já existe um professor com esse registro funcional.")
     if len(depto) < 2:
         raise HTTPException(422, "Informe o departamento / área.")
     if db.scalar(select(Professor.id).where(Professor.email == email)):
         raise HTTPException(409, "Já existe um professor com esse e-mail.")
-    db.add(Professor(nome=b.nome.strip(), email=email, senha_hash=hash_senha(b.senha),
+    db.add(Professor(nome=nome, email=email, senha_hash=hash_senha(b.senha),
                      registro_funcional=registro or None, departamento=depto, coordenacao=coord,
                      aprovado=True))  # conta criada pela própria coordenação já nasce autorizada
     log_seg(db, u["id"], "criar_professor", f"{email}; registro={registro or '-'}; coordenacao={coord}", ip_cliente(request))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:  # e-mail ou registro funcional criado por outra requisição no mesmo instante
+        db.rollback()
+        raise HTTPException(409, "Já existe um professor com esse e-mail ou registro funcional.")
     return {"ok": True}
 
 
