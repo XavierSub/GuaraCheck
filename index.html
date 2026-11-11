@@ -97,6 +97,15 @@ textarea{min-height:110px;resize:vertical}
 .m-frase{margin:14px 0;padding:12px;border-left:4px solid var(--pri);background:var(--okbg);border-radius:6px;font-size:16px}
 .m-rel{font-size:30px;font-weight:800;color:var(--pri);font-variant-numeric:tabular-nums}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}.row input,.row select{width:auto;flex:1;min-width:140px}td select{width:auto;padding:6px}
+/* mostrar/ocultar senha */
+.pw{position:relative;display:block}
+.row .pw{flex:1;min-width:140px}
+.pw .pw-in{width:100%;min-width:0;padding-right:calc(50px*var(--k))}
+.pw .pw-in::-ms-reveal{display:none}
+.pw-btn{position:absolute;top:50%;right:4px;transform:translateY(-50%);width:calc(36px*var(--k));height:calc(36px*var(--k));padding:0;border:0;border-radius:10px;background:none;color:var(--mut);cursor:pointer;display:grid;place-items:center}
+.pw-btn:hover{color:var(--ink);background:var(--line)}
+.pw-btn svg{width:calc(22px*var(--k));height:calc(22px*var(--k));fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+@media (pointer:coarse){.pw-btn{width:44px;height:44px;right:2px}}
 /* tela de entrada */
 .entrada{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:56px;align-items:center;padding:12px 0}
 .hero p{font-size:17px;color:var(--mut);max-width:38ch;margin:0 0 22px}
@@ -1651,6 +1660,46 @@ $('#adm-corpo').onchange = async e => {
   if (!('IntersectionObserver' in window)){ alvos.forEach(e => e.classList.add('ativo')); return; }
   const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting){ e.target.classList.add('ativo'); io.unobserve(e.target); } }), {threshold:.3});
   alvos.forEach(e => io.observe(e));
+})();
+
+/* Mostrar/ocultar senha: botão de olho em todo campo de senha, inclusive nos criados depois pelas abas.
+   A senha volta a ficar escondida ao enviar o formulário e quando a aba sai de cena. */
+(function(){
+  const NOMES = {senha:'senha', senha2:'confirmação da senha', chave:'chave de acesso', 'ms-atual':'senha atual', 'ms-nova':'nova senha', 'ms-nova2':'repetição da nova senha', 'np-senha':'senha provisória'};
+  const OLHO = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const OLHO_RISCADO = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.9 10.9 0 0 1 12 5c6.5 0 10.5 7 10.5 7a17.7 17.7 0 0 1-3.2 4.1M6.6 6.6C3.6 8.4 1.5 12 1.5 12S5.5 19 12 19c1.7 0 3.2-.4 4.5-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+  function aplicar(btn, inp, vendo){
+    const rot = (vendo ? 'Ocultar ' : 'Mostrar ') + (NOMES[inp.id] || 'senha');
+    inp.type = vendo ? 'text' : 'password';
+    btn.innerHTML = vendo ? OLHO_RISCADO : OLHO;
+    btn.setAttribute('aria-label', rot); btn.title = rot;
+    btn.dataset.vendo = vendo ? '1' : '';
+  }
+  function preparar(inp){
+    inp.dataset.pw = '1';
+    // o botão fica dentro do <label>; sem isso o nome dele entraria no nome do campo
+    const lab = inp.closest('label');
+    if (lab && !inp.hasAttribute('aria-label') && !inp.hasAttribute('aria-labelledby')){
+      const t = [...lab.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' ').replace(/\s+/g, ' ').trim();
+      if (t) inp.setAttribute('aria-label', t);
+    }
+    inp.setAttribute('autocapitalize', 'off'); inp.setAttribute('autocorrect', 'off'); inp.spellcheck = false;
+    const caixa = document.createElement('span'); caixa.className = 'pw';
+    inp.before(caixa); caixa.append(inp); inp.classList.add('pw-in');
+    const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'pw-btn';
+    caixa.append(btn); aplicar(btn, inp, false);
+  }
+  function varrer(){ document.querySelectorAll('input[type=password]:not([data-pw])').forEach(preparar); }
+  function esconderTodas(){ document.querySelectorAll('.pw-btn[data-vendo="1"]').forEach(b => aplicar(b, b.previousElementSibling, false)); }
+  document.addEventListener('click', e => {
+    const b = e.target.closest && e.target.closest('.pw-btn'); if (!b) return;
+    aplicar(b, b.previousElementSibling, !b.dataset.vendo);
+  });
+  document.addEventListener('submit', esconderTodas, true);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) esconderTodas(); });
+  window.addEventListener('pagehide', esconderTodas);
+  varrer();
+  new MutationObserver(varrer).observe(document.body, {childList:true, subtree:true});
 })();
 </script>
 </body>
