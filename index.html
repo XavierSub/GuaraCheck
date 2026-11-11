@@ -993,7 +993,9 @@ const dataCurta = d => new Date(d).toLocaleDateString('pt-BR');
 function opcoesNota(){ // eventos em que o aluno registrou presença + eventos que só restam como anotação (evento excluído)
   const mapa = new Map(), tem = new Set((S.notas || []).map(n => n.presenca_id));
   (S.comp || []).forEach(p => mapa.set(p.id, {titulo:p.titulo, em:p.registrado_em, removido:false}));
-  (S.notas || []).forEach(n => { if (!mapa.has(n.presenca_id)) mapa.set(n.presenca_id, {titulo:n.titulo, em:n.evento_em, removido:true}); });
+  // 'evento excluído' só vale quando TODOS os comprovantes já foram carregados; com a lista paginada, uma anotação de evento
+  // antigo (ainda não carregado) não pode ser rotulada como excluída.
+  (S.notas || []).forEach(n => { if (!mapa.has(n.presenca_id)) mapa.set(n.presenca_id, {titulo:n.titulo, em:n.evento_em, removido:!S.compMais}); });
   return [...mapa].sort((a, b) => new Date(b[1].em) - new Date(a[1].em)).map(([id, o]) => ({id, tem:tem.has(id),
     rot:`${o.titulo} · ${dataCurta(o.em)}${tem.has(id) ? ' · com anotação' : ''}${o.removido ? ' · evento excluído' : ''}`}));
 }
@@ -1193,13 +1195,23 @@ $('#btn-fim').onclick = async () => {
   catch (x) { msg($('#msg-prof'), x.message, 'err'); }
 };
 /* Exportação em lote: /api/v1/export/chamada responde em streaming (Presentes + Ausentes). Só professor/admin; cada download é auditado. */
+let csvBaixando = false;   // um download por vez: clique duplo gerava dois arquivos e dois registros na auditoria
 async function baixarCSV(aulaId, falhar){
+  if (csvBaixando) return;
+  csvBaixando = true; const btn = $('#btn-csv'); if (btn) btn.disabled = true;
   try {
-    const r = await fetch(`/api/v1/export/chamada?aula_id=${aulaId}`, {headers:{Authorization:'Bearer ' + S.token}});
-    if (!r.ok){ let d = null; try { d = await r.json(); } catch {} throw new Error(typeof d?.detail === 'string' ? d.detail : 'Não foi possível exportar a chamada.'); }
-    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = `chamada-${aulaId}.csv`; a.click();
+    let r; try { r = await fetch(`/api/v1/export/chamada?aula_id=${aulaId}`, {headers:{Authorization:'Bearer ' + S.token}}); }
+    catch { throw new Error('Sem conexão com o servidor. Verifique sua internet.'); }
+    if (!r.ok){
+      let d = null; try { d = await r.json(); } catch {}
+      if (r.status === 401 && S.token) sair(typeof d?.detail === 'string' ? d.detail : 'Sessão expirada. Entre novamente.');
+      throw new Error(typeof d?.detail === 'string' ? d.detail : 'Não foi possível exportar a chamada.');
+    }
+    let blob; try { blob = await r.blob(); } catch { throw new Error('O download foi interrompido. Tente exportar de novo.'); }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `chamada-${aulaId}.csv`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   } catch (x) { falhar(x.message); }
+  finally { csvBaixando = false; if (btn) btn.disabled = false; }
 }
 $('#btn-csv').onclick = () => { if (S.aula) baixarCSV(S.aula.id, t => msg($('#msg-prof'), t, 'err')); };
 /* Conferir comprovante: o professor cola a "Autenticação" do PDF do aluno; o servidor confirma se é verdadeira. */

@@ -87,6 +87,9 @@ NOMES = {
     # --- Funcionalidade 6: exportação e auditoria ---
     "_seguro", "EXPORT_CABECALHO", "_gerar_csv", "export_chamada", "exportar_chamada", "meu_ip", "adm_alertas",
     "adm_auditoria",
+    # --- Funcionalidade 7: anotações privadas do aluno e PDFs ---
+    "NOTA_MAX", "NOTAS_MAX_PDF", "limpar_nota", "gerar_pdf_anotacoes", "NotaIn", "_nota_dict", "minhas_notas", "salvar_nota",
+    "excluir_nota", "_pdf_notas", "notas_pdf_todas", "nota_pdf",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
@@ -173,7 +176,7 @@ class Col:
     __hash__ = object.__hash__
 
     def __eq__(self, o):
-        return Cmp(self, "eq", o)
+        return Cmp(self, "is", None) if o is None else Cmp(self, "eq", o)       # como o SQLAlchemy: == None => IS NULL
 
     def like(self, p):
         return Cmp(self, "like", p)
@@ -194,7 +197,7 @@ class Col:
         return Cmp(self, "not_in", vs if isinstance(vs, Select) else list(vs))
 
     def __ne__(self, o):
-        return Cmp(self, "ne", o)
+        return Cmp(self, "is_not", None) if o is None else Cmp(self, "ne", o)  # != None => IS NOT NULL
 
     def __gt__(self, o):
         return Cmp(self, "gt", o)
@@ -362,7 +365,10 @@ class Tentativa(Modelo):
 
 
 class NotaAluno(Modelo):
-    id, aluno_id, presenca_id = (Col() for _ in range(3))
+    (id, aluno_id, presenca_id, evento_titulo, evento_tipo, evento_disciplina, evento_em, texto, criado_em,
+     atualizado_em) = (Col() for _ in range(10))
+    _unicos = (("aluno_id", "presenca_id"),)                              # uq_nota_aluno_presenca
+    _carimbos = ("criado_em", "atualizado_em")                            # default=utcnow no modelo real
 
 
 class Func:

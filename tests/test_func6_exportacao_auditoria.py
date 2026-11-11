@@ -238,10 +238,20 @@ def test_ct618_aluno_inativo_que_registrou_continua_no_relatorio(ex):
 
 
 def test_ct619_chamada_sem_curso_so_tem_presentes(ex):
-    """CT-619 | Chamada aberta para todos os cursos | só Presentes (não dá para saber quem faltou)."""
+    """CT-619 | Chamada aberta para todos os cursos | só Presentes (não dá para saber quem faltou), nem os alunos sem curso viram 'Ausente'."""
     ex.novo_aluno(2)
+    ex.novo_aluno(3, curso_id=None, periodo=None)                  # sem curso: "curso_id == NULL" não pode listar essa gente
     ex.semear_presenca(ex.aluno)
     assert [l[5] for l in ex.tabela()] == ["Presente"]
+
+
+def test_ct619b_presentes_so_da_chamada_exportada(ex):
+    """CT-619b | Presenças de OUTRAS chamadas | nunca entram no relatório desta."""
+    outra = ex.nova_aula(ex.ana, titulo="Outra aula")
+    ex.semear_presenca(ex.novo_aluno(2, nome="Daqui"))
+    ex.semear_presenca(ex.novo_aluno(3, nome="De la"), aula=outra)
+    assert [l[1] for l in ex.tabela()] == ["Daqui"]
+    assert [l[1] for l in ex.tabela(aula=outra, p=ex.ana)] == ["De la"]
 
 
 def test_ct620_ausentes_do_curso_depois_dos_presentes(ex):
