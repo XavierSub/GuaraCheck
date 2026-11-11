@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GeoCheckIn · UniCerrado</title>
+<title>Guará Check · UniCerrado</title>
 <meta name="theme-color" content="#2f7d40">
 <link rel="icon" type="image/png" href="assets/favicon.png">
 <link rel="apple-touch-icon" href="assets/icone-192.png">
@@ -25,10 +25,17 @@ header{background:var(--card);border-bottom:3px solid var(--lima)}
 .topo{max-width:var(--larg);margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:10px 20px;flex-wrap:wrap}
 .marcas{display:flex;align-items:center;gap:14px;padding:6px 14px;background:#fff;border:1px solid var(--line);border-radius:14px}
 .marcas img{height:46px;width:auto;display:block}
-.marcas img.curso{width:46px;border-radius:12px}
+.marcas img.curso{height:62px}
 .marcas i{width:1px;height:32px;background:#d9dfcd}
-.produto{display:flex;align-items:center;gap:8px;font-size:19px;font-weight:700;color:var(--azul);letter-spacing:-.01em}
-.ver{font-size:12px;font-weight:600;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:1px 9px;letter-spacing:0}
+/* Guará Check: ícone do lobo-guará + nome + versão, numa caixa branca (fica legível também no modo escuro) */
+.produto{display:flex;align-items:center;gap:10px;padding:6px 14px;background:#fff;border:1px solid var(--line);border-radius:14px}
+.produto .p-icone{height:46px;width:auto;display:block}
+.produto .p-nome{height:26px;width:auto;display:block}
+.ver{font-size:12px;font-weight:700;color:#4d5f56;border:1px solid #cfd8c2;border-radius:999px;padding:1px 9px;letter-spacing:.02em}
+/* canto direito: o lema da marca (some quando o usuário entra e aparece o nome dele com o botão Sair) */
+.lema{margin-left:auto;display:flex;align-items:center;gap:10px;padding:7px 16px 7px 12px;background:#0b2a6b;color:#fff;border-radius:999px;font-size:14px;font-weight:600;font-style:italic;letter-spacing:.005em;line-height:1.2}
+.lema img{height:34px;width:auto;display:block}
+#user:not([hidden])~.lema{display:none}
 #user{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:14px}
 main{max-width:var(--larg);margin:0 auto;padding:28px 20px 48px}
 h1{font-size:clamp(28px,4.6vw,40px);line-height:1.12;letter-spacing:-.025em;font-weight:700;color:var(--azul);margin:0 0 14px}
@@ -110,8 +117,10 @@ textarea{min-height:110px;resize:vertical}
 /* telas grandes (PC): cabeçalho e tela de entrada maiores. O tamanho vem de --k, no começo do CSS. */
 @media(min-width:1280px){
 .marcas{gap:calc(14px*var(--k));padding:calc(6px*var(--k)) calc(14px*var(--k));border-radius:calc(14px*var(--k))}
-.marcas img{height:calc(46px*var(--k))}.marcas img.curso{width:calc(46px*var(--k))}.marcas i{height:calc(32px*var(--k))}
-.produto{font-size:calc(19px*var(--k))}.ver{font-size:calc(12px*var(--k))}#user{font-size:calc(14px*var(--k))}
+.marcas img{height:calc(46px*var(--k))}.marcas img.curso{height:calc(62px*var(--k))}.marcas i{height:calc(32px*var(--k))}
+.produto{gap:calc(10px*var(--k));padding:calc(6px*var(--k)) calc(14px*var(--k));border-radius:calc(14px*var(--k))}.produto .p-icone{height:calc(46px*var(--k))}.produto .p-nome{height:calc(26px*var(--k))}.ver{font-size:calc(12px*var(--k))}
+.lema{font-size:calc(14px*var(--k));gap:calc(10px*var(--k));padding:calc(7px*var(--k)) calc(16px*var(--k)) calc(7px*var(--k)) calc(12px*var(--k))}.lema img{height:calc(34px*var(--k))}
+#user{font-size:calc(14px*var(--k))}
 .entrada{gap:calc(56px*var(--k))}
 .entrada h1{font-size:calc(40px*var(--k))}
 .hero p{font-size:calc(17px*var(--k));margin-bottom:calc(22px*var(--k))}
@@ -150,7 +159,7 @@ textarea{min-height:110px;resize:vertical}
 .previa .bad{color:var(--err);font-size:13.5px;margin:6px 0 0}.previa .acoes{margin-top:16px}
 details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
 @media(max-width:860px){.entrada{grid-template-columns:1fr;gap:20px}.geo{display:none}.hero p{margin-bottom:6px}}
-@media(max-width:560px){.row input,.row select{min-width:100%}.atabs button{padding:7px 13px}.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}main{padding:20px 16px 40px}.topo{padding:10px 16px}.marcas{gap:10px;padding:6px 10px}.marcas img{height:34px}.marcas img.curso{width:34px}.card{padding:18px}}
+@media(max-width:560px){.row input,.row select{min-width:100%}.atabs button{padding:7px 13px}.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}main{padding:20px 16px 40px}.topo{padding:10px 16px}.marcas{gap:10px;padding:6px 10px}.marcas img{height:34px}.marcas img.curso{height:46px}.produto{gap:8px;padding:5px 10px}.produto .p-icone{height:36px}.produto .p-nome{height:20px}.lema{display:none}.card{padding:18px}}
 </style>
 </head>
 <body>
@@ -158,14 +167,19 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
   <div class="topo">
     <!-- LOGOS: troque o arquivo na pasta assets/ mantendo o mesmo nome (ou mude o src abaixo) -->
     <div class="marcas">
-      <img src="assets/logo-unicerrado.png" alt="UniCerrado, Centro Universitário de Goiatuba">
-      <i aria-hidden="true"></i>
       <img class="curso" src="assets/logo-curso.png" alt="Gestão da Tecnologia da Informação">
+      <i aria-hidden="true"></i>
+      <img src="assets/logo-unicerrado.png" alt="UniCerrado, Centro Universitário de Goiatuba">
       <i aria-hidden="true"></i>
       <img src="assets/logo-fesg.png" alt="FESG, Fundação de Ensino Superior de Goiatuba">
     </div>
-    <div class="produto">GeoCheckIn <span class="ver" id="versao">v2.0</span></div>
+    <div class="produto">
+      <img class="p-icone" src="assets/guara-icone.png" alt="">
+      <img class="p-nome" src="assets/guara-nome.png" alt="Guará Check">
+      <span class="ver" id="versao">V1</span>
+    </div>
     <div id="user" hidden><span id="user-nome"></span><button class="btn alt" id="btn-sair">Sair</button></div>
+    <div class="lema"><img src="assets/guara-marca-branca.png" alt=""><span>Sua presença, no lugar certo.</span></div>
   </div>
 </header>
 
@@ -174,9 +188,9 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
 <!-- ============ LOGIN / CADASTRO ============ -->
 <section id="v-auth" class="entrada" hidden>
   <div class="hero">
-    <h1>Registre sua presença na aula, pelo celular</h1>
-    <p>O GeoCheckIn confirma pelo GPS que você está na sala. Entre com seu e-mail institucional para começar.</p>
-    <svg class="geo" viewBox="-70 -50 500 400" role="img" aria-label="Mapa: o aluno dentro da área da aula pode registrar a presença; o aluno fora da área não pode">
+    <h1>Registre sua presença no evento, pelo celular</h1>
+    <p>O Guará Check confirma pelo GPS que você está no local. Entre com seu e-mail institucional para começar.</p>
+    <svg class="geo" viewBox="-70 -50 500 400" role="img" aria-label="Mapa: quem está dentro da área do evento pode registrar a presença; quem está fora da área não pode">
       <defs>
         <pattern id="malha" width="30" height="30" patternUnits="userSpaceOnUse"><path class="malha" d="M30 0H0V30"/></pattern>
         <!-- trilhas do circuito (pathLength=100 deixa todas com o mesmo ritmo de faísca) -->
@@ -394,7 +408,7 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
    aviso: faixa azul de status no topo de todas as telas. Para ligar, troque ativo para true e edite os textos.
    (link é opcional: deixe '' para não mostrar.) */
 const SITE = {
-  versao: 'v2.0',
+  versao: 'V1',
   aviso: {ativo: false, selo: 'Turma encerrada', titulo: 'As inscrições desta turma estão encerradas', texto: 'A próxima turma será divulgada pelo portal da UniCerrado.', link: '', rotuloLink: 'Ver portal'}
 };
 const $ = s => document.querySelector(s);

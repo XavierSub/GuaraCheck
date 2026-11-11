@@ -1,5 +1,5 @@
 """
-GeoCheckIn V2 - UniCerrado (Centro Universitário de Goiatuba)
+Guará Check (antes GeoCheckIn) - UniCerrado (Centro Universitário de Goiatuba)
 Presença acadêmica por geolocalização (geofencing) - FastAPI + SQLAlchemy.
 
 Local:     python app.py            -> http://localhost:8000
@@ -799,6 +799,29 @@ def _l1(s) -> str:
     return str("" if s is None else s).encode("cp1252", "replace").decode("cp1252")
 
 
+def _pdf_marca(c, W, H, M) -> None:
+    """Ícone do lobo-guará num selo branco, à direita da faixa colorida do topo. Se o arquivo não existir, o PDF sai sem ele."""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.utils import ImageReader
+
+        for pasta in (BASE_DIR / "web" / "assets", BASE_DIR / "assets"):
+            arq = pasta / "guara-icone.png"
+            if arq.is_file():
+                img = ImageReader(str(arq))
+                iw, ih = img.getSize()
+                h = 56.0
+                w = h * iw / ih
+                bw, bh = w + 16, h + 12
+                x, y = W - M - bw, H - 86 + (86 - bh) / 2
+                c.setFillColor(colors.white)
+                c.roundRect(x, y, bw, bh, 8, stroke=0, fill=1)
+                c.drawImage(img, x + 8, y + 6, width=w, height=h, mask="auto")
+                return
+    except Exception:
+        pass
+
+
 def gerar_pdf_comprovante(d: dict) -> bytes:
     """Comprovante de presença em PDF, uma página A4. O reportlab é importado aqui para o app subir mesmo sem ele."""
     from reportlab.lib import colors
@@ -812,14 +835,15 @@ def gerar_pdf_comprovante(d: dict) -> bytes:
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     c.setTitle(_l1(f"Comprovante de presença nº {d['protocolo']}"))
-    c.setAuthor("GeoCheckIn - UniCerrado")
+    c.setAuthor("Guará Check - UniCerrado")
     c.setSubject("Comprovante de presença")
 
     c.setFillColor(verde)
     c.rect(0, H - 86, W, 86, stroke=0, fill=1)
+    _pdf_marca(c, W, H, M)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 22)
-    c.drawString(M, H - 42, "GeoCheckIn")
+    c.drawString(M, H - 42, _l1("Guará Check"))
     c.setFont("Helvetica", 12)
     c.drawString(M, H - 62, _l1("Comprovante de presença · Centro Universitário de Goiatuba (UniCerrado)"))
 
@@ -958,7 +982,7 @@ def gerar_pdf_anotacoes(d: dict) -> bytes:
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     c.setTitle(_l1("Minhas anotações" if not d.get("unico") else f"Anotação: {notas[0]['titulo']}"))
-    c.setAuthor("GeoCheckIn - UniCerrado")
+    c.setAuthor("Guará Check - UniCerrado")
     c.setSubject("Anotações pessoais do aluno")
     estado = {"y": 0.0, "pagina": 0}
     emitido = d["emitido_em"].astimezone(BRT).strftime("%d/%m/%Y %H:%M")
@@ -986,9 +1010,10 @@ def gerar_pdf_anotacoes(d: dict) -> bytes:
         c.setFillColor(azul)
         if estado["pagina"] == 1:
             c.rect(0, H - 86, W, 86, stroke=0, fill=1)
+            _pdf_marca(c, W, H, M)
             c.setFillColor(colors.white)
             c.setFont("Helvetica-Bold", 22)
-            c.drawString(M, H - 42, "GeoCheckIn")
+            c.drawString(M, H - 42, _l1("Guará Check"))
             c.setFont("Helvetica", 12)
             c.drawString(M, H - 62, _l1("Minhas anotações · Centro Universitário de Goiatuba (UniCerrado)"))
             estado["y"] = H - 124
@@ -996,7 +1021,7 @@ def gerar_pdf_anotacoes(d: dict) -> bytes:
             c.rect(0, H - 34, W, 34, stroke=0, fill=1)
             c.setFillColor(colors.white)
             c.setFont("Helvetica-Bold", 11)
-            c.drawString(M, H - 22, _l1("GeoCheckIn · Minhas anotações"))
+            c.drawString(M, H - 22, _l1("Guará Check · Minhas anotações"))
             estado["y"] = H - 64
 
     def garantir(espaco: float):
@@ -1079,7 +1104,7 @@ async def lifespan(_: FastAPI):
 
 
 # /docs e /openapi.json desligados: não expõem o mapa da API (nem das rotas da coordenação)
-app = FastAPI(title="GeoCheckIn V2 - UniCerrado", lifespan=lifespan,
+app = FastAPI(title="Guará Check - UniCerrado", lifespan=lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)
 
 # Content-Security-Policy da página: só carrega scripts, estilos, fontes, imagens e mapas dos endereços que o site
