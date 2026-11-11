@@ -1066,9 +1066,10 @@ def gerar_pdf_comprovante(d: dict) -> bytes:
 
 
 def limpar_nota(s) -> str:
-    """Texto da anotação: quebras de linha padronizadas, sem caracteres de controle, sem espaços nas pontas."""
+    """Texto da anotação: quebras de linha padronizadas, sem caracteres de controle, sem espaços nas pontas.
+    O ZWJ (U+200D) e o ZWNJ (U+200C) ficam: sem eles os emojis compostos (👩‍💻, 👨‍👩‍👧) viravam figuras soltas."""
     s = (s or "").replace("\r\n", "\n").replace("\r", "\n")
-    return "".join(ch for ch in s if ch in "\n\t" or unicodedata.category(ch)[0] != "C").strip()
+    return "".join(ch for ch in s if ch in "\n\t\u200d\u200c" or unicodedata.category(ch)[0] != "C").strip()
 
 
 def _quebrar_texto(texto: str, fonte: str, tam: float, largura: float) -> list:
