@@ -110,6 +110,26 @@ ADMIN_FALHAS_IP = int(os.getenv("ADMIN_FALHAS_IP", "10"))
 ADMIN_FALHAS_CONTA = int(os.getenv("ADMIN_FALHAS_CONTA", "8"))
 ADMIN_FALHAS_GERAL_HORA = int(os.getenv("ADMIN_FALHAS_GERAL_HORA", "100"))
 
+# Confirmação do e-mail por código de 6 números (impede cadastrar o e-mail de outra pessoa). A Render GRATUITA bloqueia SMTP
+# (portas 25, 465 e 587): lá use EMAIL_PROVEDOR=brevo (API por HTTPS, plano grátis de 300 e-mails/dia). "smtp" só em plano pago
+# ou fora da Render. O remetente (EMAIL_REMETENTE) precisa estar verificado no provedor.
+EMAIL_PROVEDOR = os.getenv("EMAIL_PROVEDOR", "").strip().lower()          # brevo | smtp | vazio (sem envio)
+EMAIL_API_KEY = os.getenv("EMAIL_API_KEY", "").strip()
+EMAIL_REMETENTE = os.getenv("EMAIL_REMETENTE", "").strip()
+EMAIL_REMETENTE_NOME = os.getenv("EMAIL_REMETENTE_NOME", "Guará Check").strip() or "Guará Check"
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USUARIO = os.getenv("SMTP_USUARIO", "").strip()
+SMTP_SENHA = os.getenv("SMTP_SENHA", "")
+# auto (padrão) = confirma o e-mail quando o envio está configurado; 1 = obrigatório (sem envio configurado o cadastro fica
+# indisponível, nunca aceita e-mail não confirmado); 0 = desligado.
+VERIFICAR_EMAIL = os.getenv("VERIFICAR_EMAIL", "auto").strip().lower()
+CODIGO_EMAIL_MIN = int(os.getenv("CODIGO_EMAIL_MIN", "15"))               # validade do código
+CODIGO_MAX_TENTATIVAS = int(os.getenv("CODIGO_MAX_TENTATIVAS", "5"))      # erros antes de o código ser descartado
+CODIGO_INTERVALO_S = int(os.getenv("CODIGO_INTERVALO_S", "30"))           # espera entre dois envios para o mesmo e-mail
+CODIGO_ENVIOS_HORA = int(os.getenv("CODIGO_ENVIOS_HORA", "5"))            # envios por e-mail por hora
+CONFIRMA_FALHAS_IP = int(os.getenv("CONFIRMA_FALHAS_IP", "40"))           # códigos errados por IP em 10 min
+
 CURSOS_PADRAO = ["Administração", "Ciências Contábeis", "Direito", "Educação Física", "Enfermagem",
                  "Engenharia Civil", "Engenharia de Software", "Fisioterapia", "Gestão da TI",
                  "Medicina", "Pedagogia", "Psicologia"]  # ajuste com CURSOS_EXTRAS="Curso A,Curso B"
@@ -314,6 +334,24 @@ class LogSeguranca(Base):
     ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
 
+class CadastroPendente(Base):
+    """Cadastro que ainda espera o código enviado por e-mail. Nada é reservado (e-mail, matrícula) até o código ser
+    confirmado: por isso ninguém consegue 'tomar' o e-mail ou a matrícula de outra pessoa só digitando."""
+    __tablename__ = "cadastros_pendentes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    perfil: Mapped[str] = mapped_column(String(10))
+    email: Mapped[str] = mapped_column(String(160))
+    dados: Mapped[str] = mapped_column(Text)                       # JSON: nome, matrícula, curso, período, registro, depto
+    senha_hash: Mapped[str] = mapped_column(String(200))           # só o hash; a senha em si nunca é guardada
+    codigo_hash: Mapped[str] = mapped_column(String(64))           # HMAC do código; o código em si nunca é guardado
+    tentativas: Mapped[int] = mapped_column(Integer, default=0)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    enviado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expira_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    __table_args__ = (UniqueConstraint("perfil", "email", name="uq_pendente_perfil_email"),)
+
+
 class ControleSistema(Base):
     """Marcas internas do sistema (ex.: a limpeza RESET_BANCO já executada). Nunca é apagada pela limpeza."""
     __tablename__ = "controle_sistema"
@@ -387,7 +425,8 @@ def resetar_dados_de_teste():
         if atual and atual.valor == marca:
             print("RESET_BANCO: já executado com este valor; nada a fazer.")
             return
-        for modelo in (NotaAluno, Tentativa, Presenca, Aula, Aluno, Professor, MatriculasAutorizadas, LogSeguranca):
+        for modelo in (NotaAluno, Tentativa, Presenca, Aula, Aluno, Professor, MatriculasAutorizadas, LogSeguranca,
+                       CadastroPendente):
             db.execute(delete(modelo))  # ordem respeita as chaves estrangeiras
         if atual:
             atual.valor = marca
@@ -1136,6 +1175,10 @@ async def lifespan(_: FastAPI):
         resetar_dados_de_teste()
     except Exception as exc:
         print("RESET_BANCO falhou (nada foi apagado):", exc)
+    if not verificacao_email_ativa():
+        print("AVISO: confirmação de e-mail por código DESLIGADA (configure EMAIL_PROVEDOR, EMAIL_API_KEY e EMAIL_REMETENTE).")
+    elif not email_configurado():
+        print("AVISO: VERIFICAR_EMAIL=1, mas o envio de e-mail não está configurado: o cadastro fica indisponível.")
     try:
         semear_coordenacao_provisoria()  # depois da limpeza, para a conta nova não ser apagada
     except Exception as exc:
@@ -1218,7 +1261,8 @@ def health(db: Session = Depends(get_db)):
 def config(db: Session = Depends(get_db)):
     sem_coordenacao = not ADMIN_EMAILS and not _contar(db, Professor, Professor.coordenacao.is_(True))
     return {"dominio_aluno": DOMINIO_ALUNOS, "dominios_professor": DOMINIOS_PROFESSORES,
-            "matricula_regex": MATRICULA_RE.pattern, "coordenacao_aberta": bool(sem_coordenacao)}
+            "matricula_regex": MATRICULA_RE.pattern, "coordenacao_aberta": bool(sem_coordenacao),
+            "verificacao_email": verificacao_email_ativa()}
 
 
 @app.get("/api/cursos")
@@ -1228,8 +1272,125 @@ def listar_cursos(db: Session = Depends(get_db)):
 
 
 # ------------------------------ Auth ---------------------------------
+def email_configurado() -> bool:
+    if EMAIL_PROVEDOR == "brevo":
+        return bool(EMAIL_API_KEY and EMAIL_REMETENTE)
+    if EMAIL_PROVEDOR == "smtp":
+        return bool(SMTP_HOST and EMAIL_REMETENTE)
+    return False
+
+
+def verificacao_email_ativa() -> bool:
+    """Confirmar o e-mail por código no cadastro? VERIFICAR_EMAIL: auto (liga quando o envio está configurado), 1 ou 0."""
+    if VERIFICAR_EMAIL in ("0", "false", "nao", "não", "off"):
+        return False
+    if VERIFICAR_EMAIL in ("1", "true", "sim", "on"):
+        return True
+    return email_configurado()
+
+
+def enviar_email(para: str, assunto: str, texto: str) -> None:
+    """Envia um e-mail de texto simples. Levanta exceção se o provedor recusar (quem chama trata)."""
+    if EMAIL_PROVEDOR == "brevo":
+        corpo = json.dumps({"sender": {"name": EMAIL_REMETENTE_NOME, "email": EMAIL_REMETENTE}, "to": [{"email": para}],
+                            "subject": assunto, "textContent": texto}).encode()
+        req = urllib.request.Request("https://api.brevo.com/v3/smtp/email", data=corpo, method="POST",
+                                     headers={"api-key": EMAIL_API_KEY, "content-type": "application/json",
+                                              "accept": "application/json", "user-agent": "GuaraCheck/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            r.read()
+    elif EMAIL_PROVEDOR == "smtp":
+        import smtplib
+        from email.message import EmailMessage
+        m = EmailMessage()
+        m["From"], m["To"], m["Subject"] = f"{EMAIL_REMETENTE_NOME} <{EMAIL_REMETENTE}>", para, assunto
+        m.set_content(texto)
+        if SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as s:
+                if SMTP_USUARIO:
+                    s.login(SMTP_USUARIO, SMTP_SENHA)
+                s.send_message(m)
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as s:
+                s.starttls()
+                if SMTP_USUARIO:
+                    s.login(SMTP_USUARIO, SMTP_SENHA)
+                s.send_message(m)
+    else:
+        raise RuntimeError("envio de e-mail não configurado")
+
+
+def _hash_codigo(perfil: str, email: str, codigo: str) -> str:
+    return hmac.new(SECRET_KEY.encode(), f"cod|{perfil}|{email}|{codigo}".encode(), hashlib.sha256).hexdigest()
+
+
+def _emitir_codigo(db: Session, p: "CadastroPendente", primeiro_nome: str) -> None:
+    """Gera um código NOVO (o anterior deixa de valer), grava só o hash e envia por e-mail."""
+    agora = utcnow()
+    codigo = f"{secrets.randbelow(10 ** 6):06d}"
+    p.codigo_hash, p.tentativas = _hash_codigo(p.perfil, p.email, codigo), 0
+    p.enviado_em, p.expira_em = agora, agora + timedelta(minutes=CODIGO_EMAIL_MIN)
+    db.add(p)
+    try:
+        db.commit()
+    except IntegrityError:  # dois pedidos do mesmo e-mail no mesmo instante
+        db.rollback()
+        raise HTTPException(409, "Já existe um pedido de código para este e-mail. Aguarde alguns segundos e tente de novo.")
+    texto = (f"Olá, {primeiro_nome}!\n\nSeu código para confirmar o cadastro no Guará Check é: {codigo}\n\n"
+             f"Ele vale por {CODIGO_EMAIL_MIN} minutos. Se você não pediu este cadastro, ignore este e-mail: "
+             f"nada é criado sem o código.\n\nGuará Check · UniCerrado")
+    try:
+        enviar_email(p.email, f"Guará Check: seu código é {codigo}", texto)
+    except Exception as exc:  # não imprime o e-mail nem o código
+        print("Falha ao enviar o e-mail de confirmação:", type(exc).__name__, exc)
+        raise HTTPException(503, "Não foi possível enviar o código agora. Tente de novo em alguns minutos.")
+
+
+def _espera_restante(p: "CadastroPendente", ip: str) -> int:
+    """Segundos até poder pedir outro código. A espera vale só para quem pediu o último (mesmo IP): outra pessoa, de outro
+    IP, não consegue segurar o cadastro do dono do e-mail."""
+    if p.ip != ip[:64]:
+        return 0
+    return max(0, int(CODIGO_INTERVALO_S - (utcnow() - aware(p.enviado_em)).total_seconds()))
+
+
+def _iniciar_verificacao(db: Session, request: Request, b: "RegistroIn", email: str, dados: dict) -> dict:
+    """1ª etapa: guarda o cadastro como PENDENTE (sem criar a conta) e envia o código para o e-mail informado."""
+    if not email_configurado():
+        raise HTTPException(503, "A confirmação de e-mail ainda não foi configurada no servidor. Procure a coordenação.")
+    db.execute(delete(CadastroPendente).where(CadastroPendente.expira_em < utcnow()))  # limpa os vencidos
+    p = db.scalar(select(CadastroPendente).where(CadastroPendente.perfil == b.perfil, CadastroPendente.email == email))
+    ip = ip_cliente(request)
+    if p and _espera_restante(p, ip) > 0:
+        raise HTTPException(429, f"Aguarde {_espera_restante(p, ip)} segundos para pedir outro código.")
+    limitar_tentativas(f"env-em:{email}|{ip}", CODIGO_ENVIOS_HORA, 3600)  # e-mail+IP: um terceiro não esgota a cota do dono
+    if not p:
+        p = CadastroPendente(perfil=b.perfil, email=email)
+    p.dados, p.senha_hash, p.ip = json.dumps(dados), hash_senha(b.senha), ip[:64]
+    p.expira_em = utcnow() + timedelta(minutes=CODIGO_EMAIL_MIN)
+    partes = (dados.get("nome") or "").split()
+    try:
+        _emitir_codigo(db, p, partes[0] if partes else "")
+    except HTTPException:
+        if p.id:  # falhou: não deixa um pedido sem código válido
+            db.delete(p)
+            db.commit()
+        raise
+    return {"confirmar": True, "email": email, "validade_min": CODIGO_EMAIL_MIN,
+            "mensagem": f"Enviamos um código de 6 números para {email}. Digite-o abaixo para concluir o cadastro. "
+                        f"Ele vale por {CODIGO_EMAIL_MIN} minutos."}
+
+
 @app.post("/api/auth/registro")
 def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
+    return _registrar(b, request, db)
+
+
+def _registrar(b: "RegistroIn", request: Request, db: Session, *, senha_hash: Optional[str] = None,
+               confirmado: bool = False):
+    """Cadastro. Com a confirmação de e-mail ligada, a 1ª chamada só valida tudo e envia o código (nada é criado);
+    a conta nasce na confirmação, que chama esta função de novo com confirmado=True e o hash da senha já guardado
+    (a chave da coordenação e os freios da 1ª etapa não se repetem)."""
     if b.confirmar_senha is not None and b.confirmar_senha != b.senha:
         raise HTTPException(422, "As senhas não conferem. Digite a mesma senha nos dois campos.")
     nome = nome_limpo(b.nome)
@@ -1241,11 +1402,12 @@ def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
 
     curso = None
     if b.perfil == "professor":
-        limitar_tentativas("chave:" + ip_cliente(request))  # freio contra tentativa e erro da chave
-        if not CHAVE_MASTER:
-            raise HTTPException(403, "Cadastro de professores indisponível: a coordenação ainda não configurou a chave.")
-        if not hmac.compare_digest((b.chave_master or "").encode(), CHAVE_MASTER.encode()):
-            raise HTTPException(403, "Chave de Acesso da Coordenação inválida. Solicite à coordenação.")
+        if not confirmado:
+            limitar_tentativas("chave:" + ip_cliente(request))  # freio contra tentativa e erro da chave
+            if not CHAVE_MASTER:
+                raise HTTPException(403, "Cadastro de professores indisponível: a coordenação ainda não configurou a chave.")
+            if not hmac.compare_digest((b.chave_master or "").encode(), CHAVE_MASTER.encode()):
+                raise HTTPException(403, "Chave de Acesso da Coordenação inválida. Solicite à coordenação.")
         registro = (b.registro_funcional or "").strip()
         depto = (b.departamento or "").strip()
         if not REGISTRO_RE.fullmatch(registro):
@@ -1280,10 +1442,14 @@ def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
     Model = Aluno if b.perfil == "aluno" else Professor
     if db.scalar(select(Model.id).where(Model.email == email)):
         raise HTTPException(409, "Este e-mail já possui cadastro. Use a opção Entrar.")
-    if b.perfil == "aluno" and not ip_em_rede_permitida(ip_cliente(request)):
+    if b.perfil == "aluno" and not confirmado and not ip_em_rede_permitida(ip_cliente(request)):
         # freio contra criação de contas em massa (alto, por causa do Wi-Fi do campus); vem antes do hash, que é caro
         limitar_tentativas("cad:" + ip_cliente(request), CADASTRO_ALUNO_MAX, CADASTRO_ALUNO_JANELA_S)
-    u = Model(nome=nome, email=email, senha_hash=hash_senha(b.senha))
+    if not confirmado and verificacao_email_ativa():
+        dados = {"nome": b.nome, "matricula": b.matricula, "curso_id": b.curso_id, "periodo": b.periodo,
+                 "registro_funcional": b.registro_funcional, "departamento": b.departamento}
+        return _iniciar_verificacao(db, request, b, email, dados)
+    u = Model(nome=nome, email=email, senha_hash=senha_hash or hash_senha(b.senha))
     if b.perfil == "aluno":
         u.matricula, u.curso_id, u.periodo, u.status = mat, curso.id, b.periodo, "ativo"
         if MATRICULA_OBRIGATORIA:
@@ -1316,6 +1482,75 @@ def registro(b: RegistroIn, request: Request, db: Session = Depends(get_db)):
         if pendente:  # nenhum token é emitido: a pessoa só consegue entrar depois que a coordenação autorizar
             return {"pendente": True, "mensagem": MSG_AGUARDANDO}
     return resposta_token(u, b.perfil, curso.nome if curso else None)
+
+
+class ConfirmarIn(BaseModel):
+    perfil: Literal["aluno", "professor"]
+    email: str = Field(max_length=160)
+    codigo: str = Field(max_length=20)
+
+
+class ReenviarIn(BaseModel):
+    perfil: Literal["aluno", "professor"]
+    email: str = Field(max_length=160)
+
+
+def _pendente(db: Session, perfil: str, email: str) -> Optional["CadastroPendente"]:
+    return db.scalar(select(CadastroPendente).where(CadastroPendente.perfil == perfil, CadastroPendente.email == email))
+
+
+@app.post("/api/auth/confirmar")
+def confirmar_cadastro(b: ConfirmarIn, request: Request, db: Session = Depends(get_db)):
+    """2ª etapa do cadastro: confere o código do e-mail e só então cria a conta (o aluno já entra; o professor fica
+    aguardando a autorização da coordenação). Código errado: 5 tentativas, depois o pedido é descartado."""
+    email, ip = b.email.strip().lower(), ip_cliente(request)
+    k_ip = "cf-ip:" + ip
+    checar_falhas(k_ip, CONFIRMA_FALHAS_IP, 600)  # só os erros contam: uma turma inteira confirma pela mesma rede
+    codigo = re.sub(r"\D", "", b.codigo)
+    if len(codigo) != 6:
+        raise HTTPException(400, "Digite os 6 números do código que chegou no seu e-mail.")
+    p = _pendente(db, b.perfil, email)
+    if not p or aware(p.expira_em) < utcnow():
+        registrar_falha(k_ip)
+        raise HTTPException(400, "Código inválido ou vencido. Volte e peça um novo código.")
+    if not hmac.compare_digest(_hash_codigo(b.perfil, email, codigo), p.codigo_hash):
+        registrar_falha(k_ip)
+        p.tentativas = (p.tentativas or 0) + 1
+        if p.tentativas >= CODIGO_MAX_TENTATIVAS:
+            db.delete(p)
+            db.commit()
+            raise HTTPException(400, "Código incorreto várias vezes. Volte e comece o cadastro de novo.")
+        db.commit()
+        raise HTTPException(400, f"Código incorreto. Você ainda tem {CODIGO_MAX_TENTATIVAS - p.tentativas} tentativa(s).")
+    d = json.loads(p.dados)
+    dados = RegistroIn(perfil=b.perfil, nome=d.get("nome") or "", email=email, senha="x" * 8, matricula=d.get("matricula"),
+                       curso_id=d.get("curso_id"), periodo=d.get("periodo"),
+                       registro_funcional=d.get("registro_funcional"), departamento=d.get("departamento"))
+    try:  # as regras do cadastro rodam de novo: a matrícula pode ter sido tomada, o curso desativado, etc.
+        r = _registrar(dados, request, db, senha_hash=p.senha_hash, confirmado=True)
+    except HTTPException:
+        db.delete(p)
+        db.commit()
+        raise
+    db.delete(p)
+    db.commit()
+    return r
+
+
+@app.post("/api/auth/reenviar-codigo")
+def reenviar_codigo(b: ReenviarIn, request: Request, db: Session = Depends(get_db)):
+    email = b.email.strip().lower()
+    ip = ip_cliente(request)
+    limitar_tentativas("env-ip:" + ip, 200, 3600)
+    p = _pendente(db, b.perfil, email)
+    if not p or aware(p.expira_em) < utcnow():
+        raise HTTPException(400, "Nenhum cadastro aguardando confirmação para este e-mail. Preencha o cadastro de novo.")
+    if _espera_restante(p, ip) > 0:
+        raise HTTPException(429, f"Aguarde {_espera_restante(p, ip)} segundos para pedir outro código.")
+    limitar_tentativas(f"env-em:{email}|{ip}", CODIGO_ENVIOS_HORA, 3600)
+    partes = (json.loads(p.dados).get("nome") or "").split()
+    _emitir_codigo(db, p, partes[0] if partes else "")
+    return {"ok": True, "validade_min": CODIGO_EMAIL_MIN, "mensagem": "Enviamos um novo código. O anterior deixou de valer."}
 
 
 class EsqueciIn(BaseModel):
@@ -2108,6 +2343,7 @@ def adm_resumo(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
             "matriculas_autorizadas": _contar(db, MatriculasAutorizadas),
             "matriculas_utilizadas": _contar(db, MatriculasAutorizadas, MatriculasAutorizadas.utilizada.is_(True)),
             "matricula_obrigatoria": MATRICULA_OBRIGATORIA,
+            "verificacao_email": verificacao_email_ativa(), "email_configurado": email_configurado(),
             "pedidos_senha_pendentes": sum(1 for p in _pedidos_senha(db) if not p["atendido"]),
             "por_curso": [{"curso": n, "alunos": c} for n, c in por_curso]}
 

@@ -56,13 +56,19 @@ NOMES = {
     "admin_login", "admin_registro", "_resposta_admin", "_contar", "ip_cliente", "_tentativas", "limitar_tentativas",
     "LOGIN_FALHAS_IP", "LOGIN_FALHAS_CONTA", "LOGIN_JANELA_S", "checar_falhas", "registrar_falha", "esquecer_falhas",
     "EMAIL_RE", "nome_limpo", "ip_em_rede_permitida", "adm_professor_novo", "ProfessorIn",
+    "_registrar", "_iniciar_verificacao", "_emitir_codigo", "_espera_restante", "_hash_codigo", "_pendente",
+    "confirmar_cadastro", "reenviar_codigo", "ConfirmarIn", "ReenviarIn", "email_configurado", "verificacao_email_ativa",
+    "enviar_email", "aware",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
               "MATRICULA_OBRIGATORIA", "RESET_BANCO", "ADMIN_EMAILS", "ADMIN_PATH", "ADMIN_TOKEN_HORAS",
               "COORD_PROVISORIA", "COORD_EMAIL", "COORD_SENHA", "PROXYCHECK_KEY", "VPN_MODO", "PROXY_HOPS",
               "IPS_PERMITIDOS", "DATABASE_URL", "LOGIN_FALHAS_IP", "LOGIN_FALHAS_CONTA", "CADASTRO_ALUNO_MAX",
-              "CADASTRO_ALUNO_JANELA_S", "ADMIN_FALHAS_IP", "ADMIN_FALHAS_CONTA", "ADMIN_FALHAS_GERAL_HORA"]
+              "CADASTRO_ALUNO_JANELA_S", "ADMIN_FALHAS_IP", "ADMIN_FALHAS_CONTA", "ADMIN_FALHAS_GERAL_HORA",
+              "EMAIL_PROVEDOR", "EMAIL_API_KEY", "EMAIL_REMETENTE", "EMAIL_REMETENTE_NOME", "SMTP_HOST", "SMTP_PORT",
+              "SMTP_USUARIO", "SMTP_SENHA", "VERIFICAR_EMAIL", "CODIGO_EMAIL_MIN", "CODIGO_MAX_TENTATIVAS",
+              "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP"]
 
 
 def _compilar():
@@ -144,6 +150,9 @@ class Col:
     def like(self, p):
         return Cmp(self, "like", p)
 
+    def __lt__(self, o):
+        return Cmp(self, "lt", o)
+
     def is_(self, v):
         return Cmp(self, "is", v)
 
@@ -164,6 +173,8 @@ class Cmp:
             return v is not None and re.fullmatch(pad, v, re.S) is not None
         if self.op == "is":
             return v is self.val
+        if self.op == "lt":
+            return v is not None and v < self.val
         return v in self.val
 
 
@@ -190,6 +201,11 @@ class Professor(Modelo):
 class Curso(Modelo):
     id, nome, ativo = (Col() for _ in range(3))
     _padroes, _unicos = {"ativo": True}, ("nome",)
+
+
+class CadastroPendente(Modelo):
+    (id, perfil, email, dados, senha_hash, codigo_hash, tentativas, criado_em, enviado_em, expira_em, ip) = (Col() for _ in range(11))
+    _padroes, _unicos = {"tentativas": 0}, (("perfil", "email"),)
 
 
 class LogSeguranca(Modelo):
@@ -226,13 +242,22 @@ class Select:
         return self
 
 
+class DeleteStmt:
+    def __init__(self, modelo):
+        self.modelo, self.conds = modelo, []
+
+    def where(self, *c):
+        self.conds.extend(c)
+        return self
+
+
 class FakeDB:
     """Sessão em memória: autoflush desligado (como o SessionLocal do app), e-mail único, ids sequenciais."""
 
     def __init__(self, tables=None):
         self.tables = tables if tables is not None else {Aluno: [], Professor: [], Curso: [], LogSeguranca: [],
-                                                         MatriculasAutorizadas: []}
-        self.pending, self.antes_do_commit = [], None
+                                                         MatriculasAutorizadas: [], CadastroPendente: []}
+        self.pending, self.antes_do_commit, self.apagar = [], None, []
 
     def add(self, o):
         self.pending.append(o)
@@ -241,13 +266,14 @@ class FakeDB:
         novos = [o for o in self.pending if o not in self.tables[type(o)]]
         for i, o in enumerate(novos):
             for campo in o._unicos:
-                v = getattr(o, campo)
-                if v is None:
+                campos = campo if isinstance(campo, tuple) else (campo,)
+                v = tuple(getattr(o, c) for c in campos)
+                if any(x is None for x in v):
                     continue                                                  # UNIQUE ignora NULL
-                if any(getattr(r, campo) == v for r in self.tables[type(o)]) or \
-                        any(type(x) is type(o) and getattr(x, campo) == v for x in novos[:i]):
+                if any(tuple(getattr(r, c) for c in campos) == v for r in self.tables[type(o)]) or \
+                        any(type(x) is type(o) and tuple(getattr(x, c) for c in campos) == v for x in novos[:i]):
                     self.pending.clear()
-                    raise IntegrityError(f"UNIQUE {campo}={v}")
+                    raise IntegrityError(f"UNIQUE {campos}={v}")
         for o in novos:
             for k, v in o._padroes.items():
                 if getattr(o, k) is None:
@@ -256,6 +282,10 @@ class FakeDB:
             o.id = max([r.id for r in linhas] or [0]) + 1
             linhas.append(o)
         self.pending.clear()
+        for o in self.apagar:
+            if o in self.tables[type(o)]:
+                self.tables[type(o)].remove(o)
+        self.apagar.clear()
 
     def flush(self):
         self._persistir()
@@ -268,6 +298,17 @@ class FakeDB:
 
     def rollback(self):
         self.pending.clear()
+        self.apagar.clear()
+
+    def delete(self, o):
+        self.apagar.append(o)
+
+    def execute(self, q):
+        if isinstance(q, DeleteStmt):
+            tabela = self.tables[q.modelo]
+            tabela[:] = [r for r in tabela if not all(c.test(r) for c in q.conds)]
+            return
+        raise NotImplementedError(q)
 
     def get(self, modelo, pk):
         return next((r for r in self.tables[modelo] if r.id == pk), None)
@@ -294,7 +335,8 @@ class FakeDB:
 # 3) Contexto de teste: código real do app + banco novo + utilitários
 # =====================================================================================================
 SENHA = "Senha#2026"
-SENHA_PROV = "Provisoria#2026"          # COORD_SENHA definida no ambiente (o código não traz mais senha padrão)
+SENHA_PROV = "Provisoria#2026"
+ENV_EMAIL = dict(EMAIL_PROVEDOR="brevo", EMAIL_API_KEY="chave-de-teste", EMAIL_REMETENTE="guaracheck@unicerrado.edu.br")          # COORD_SENHA definida no ambiente (o código não traz mais senha padrão)
 CHAVE = "chave-mestra-de-teste"
 SEGREDO = "segredo-de-teste-com-mais-de-32-caracteres-ok"
 EMAIL_ALUNO = "maria.souza@alunos.unicerrado.edu.br"
@@ -315,7 +357,7 @@ def novo_ns(**env):
             load_dotenv=lambda *a, **k: None, print=lambda *a, **k: None, HTTPException=HTTPException,
             IntegrityError=IntegrityError, Request=FakeReq, Session=object, Header=lambda *a, **k: None,
             Depends=lambda *a, **k: None, get_db=lambda: None, select=lambda *a: Select(*a), func=_FuncNS(),
-            update=None, Aluno=Aluno, Professor=Professor, Curso=Curso, LogSeguranca=LogSeguranca,
+            update=None, delete=lambda m: DeleteStmt(m), CadastroPendente=CadastroPendente, Aluno=Aluno, Professor=Professor, Curso=Curso, LogSeguranca=LogSeguranca,
             MatriculasAutorizadas=MatriculasAutorizadas)
         exec(CODIGO, ns)
     finally:
@@ -342,10 +384,34 @@ class Ctx:
     def __init__(self, **env):
         self.ns = novo_ns(**env)
         self.db = FakeDB()
+        self.agora = datetime.now(timezone.utc)                                   # relógio de parede controlável
+        self.ns["utcnow"] = lambda: self.agora
+        self.emails, self.envio_falha = [], False
+
+        def _enviar(para, assunto, texto):
+            if self.envio_falha:
+                raise OSError("provedor fora do ar")
+            self.emails.append((para, assunto, texto))
+        self.ns["enviar_email"] = _enviar
         self.curso = Curso(nome="Gestão da TI")
         self.db.add(self.curso)
         self.db.commit()
         self.n = 0
+
+    def avancar(self, segundos):
+        self.agora += timedelta(seconds=segundos)
+        self.ns["time"].t += segundos
+
+    def codigo(self, i=-1):
+        import re as _re2
+        return _re2.search(r"é: (\d{6})", self.emails[i][2]).group(1)
+
+    def confirmar(self, perfil, email, codigo, ip="198.51.100.7"):
+        return status_de(self.ns["confirmar_cadastro"], self.ns["ConfirmarIn"](perfil=perfil, email=email, codigo=codigo),
+                         FakeReq(ip), self.db)
+
+    def reenviar(self, perfil, email, ip="198.51.100.7"):
+        return status_de(self.ns["reenviar_codigo"], self.ns["ReenviarIn"](perfil=perfil, email=email), FakeReq(ip), self.db)
 
     # --- chamadas às rotas reais ---
     def adm_prof_novo(self, ip="198.51.100.7", **over):
@@ -617,12 +683,20 @@ def test_ct18_email_duplicado_qualquer_caixa(ctx):
     assert len(ctx.db.tables[Aluno]) == 1
 
 
-def test_ct19_cadastro_sem_confirmar_posse_do_email_nao_deveria_logar_direto(ctx):
-    # Qualquer pessoa digita o e-mail de um colega + uma matrícula inventada e já recebe token.
-    atacante = ctx.reg_aluno(email="colega.vitima@alunos.unicerrado.edu.br", matricula="INVENTADA99")
-    vitima = ctx.reg_aluno(email="colega.vitima@alunos.unicerrado.edu.br", matricula="GTI202610777", ip="198.51.100.99")
-    assert "token" not in (atacante[1] if isinstance(atacante[1], dict) else {}), \
-        f"cadastro devolveu token na hora (sem confirmar o e-mail); a vítima real depois recebe {vitima[0]} 'já possui cadastro'"
+def test_ct19_cadastro_com_email_alheio_exige_codigo_enviado_ao_dono_do_email():
+    c = Ctx(**ENV_EMAIL)
+    alvo = "colega.vitima@alunos.unicerrado.edu.br"
+    atacante = c.reg_aluno(email=alvo, matricula="INVENTADA99", ip="203.0.113.5")
+    assert cod(atacante) == 200 and atacante[1].get("confirmar") is True and "token" not in atacante[1], atacante
+    assert len(c.db.tables[Aluno]) == 0                                               # nada foi criado nem reservado
+    codigo_atacante = None                                                            # o código vai para a caixa do dono, não para o atacante
+    assert [e[0] for e in c.emails] == [alvo]
+    # a vítima de verdade faz o próprio cadastro (de outro IP) e confirma com o código que chegou na caixa dela
+    vitima = c.reg_aluno(email=alvo, matricula="GTI202610777", ip="198.51.100.99")
+    assert cod(vitima) == 200 and vitima[1].get("confirmar") is True, vitima
+    ok = c.confirmar("aluno", alvo, c.codigo(), ip="198.51.100.99")
+    assert cod(ok) == 200 and ok[1]["usuario"]["matricula"] == "GTI202610777", ok
+    assert [a.matricula for a in c.db.tables[Aluno]] == ["GTI202610777"]
 
 
 def test_ct20_cadastro_de_aluno_tem_limite_por_ip(ctx):
@@ -1117,3 +1191,219 @@ def test_ct67_sem_coord_senha_no_ambiente_nao_ha_variacao_tolerada(ctx):
     assert cod(c.admin_login(c.ns["COORD_EMAIL"], "Outra#Senha1")) == 200
     assert cod(c.admin_login(c.ns["COORD_EMAIL"], "OUTRA#SENHA1")) == 401
     assert not c.ns["senha_provisoria_ativa"](p)
+
+
+# =====================================================================================================
+# BLOCO L - Confirmação do e-mail por código
+# =====================================================================================================
+def test_ct68_confirmacao_cria_a_conta_so_depois_do_codigo():
+    c = Ctx(**ENV_EMAIL)
+    r = c.reg_aluno()
+    assert cod(r) == 200 and r[1]["confirmar"] is True and r[1]["email"] == EMAIL_ALUNO and "token" not in r[1]
+    assert len(c.db.tables[Aluno]) == 0 and len(c.db.tables[CadastroPendente]) == 1
+    para, assunto, texto = c.emails[-1]
+    cd = c.codigo()
+    assert para == EMAIL_ALUNO and cd in assunto and "15 minutos" in texto and SENHA not in texto
+    ok = c.confirmar("aluno", EMAIL_ALUNO, " " + cd[:3] + " " + cd[3:] + " ")             # tolera espaços digitados
+    assert cod(ok) == 200 and ok[1]["usuario"]["perfil"] == "aluno" and ok[1]["usuario"]["curso"] == "Gestão da TI"
+    a = c.db.tables[Aluno][0]
+    assert a.matricula == "GTI202610405" and a.periodo == 3 and a.status == "ativo" and a.nome == "Maria Souza"
+    assert len(c.db.tables[CadastroPendente]) == 0                                    # pedido consumido
+    assert cod(c.login("aluno", EMAIL_ALUNO, SENHA)) == 200                           # a senha do cadastro vale
+    assert cod(c.confirmar("aluno", EMAIL_ALUNO, cd)) == 400                          # o código não vale duas vezes
+
+
+def test_ct69_codigo_errado_limita_tentativas_e_descarta_o_pedido():
+    c = Ctx(**ENV_EMAIL)
+    c.reg_aluno()
+    certo = c.codigo()
+    errado = "000000" if certo != "000000" else "111111"
+    r = c.confirmar("aluno", EMAIL_ALUNO, errado)
+    assert cod(r) == 400 and "4 tentativa" in r[1]
+    for _ in range(3):
+        c.confirmar("aluno", EMAIL_ALUNO, errado)
+    r = c.confirmar("aluno", EMAIL_ALUNO, errado)                                     # 5º erro
+    assert cod(r) == 400 and "comece o cadastro de novo" in r[1]
+    assert len(c.db.tables[CadastroPendente]) == 0
+    assert cod(c.confirmar("aluno", EMAIL_ALUNO, certo)) == 400 and len(c.db.tables[Aluno]) == 0
+    assert cod(c.confirmar("aluno", EMAIL_ALUNO, "12ab")) == 400                      # formato inválido
+
+
+def test_ct70_codigo_vence_em_15_minutos():
+    c = Ctx(**ENV_EMAIL)
+    c.reg_aluno()
+    cd = c.codigo()
+    c.avancar(14 * 60 + 50)
+    c2 = c.confirmar("aluno", EMAIL_ALUNO, cd)
+    assert cod(c2) == 200, c2                                                         # ainda vale aos 14 min 50 s
+    c = Ctx(**ENV_EMAIL)
+    c.reg_aluno()
+    cd = c.codigo()
+    c.avancar(15 * 60 + 5)
+    r = c.confirmar("aluno", EMAIL_ALUNO, cd)
+    assert cod(r) == 400 and "vencido" in r[1] and len(c.db.tables[Aluno]) == 0
+
+
+def test_ct71_reenvio_tem_espera_limite_e_invalida_o_codigo_anterior():
+    c = Ctx(**ENV_EMAIL)
+    c.reg_aluno()
+    velho = c.codigo()
+    r = c.reenviar("aluno", EMAIL_ALUNO)
+    assert cod(r) == 429 and "segundos" in r[1]                                       # espera de 30 s
+    c.avancar(31)
+    assert cod(c.reenviar("aluno", EMAIL_ALUNO)) == 200
+    novo = c.codigo()
+    if novo != velho:                                                                  # (1 chance em 1 milhão de sortear o mesmo)
+        assert cod(c.confirmar("aluno", EMAIL_ALUNO, velho)) == 400                   # o antigo deixou de valer
+    assert cod(c.confirmar("aluno", EMAIL_ALUNO, novo)) == 200
+    c = Ctx(**ENV_EMAIL)
+    c.reg_aluno()
+    cods = []
+    for _ in range(6):
+        c.avancar(31)
+        cods.append(cod(c.reenviar("aluno", EMAIL_ALUNO)))
+    assert cods == [200, 200, 200, 200, 429, 429], cods                              # 1 do cadastro + 4 reenvios = 5 por hora
+    assert cod(c.reenviar("aluno", EMAIL_ALUNO, ip="198.51.100.200")) == 200         # outro IP não é afetado
+    assert cod(c.reenviar("aluno", "naoexiste@alunos.unicerrado.edu.br")) == 400
+
+
+def test_ct72_professor_exige_chave_antes_do_envio_e_fica_aguardando_a_coordenacao():
+    c = Ctx(**ENV_EMAIL)
+    assert cod(c.reg_prof(chave_master="errada")) == 403 and c.emails == []           # sem a chave, nem e-mail sai
+    r = c.reg_prof()
+    assert cod(r) == 200 and r[1]["confirmar"] is True and len(c.db.tables[Professor]) == 0
+    assert "chave" not in c.db.tables[CadastroPendente][0].dados.lower() and CHAVE not in c.db.tables[CadastroPendente][0].dados
+    ok = c.confirmar("professor", EMAIL_PROF, c.codigo())
+    assert cod(ok) == 200 and ok[1].get("pendente") is True and "token" not in ok[1], ok
+    p = c.db.tables[Professor][0]
+    assert p.aprovado is False and p.registro_funcional == "DOC-2026-08" and len(c.logs("cadastro_professor")) == 1
+
+
+def test_ct73_pedido_pendente_nao_reserva_email_nem_matricula():
+    c = Ctx(**ENV_EMAIL)
+    c.reg_aluno(email="atacante@alunos.unicerrado.edu.br", matricula="GTI202610405", ip="203.0.113.5")
+    cod_atacante = c.codigo()
+    real = c.reg_aluno(email="dona.da.matricula@alunos.unicerrado.edu.br", matricula="GTI202610405", ip="198.51.100.20")
+    assert cod(real) == 200, real                                                     # a matrícula não está "tomada"
+    assert cod(c.confirmar("aluno", "dona.da.matricula@alunos.unicerrado.edu.br", c.codigo(), ip="198.51.100.20")) == 200
+    tarde = c.confirmar("aluno", "atacante@alunos.unicerrado.edu.br", cod_atacante, ip="203.0.113.5")
+    assert cod(tarde) == 409 and "matrícula" in tarde[1], tarde                       # a regra roda de novo na confirmação
+    assert [a.email for a in c.db.tables[Aluno]] == ["dona.da.matricula@alunos.unicerrado.edu.br"]
+    assert len(c.db.tables[CadastroPendente]) == 0
+
+
+def test_ct74_modos_da_verificacao():
+    sem = Ctx()                                                                       # auto + sem provedor = comportamento antigo
+    assert not sem.ns["verificacao_email_ativa"]() and "token" in sem.reg_aluno()[1]
+    obrig = Ctx(VERIFICAR_EMAIL="1")                                                  # obrigatório sem provedor = cadastro indisponível
+    r = obrig.reg_aluno()
+    assert cod(r) == 503 and len(obrig.db.tables[Aluno]) == 0 and len(obrig.db.tables[CadastroPendente]) == 0
+    off = Ctx(VERIFICAR_EMAIL="0", **ENV_EMAIL)                                       # desligado de propósito
+    assert "token" in off.reg_aluno()[1] and off.emails == []
+    assert Ctx(**ENV_EMAIL).ns["verificacao_email_ativa"]()
+    for env, esperado in (({"EMAIL_PROVEDOR": "brevo"}, False), ({"EMAIL_PROVEDOR": "smtp", "EMAIL_REMETENTE": "a@b.c"}, False),
+                          ({"EMAIL_PROVEDOR": "smtp", "EMAIL_REMETENTE": "a@b.c", "SMTP_HOST": "smtp.x.com"}, True),
+                          ({"EMAIL_PROVEDOR": "outro", "EMAIL_API_KEY": "k", "EMAIL_REMETENTE": "a@b.c"}, False)):
+        assert Ctx(**env).ns["email_configurado"]() is esperado, env
+
+
+def test_ct75_falha_no_envio_nao_deixa_pedido_nem_conta():
+    c = Ctx(**ENV_EMAIL)
+    c.envio_falha = True
+    r = c.reg_aluno()
+    assert cod(r) == 503 and "código" in r[1]
+    assert len(c.db.tables[CadastroPendente]) == 0 and len(c.db.tables[Aluno]) == 0
+    c.envio_falha = False
+    c.avancar(31)
+    assert cod(c.reg_aluno()) == 200                                                  # tentar de novo funciona
+
+
+def test_ct76_nada_sensivel_fica_guardado_em_texto_puro():
+    c = Ctx(**ENV_EMAIL)
+    c.reg_prof()
+    cd = c.codigo()
+    p = c.db.tables[CadastroPendente][0]
+    tudo = " ".join(str(v) for v in p.__dict__.values())
+    assert cd not in tudo and SENHA not in tudo and CHAVE not in tudo, "código, senha ou chave guardados em texto puro"
+    assert p.senha_hash.startswith("pbkdf2$") and len(p.codigo_hash) == 64
+    assert p.codigo_hash == c.ns["_hash_codigo"]("professor", EMAIL_PROF, cd)
+
+
+def test_ct77_freio_de_codigos_errados_por_ip_conta_so_erros():
+    c = Ctx(**ENV_EMAIL)
+    cods = [cod(c.confirmar("aluno", f"x{i}@alunos.unicerrado.edu.br", "123456", ip="198.51.100.30")) for i in range(40)]
+    assert set(cods) == {400}
+    assert cod(c.confirmar("aluno", "x99@alunos.unicerrado.edu.br", "123456", ip="198.51.100.30")) == 429
+    assert cod(c.confirmar("aluno", "x99@alunos.unicerrado.edu.br", "123456", ip="198.51.100.31")) == 400   # outro IP segue livre
+    c2 = Ctx(**ENV_EMAIL)                                                              # confirmações certas de uma turma não gastam o freio
+    for i in range(45):
+        c2.reg_aluno(email=f"a{i}@alunos.unicerrado.edu.br", matricula=f"GTI2026{i:05d}", ip="198.51.100.40")
+        assert cod(c2.confirmar("aluno", f"a{i}@alunos.unicerrado.edu.br", c2.codigo(), ip="198.51.100.40")) == 200
+
+
+def test_ct78_pedidos_vencidos_sao_limpos():
+    c = Ctx(**ENV_EMAIL)
+    c.reg_aluno(email="a@alunos.unicerrado.edu.br", matricula="GTI202600001", ip="198.51.100.1")
+    c.avancar(20 * 60)
+    c.reg_aluno(email="b@alunos.unicerrado.edu.br", matricula="GTI202600002", ip="198.51.100.2")
+    assert [p.email for p in c.db.tables[CadastroPendente]] == ["b@alunos.unicerrado.edu.br"]
+
+
+def test_ct79_cooldown_e_cota_de_envio_nao_deixam_terceiro_bloquear_o_dono_do_email():
+    c = Ctx(**ENV_EMAIL)
+    alvo = "dona.do.email@alunos.unicerrado.edu.br"
+    for i in range(6):                                                                # atacante pede código várias vezes
+        c.reg_aluno(email=alvo, matricula="GTI202610405", ip="203.0.113.5")
+        c.avancar(31)
+    dona = c.reg_aluno(email=alvo, matricula="GTI202610777", ip="198.51.100.77")      # a dona, de outro IP
+    assert cod(dona) == 200 and dona[1].get("confirmar") is True, dona
+    assert cod(c.confirmar("aluno", alvo, c.codigo(), ip="198.51.100.77")) == 200
+
+
+def _com_envio_real(c):
+    """Troca o envio simulado do Ctx pela função enviar_email REAL do app.py."""
+    corpo = [n for n in ast.parse(APP.read_text(encoding="utf-8")).body if isinstance(n, ast.FunctionDef) and n.name == "enviar_email"]
+    exec(compile(ast.Module(body=corpo, type_ignores=[]), str(APP), "exec"), c.ns)
+    return c.ns["enviar_email"]
+
+
+def test_ct80_envio_pelo_brevo_e_pelo_smtp_monta_a_requisicao_certa(monkeypatch):
+    import json as _json
+    import urllib.request as ur
+    c = Ctx(**ENV_EMAIL, EMAIL_REMETENTE_NOME="Guará Check")
+    visto = {}
+
+    class Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"messageId":"x"}'
+
+    def falso_urlopen(req, timeout=None):
+        visto.update(url=req.full_url, metodo=req.get_method(), cab={k.lower(): v for k, v in req.header_items()},
+                     corpo=_json.loads(req.data), timeout=timeout)
+        return Resp()
+    monkeypatch.setattr(ur, "urlopen", falso_urlopen)
+    enviar = _com_envio_real(c)
+    enviar("aluno@alunos.unicerrado.edu.br", "Assunto", "Corpo 123456")
+    assert visto["url"] == "https://api.brevo.com/v3/smtp/email" and visto["metodo"] == "POST" and visto["timeout"] <= 10
+    assert visto["cab"]["api-key"] == "chave-de-teste" and visto["cab"]["content-type"] == "application/json"
+    assert visto["corpo"] == {"sender": {"name": "Guará Check", "email": "guaracheck@unicerrado.edu.br"},
+                              "to": [{"email": "aluno@alunos.unicerrado.edu.br"}], "subject": "Assunto", "textContent": "Corpo 123456"}
+    assert "123456" not in visto["url"] and "chave-de-teste" not in visto["url"]
+    # SMTP (plano pago / fora da Render)
+    import smtplib
+    eventos = []
+
+    class FalsoSMTP:
+        def __init__(self, host, porta, timeout=None): eventos.append(("conecta", host, porta))
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def starttls(self): eventos.append(("starttls",))
+        def login(self, u, s): eventos.append(("login", u))
+        def send_message(self, m): eventos.append(("envia", m["To"], m["Subject"]))
+    monkeypatch.setattr(smtplib, "SMTP", FalsoSMTP)
+    c2 = Ctx(EMAIL_PROVEDOR="smtp", SMTP_HOST="smtp.exemplo.com", SMTP_USUARIO="u", SMTP_SENHA="s", EMAIL_REMETENTE="g@x.com")
+    _com_envio_real(c2)("a@alunos.unicerrado.edu.br", "Oi", "Texto")
+    assert eventos == [("conecta", "smtp.exemplo.com", 587), ("starttls",), ("login", "u"), ("envia", "a@alunos.unicerrado.edu.br", "Oi")]
+    with pytest.raises(RuntimeError):                                                  # sem provedor, o envio real se recusa
+        _com_envio_real(Ctx())("a@b.c", "x", "y")

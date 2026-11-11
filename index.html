@@ -46,6 +46,8 @@ h2{font-size:22px;margin:0 0 6px;line-height:1.25;letter-spacing:-.015em;font-we
 label{display:block;font-size:13.5px;font-weight:600;margin:14px 0 5px}
 input,select,textarea{width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);font:inherit}
 input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid var(--ring);outline-offset:1px}
+#codigo{font-size:26px;font-weight:700;letter-spacing:.35em;text-align:center;font-variant-numeric:tabular-nums}#codigo::placeholder{letter-spacing:.35em;font-weight:400;opacity:.35}
+#email[readonly]{background:var(--line);color:var(--mut);cursor:not-allowed}
 .btn{border:0;border-radius:999px;background:var(--pri);color:var(--pri-ink);font:inherit;font-weight:600;padding:11px 22px;cursor:pointer;transition:filter .15s}.btn:hover:not(:disabled){filter:brightness(1.08)}
 .btn:disabled{opacity:.55;cursor:wait}
 .btn.fora:disabled{background:var(--line);color:var(--mut);opacity:1;cursor:not-allowed}
@@ -413,8 +415,8 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
     </svg>
   </div>
   <div class="card auth-card">
-    <h2>Entrar como</h2>
-    <div class="tabs">
+    <h2 id="auth-titulo">Entrar como</h2>
+    <div class="tabs" id="auth-tabs">
       <button class="tab on" data-p="aluno" type="button" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c.8-3.6 3.6-5.4 7-5.4s6.2 1.8 7 5.4"/></svg><b>Aluno</b><small>Presença</small></button>
       <button class="tab" data-p="professor" type="button" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><b>Professor</b><small>Chamada</small></button>
       <button class="tab" data-p="admin" type="button" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><b>Coordenação</b><small>Gestão</small></button>
@@ -429,6 +431,7 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
       <label id="f-registro" hidden>Registro Funcional / ID Docente<input id="registro" autocomplete="off" placeholder="Ex.: DOC-2026-08"></label>
       <label id="f-depto" hidden>Departamento / Área<input id="depto" autocomplete="off" placeholder="Ex.: Ciências Exatas e Tecnologia"></label>
       <label id="f-ref" hidden><span id="ref-rot">Matrícula</span><input id="ref" autocomplete="off"></label>
+      <label id="f-codigo" hidden>Código enviado ao seu e-mail<input id="codigo" inputmode="numeric" pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" placeholder="000000" aria-describedby="dica"></label>
       <label id="f-senha">Senha<input id="senha" type="password" autocomplete="current-password" minlength="8" required></label>
       <label id="f-senha2" hidden>Confirmar senha<input id="senha2" type="password" autocomplete="new-password" minlength="8"></label>
       <label id="f-chave" hidden>Chave de Acesso da Coordenação (fornecida pela coordenação)<input id="chave" type="password" autocomplete="off"></label>
@@ -436,6 +439,7 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
       <button class="btn big" id="btn-auth" type="submit">Entrar</button>
     </form>
     <p id="p-esqueci" style="text-align:center;margin:14px 0 0"><button class="link" id="btn-esqueci" type="button">Esqueci minha senha</button></p>
+    <p id="p-reenviar" style="text-align:center;margin:14px 0 0" hidden><button class="link" id="btn-reenviar" type="button">Reenviar código</button></p>
     <p style="text-align:center;margin:10px 0 0"><button class="link" id="toggle" type="button"></button></p>
   </div>
   <div class="cx cx-m" aria-hidden="true"><svg viewBox="0 0 360 90"><use href="#circ-m"/></svg><div class="lig-wrap"><img class="lig" src="assets/guara-pino.png" alt=""></div></div>
@@ -616,7 +620,7 @@ const SITE = {
 };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const S = {token:null, user:null, perfil:'aluno', modo:'login', aula:null, rows:[], ultimo:0, hist:[], poll:null, timer:null,
+const S = {token:null, user:null, perfil:'aluno', modo:'login', pend:null, aula:null, rows:[], ultimo:0, hist:[], poll:null, timer:null,
            map:null, marker:null, circle:null, geo:{pos:null, erro:null, id:null}, cursos:[], cfg:{dominio_aluno:'alunos.unicerrado.edu.br', dominios_professor:['unicerrado.edu.br'], matricula_regex:'^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$', coordenacao_aberta:false}, tick:0};
 const store = {get:k=>{try{return localStorage.getItem(k)}catch{return null}}, set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}, del:k=>{try{localStorage.removeItem(k)}catch{}}};
 
@@ -693,31 +697,59 @@ async function fpHash(){
 
 /* ---------------- Login / cadastro ---------------- */
 function renderAuth(){
-  const reg = S.modo === 'reg', esq = S.modo === 'esqueci', alu = S.perfil === 'aluno', prof = S.perfil === 'professor', adm = S.perfil === 'admin';
+  const reg = S.modo === 'reg', esq = S.modo === 'esqueci', conf = S.modo === 'confirmar' && !!S.pend, alu = S.perfil === 'aluno', prof = S.perfil === 'professor', adm = S.perfil === 'admin';
+  if (S.modo === 'confirmar' && !conf) S.modo = 'login';    // sem pedido em andamento não há o que confirmar
   const dp = '@' + S.cfg.dominios_professor[0];
   document.querySelectorAll('.tab').forEach(t => { t.classList.toggle('on', t.dataset.p === S.perfil); t.setAttribute('aria-pressed', t.dataset.p === S.perfil); });
   $('#f-nome').hidden = !reg; $('#f-curso').hidden = !(reg && alu); $('#f-periodo').hidden = !(reg && alu); $('#f-mat').hidden = !(reg && alu);
   $('#f-registro').hidden = !(reg && prof); $('#f-depto').hidden = !(reg && prof); $('#f-chave').hidden = !(reg && !alu);
-  $('#f-senha').hidden = esq; $('#f-senha2').hidden = !reg; $('#f-ref').hidden = !esq; $('#p-esqueci').hidden = S.modo !== 'login' || adm;
+  $('#f-codigo').hidden = !conf; $('#p-reenviar').hidden = !conf; $('#auth-tabs').hidden = conf; $('#email').readOnly = conf;
+  $('#auth-titulo').textContent = conf ? 'Confirme o seu e-mail' : 'Entrar como';
+  $('#f-senha').hidden = esq || conf; $('#f-senha2').hidden = !reg; $('#f-ref').hidden = !esq; $('#p-esqueci').hidden = S.modo !== 'login' || adm;
   $('#ref-rot').textContent = alu ? 'Matrícula' : 'Registro Funcional / ID Docente';
   $('#ref').placeholder = alu ? 'Ex.: 202610405 ou GTI202610405' : 'Ex.: DOC-2026-08';
-  $('#btn-auth').textContent = esq ? 'Enviar pedido à coordenação' : reg ? (prof ? 'Solicitar cadastro' : 'Criar conta') : 'Entrar';
+  $('#btn-auth').textContent = conf ? (prof ? 'Confirmar e-mail' : 'Confirmar e entrar') : esq ? 'Enviar pedido à coordenação' : reg ? (prof ? 'Solicitar cadastro' : 'Criar conta') : 'Entrar';
   $('#toggle').hidden = adm && S.modo === 'login' && !S.cfg.coordenacao_aberta;
-  $('#toggle').textContent = S.modo === 'login' ? (adm ? 'Primeiro acesso da coordenação · Criar conta' : prof ? 'Primeiro acesso · Solicitar cadastro' : 'Primeiro acesso · Criar conta') : 'Já tenho conta · Entrar';
+  $('#toggle').textContent = conf ? 'Voltar e corrigir o cadastro' : S.modo === 'login' ? (adm ? 'Primeiro acesso da coordenação · Criar conta' : prof ? 'Primeiro acesso · Solicitar cadastro' : 'Primeiro acesso · Criar conta') : 'Já tenho conta · Entrar';
   $('#senha').autocomplete = reg ? 'new-password' : 'current-password';
-  $('#dica').textContent = alu ? 'Alunos: nome@' + S.cfg.dominio_aluno
+  $('#dica').textContent = conf ? 'Digite os 6 números que enviamos para este e-mail. O código vale ' + (S.pend.min || 15) + ' minutos. Não chegou? Veja também a caixa de spam ou peça outro código abaixo.'
+    : alu ? 'Alunos: nome@' + S.cfg.dominio_aluno
     : adm ? (reg ? 'Coordenação: e-mail ' + dp + '. Use a Chave de Acesso da Coordenação (CHAVE_MASTER).' : 'Coordenação: e-mail ' + dp + '. Esqueceu a senha? Outra pessoa da coordenação redefine no painel.')
     : reg ? 'Professores: nome' + dp + '. Depois de enviar, a coordenação precisa autorizar o seu cadastro antes do primeiro acesso.'
     : 'Professores: nome' + dp;
   msg($('#msg-auth'), '');
 }
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => { S.perfil = t.dataset.p; renderAuth(); });
-$('#toggle').onclick = () => { S.modo = S.modo === 'login' ? 'reg' : 'login'; renderAuth(); };
+$('#toggle').onclick = () => { S.modo = S.modo === 'login' ? 'reg' : S.modo === 'confirmar' ? 'reg' : 'login'; S.pend = null; $('#codigo').value = ''; renderAuth(); };
 $('#btn-esqueci').onclick = () => { S.modo = 'esqueci'; renderAuth(); };
+
+/* O servidor só cria a conta depois que o aluno digita o código enviado ao e-mail (S.pend guarda o pedido em andamento). */
+function irParaConfirmacao(r, m){
+  S.pend = {perfil:S.perfil, email:r.email, min:r.validade_min}; S.modo = 'confirmar'; renderAuth();
+  $('#codigo').value = ''; $('#codigo').focus(); msg(m, r.mensagem, 'ok');
+}
+function concluirAuth(r, m){ // resposta final do servidor: professor aguarda a coordenação; os demais entram
+  $('#senha').value = ''; $('#senha2').value = ''; $('#chave').value = ''; $('#codigo').value = ''; S.pend = null;
+  if (r.pendente){ S.modo = 'login'; renderAuth(); return msg(m, r.mensagem, 'ok'); }
+  S.token = r.token; S.user = r.usuario; store.set(KT, r.token); store.set(KU, JSON.stringify(r.usuario)); iniciar();
+}
+$('#btn-reenviar').onclick = async () => {
+  const m = $('#msg-auth'), b = $('#btn-reenviar'); if (!S.pend) return; msg(m, ''); b.disabled = true;
+  try { const r = await api('/auth/reenviar-codigo', {method:'POST', body:{perfil:S.pend.perfil, email:S.pend.email}}); $('#codigo').value = ''; $('#codigo').focus(); msg(m, r.mensagem, 'ok'); }
+  catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; }
+};
 
 $('#form-auth').onsubmit = async e => {
   e.preventDefault();
   const m = $('#msg-auth'); msg(m, '');
+  if (S.modo === 'confirmar' && S.pend){ // passo 2 do cadastro: código enviado ao e-mail
+    const codigo = $('#codigo').value.replace(/\D/g, '');
+    if (codigo.length !== 6) return msg(m, 'Digite os 6 números do código que chegou no seu e-mail.', 'err');
+    const b = $('#btn-auth'); b.disabled = true;
+    try { concluirAuth(await api('/auth/confirmar', {method:'POST', body:{perfil:S.pend.perfil, email:S.pend.email, codigo}}), m); }
+    catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; }
+    return;
+  }
   const alu = S.perfil === 'aluno', reg = S.modo === 'reg', email = $('#email').value.trim().toLowerCase(), dom = email.split('@')[1] || '';
   if (alu ? dom !== S.cfg.dominio_aluno : !S.cfg.dominios_professor.includes(dom))
     return msg(m, alu ? 'Alunos devem usar o e-mail @' + S.cfg.dominio_aluno
@@ -768,12 +800,8 @@ $('#form-auth').onsubmit = async e => {
   const b = $('#btn-auth'); b.disabled = true;
   try {
     const r = await api(reg ? '/auth/registro' : '/auth/login', {method:'POST', body});
-    if (r.pendente){ // professor: cadastro recebido, mas só entra depois da autorização da coordenação
-      $('#senha').value = ''; $('#senha2').value = ''; $('#chave').value = ''; S.modo = 'login'; renderAuth();
-      return msg(m, r.mensagem, 'ok');
-    }
-    S.token = r.token; S.user = r.usuario; store.set(KT, r.token); store.set(KU, JSON.stringify(r.usuario));
-    $('#senha').value = ''; $('#senha2').value = ''; $('#chave').value = ''; iniciar();
+    if (r.confirmar) return irParaConfirmacao(r, m);   // aluno/professor: falta confirmar o e-mail
+    concluirAuth(r, m);                                 // professor: aguarda a coordenação; aluno: entra
   } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; }
 };
 
@@ -798,7 +826,7 @@ function iniciar(){
 function sair(aviso){
   clearInterval(S.timer); clearInterval(S.poll); geoDesligar(); S.geo.pos = S.geo.erro = null;
   S.token = S.user = S.aula = null; store.del(KT); store.del(KU); limparNotas();
-  $('#painel').hidden = true; S.modo = 'login';
+  $('#painel').hidden = true; S.modo = 'login'; S.pend = null;
   fecharMostrar(); renderAuth(); show('auth'); if (aviso) msg($('#msg-auth'), aviso, 'err');
 }
 $('#btn-sair').onclick = () => sair();
@@ -1314,9 +1342,10 @@ const ADM_ABAS = {
       : r.matriculas_autorizadas === 0 ? '<div class="msg err">Nenhuma matrícula autorizada ainda: alunos novos não conseguem criar conta. Importe a lista na aba Matrículas.</div>' : '';
     const pend = r.pedidos_senha_pendentes ? `<div class="msg err">${r.pedidos_senha_pendentes} pedido(s) de nova senha aguardando. Abra a aba Pedidos de senha.</div>` : '';
     const aut = r.professores_pendentes ? `<div class="msg err">${r.professores_pendentes} cadastro(s) de professor aguardando a sua autorização. Abra a aba Professores.</div>` : '';
+    const ver = !r.verificacao_email ? '<div class="msg">A confirmação do e-mail por código está DESLIGADA: hoje qualquer pessoa pode se cadastrar com o e-mail de outra. Para ligar, crie uma conta gratuita no Brevo, verifique um remetente e defina na Render: EMAIL_PROVEDOR=brevo, EMAIL_API_KEY e EMAIL_REMETENTE.</div>' : '';
     const prov = r.senha_provisoria ? '<div class="msg err">Você entrou com a senha PROVISÓRIA. Troque agora, logo abaixo: enquanto ela não for trocada, qualquer pessoa que a conheça entra como coordenação.</div>' : '';
     const cardSenha = `<h3 style="margin-top:16px">Trocar minha senha</h3><div class="row"><input id="ms-atual" type="password" autocomplete="current-password" placeholder="Senha atual"><input id="ms-nova" type="password" autocomplete="new-password" placeholder="Nova senha (mín. 8)"><input id="ms-nova2" type="password" autocomplete="new-password" placeholder="Repita a nova senha"><button class="btn" data-act="minha-senha">Trocar senha</button></div>`;
-    return prov + (r.senha_provisoria ? cardSenha : '') + aviso + aut + pend + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aguardando autorização',r.professores_pendentes || 0],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
+    return prov + (r.senha_provisoria ? cardSenha : '') + ver + aviso + aut + pend + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aguardando autorização',r.professores_pendentes || 0],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
       <h3 style="margin-top:16px">Alunos por curso</h3>` + tb(['Curso','Alunos'], r.por_curso.map(c => `<tr><td>${esc(c.curso)}</td><td>${c.alunos}</td></tr>`)) +
       `<h3 style="margin-top:16px">Proteção contra VPN</h3><p class="mut">Confere se o servidor enxerga o seu IP corretamente e se a verificação de VPN está ativa.</p><button class="btn alt" data-act="vpn-test">Testar proteção contra VPN</button>` + (r.senha_provisoria ? '' : cardSenha);
   },
