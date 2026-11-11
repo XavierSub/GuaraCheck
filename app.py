@@ -1850,9 +1850,10 @@ def tentativas_da_aula(aula_id: int, u: dict = Depends(so_professor), db: Sessio
 
 
 def _seguro(v) -> str:
-    """Evita injeção de fórmula ao abrir o CSV no Excel."""
+    """Evita injeção de fórmula ao abrir o CSV no Excel. Além de = + - @, um TAB ou um CR no começo também
+    iniciam fórmula (lista da OWASP) e passavam direto antes."""
     v = str(v or "")
-    return "'" + v if v[:1] in ("=", "+", "-", "@") else v
+    return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
 
 
 def _cond_ausentes(aula_id: int, curso_id: int, periodo: Optional[int]) -> list:

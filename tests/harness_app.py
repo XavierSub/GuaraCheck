@@ -84,6 +84,9 @@ NOMES = {
     "assinatura_presenca", "_l1", "_pdf_marca", "gerar_pdf_comprovante", "conferir_comprovante", "presencas_da_aula",
     "tentativas_da_aula", "ausentes_da_aula", "_cond_ausentes", "minhas_presencas", "comprovante_pdf", "meu_perfil",
     "gerar_codigo", "LIMITE_PRESENCAS_POR_CONSULTA", "_quebrar_texto",
+    # --- Funcionalidade 6: exportação e auditoria ---
+    "_seguro", "EXPORT_CABECALHO", "_gerar_csv", "export_chamada", "exportar_chamada", "meu_ip", "adm_alertas",
+    "adm_auditoria",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
@@ -181,6 +184,9 @@ class Col:
     def is_(self, v):
         return Cmp(self, "is", v)
 
+    def is_not(self, v):
+        return Cmp(self, "is_not", v)
+
     def in_(self, vs):
         return Cmp(self, "in", vs if isinstance(vs, Select) else list(vs))
 
@@ -258,6 +264,8 @@ class Cmp:
             return v is not None and re.fullmatch(pad, v, re.S) is not None
         if self.op == "is":
             return v is self.val
+        if self.op == "is_not":
+            return v is not self.val
         if self.op == "lt":
             return v is not None and v < self.val
         if self.op == "gt":
@@ -320,6 +328,7 @@ class CadastroPendente(Modelo):
 
 class LogSeguranca(Modelo):
     id, usuario_id, acao, detalhe, ip, data_hora = (Col() for _ in range(6))
+    _carimbos = ("data_hora",)                                   # default=utcnow no modelo real
 
 
 class MatriculasAutorizadas(Modelo):
@@ -410,6 +419,10 @@ class Select:
         self.origem = m
         return self
 
+    def execution_options(self, **kw):
+        self.opcoes = {**getattr(self, "opcoes", {}), **kw}          # yield_per etc.: só registrado
+        return self
+
 
 class DeleteStmt:
     def __init__(self, modelo):
@@ -464,6 +477,14 @@ class FakeDB:
                                                          Tentativa: [], NotaAluno: []}
         self.pending, self.antes_do_commit, self.apagar = [], None, []
         self.relogio = None
+        self.fechada = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.fechada = True                                          # Session.__exit__ = close(): devolve a conexão
+        return False
 
     def add(self, o):
         self.pending.append(o)
@@ -620,6 +641,8 @@ class FakeDB:
         return r if isinstance(a, type) else a.valor(r)
 
     def _modelo(self, q):
+        if q.origem is not None and q.juncoes:
+            return q.origem                                  # SELECT ... FROM origem JOIN ...: a base é a origem, não a 1ª coluna
         a = q.alvos[0]
         if isinstance(a, Func):
             return a.col.owner if a.col is not None else q.origem
@@ -682,7 +705,10 @@ def novo_ns(**env):
             Depends=lambda *a, **k: None, get_db=lambda: None, select=lambda *a: Select(*a), func=_FuncNS(),
             update=lambda m: UpdateStmt(m), delete=lambda m: DeleteStmt(m), or_=lambda *c: Or(c),
             Response=lambda content=None, media_type=None, headers=None, status_code=200: types.SimpleNamespace(
-                body=content, media_type=media_type, headers=headers or {}, status_code=status_code), CadastroPendente=CadastroPendente,
+                body=content, media_type=media_type, headers=headers or {}, status_code=status_code),
+            StreamingResponse=lambda conteudo, status_code=200, headers=None, media_type=None: types.SimpleNamespace(
+                body_iterator=conteudo, media_type=media_type, headers=headers or {}, status_code=status_code),
+            CadastroPendente=CadastroPendente,
             base64=base64, csv=csv, io=io, zipfile=zipfile, Aula=Aula, Presenca=Presenca, Tentativa=Tentativa,
             NotaAluno=NotaAluno, Aluno=Aluno, Professor=Professor, Curso=Curso, LogSeguranca=LogSeguranca,
             MatriculasAutorizadas=MatriculasAutorizadas)
