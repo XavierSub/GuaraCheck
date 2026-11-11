@@ -71,6 +71,10 @@ NOMES = {
     "_pontos_cab_matricula", "_pontos_cab_curso", "_parece_matricula", "_decodificar_texto", "_detectar_delimitador",
     "_celula_texto", "_ler_xlsx", "_tabela_do_arquivo", "_nota_matricula", "_coluna_matricula_por_dados",
     "_ler_matriculas", "marca_senha", "dados_conta", "_cpf_valido", "_coluna_parece_cpf", "_chave_curso",
+    # --- Funcionalidade 3: eventos (aulas e palestras) ---
+    "AulaIn", "aula_dict", "CODIGO_RE", "BRT", "normalizar_codigo", "gerar_codigo", "_aulas_ativas",
+    "_aula_do_professor", "abrir_aula", "encerrar_aula", "excluir_aula", "excluir_todas_as_aulas", "minhas_aulas",
+    "aulas_ativas", "adm_aulas", "adm_aula_encerrar", "adm_aula_excluir",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
@@ -183,8 +187,18 @@ class Col:
     def asc(self):
         return Ordem(self, False)
 
-    def label(self, _nome):
-        return self
+    def label(self, nome):
+        return _Rotulo(self, nome)
+
+
+class _Rotulo:
+    """coluna.label('x'): a mesma coluna, com outro nome no resultado."""
+
+    def __init__(self, col, nome):
+        self.col, self.name, self.owner = col, nome, col.owner
+
+    def valor(self, row):
+        return self.col.valor(row)
 
 
 class Lower:
@@ -214,8 +228,14 @@ class Cmp:
     def __init__(self, col, op, val):
         self.col, self.op, self.val = col, op, val
 
+    def _valor(self, row):
+        if isinstance(row, dict):                                   # linha combinada de um JOIN
+            r = row.get(self.col.owner)
+            return None if r is None else self.col.valor(r)
+        return self.col.valor(row)
+
     def test(self, row, db=None):
-        v = self.col.valor(row)
+        v = self._valor(row)
         if self.op == "eq":
             return v is not None and self.val is not None and v == self.val    # SQL: NULL nunca é igual
         if self.op == "like":
@@ -273,6 +293,10 @@ class MatriculasAutorizadas(Modelo):
 class Aula(Modelo):
     id, professor_id, titulo, ativa, curso_id, periodo = (Col() for _ in range(6))
     _padroes = {"ativa": True}
+    _carimbos = ("aberta_em",)                                   # default=utcnow no modelo real
+    # colunas que o aula_dict lê e que o banco devolveria como NULL quando ninguém preencheu
+    latitude = longitude = raio_metros = tipo = local_tipo = local_descricao = disciplina = None
+    codigo_validacao = encerrada_em = aberta_em = None
 
 
 class Presenca(Modelo):
@@ -299,14 +323,27 @@ class _FuncNS:
     def lower(self, col):
         return Lower(col)
 
-    def count(self):
-        return Func("count")
+    def count(self, col=None):
+        return Func("count", col)
 
 
 class Select:
     def __init__(self, *alvos):
         self.alvos, self.conds, self.origem = alvos, [], None
         self.ordem, self.limite, self.deslocar = [], None, 0
+        self.juncoes, self.agrupar = [], []
+
+    def join(self, modelo, cond):
+        self.juncoes.append((modelo, cond, False))
+        return self
+
+    def outerjoin(self, modelo, cond):
+        self.juncoes.append((modelo, cond, True))
+        return self
+
+    def group_by(self, *cols):
+        self.agrupar.extend(cols)
+        return self
 
     def order_by(self, *o):
         self.ordem.extend(x if isinstance(x, Ordem) else Ordem(x, False) for x in o)
@@ -381,6 +418,7 @@ class FakeDB:
                                                          MatriculasAutorizadas: [], CadastroPendente: [], Aula: [], Presenca: [],
                                                          Tentativa: [], NotaAluno: []}
         self.pending, self.antes_do_commit, self.apagar = [], None, []
+        self.relogio = None
 
     def add(self, o):
         self.pending.append(o)
@@ -401,6 +439,9 @@ class FakeDB:
             for k, v in o._padroes.items():
                 if getattr(o, k) is None:
                     setattr(o, k, v)
+            for k in getattr(o, "_carimbos", ()):
+                if getattr(o, k, None) is None and self.relogio:
+                    setattr(o, k, self.relogio())
             linhas = self.tables[type(o)]
             o.id = max([r.id for r in linhas] or [0]) + 1
             linhas.append(o)
@@ -442,6 +483,8 @@ class FakeDB:
             res = Resultado()
             res.rowcount = len(alvo)
             return res
+        if isinstance(q, Select) and (q.juncoes or q.agrupar):
+            return self._executar_com_juncoes(q)
         if isinstance(q, Select):
             nomes = tuple(getattr(a, "name", None) for a in q.alvos)
             linhas = Resultado()
@@ -456,6 +499,59 @@ class FakeDB:
         return next((r for r in self.tables[modelo] if r.id == pk), None)
 
     @staticmethod
+    def _v_combo(col, combo):
+        r = combo.get(col.owner)
+        return None if r is None else col.valor(r)
+
+    def _casar(self, combo, modelo, cond):
+        """Linhas de `modelo` que casam com a condição de junção (Tabela.col == OutraTabela.col) para esta linha."""
+        a, b = cond.col, cond.val
+        meu, outro = (a, b) if a.owner is modelo else (b, a)
+        v = self._v_combo(outro, combo)
+        return [] if v is None else [r for r in self.tables[modelo] if meu.valor(r) == v]
+
+    def _executar_com_juncoes(self, q):
+        """JOIN / OUTER JOIN / GROUP BY / ORDER BY / LIMIT em memória (só o que as rotas do app usam)."""
+        base = self._modelo(q)
+        combos = [{base: r} for r in self.tables[base]]
+        for modelo, cond, externa in q.juncoes:
+            novos = []
+            for c in combos:
+                achados = self._casar(c, modelo, cond)
+                if achados:
+                    novos.extend({**c, modelo: r} for r in achados)
+                elif externa:
+                    novos.append({**c, modelo: None})
+            combos = novos
+        combos = [c for c in combos if all(x.test(c, self) for x in q.conds)]
+        if q.agrupar:
+            grupos = {}
+            for c in combos:
+                grupos.setdefault(tuple(self._v_combo(g, c) for g in q.agrupar), []).append(c)
+            itens = list(grupos.values())
+        else:
+            itens = [[c] for c in combos]
+        for o in reversed(q.ordem):
+            itens.sort(key=lambda g: (self._v_combo(o.col, g[0]) is None, self._v_combo(o.col, g[0])), reverse=o.desc)
+        itens = itens[q.deslocar:]
+        itens = itens if q.limite is None else itens[:q.limite]
+        nomes = tuple(getattr(a, "name", None) for a in q.alvos)
+        saida = Resultado()
+        for g in itens:
+            vals = []
+            for a in q.alvos:
+                if isinstance(a, Func):
+                    vals.append(len(g) if a.col is None else sum(1 for c in g if self._v_combo(a.col, c) is not None))
+                elif isinstance(a, type):
+                    vals.append(g[0][a])
+                else:
+                    vals.append(self._v_combo(a, g[0]))
+            lin = Linha(vals)
+            lin._nomes = nomes
+            saida.append(lin)
+        return saida
+
+    @staticmethod
     def _valor(a, r):
         return r if isinstance(a, type) else a.valor(r)
 
@@ -463,7 +559,7 @@ class FakeDB:
         a = q.alvos[0]
         if isinstance(a, Func):
             return a.col.owner if a.col is not None else q.origem
-        return a.owner if isinstance(a, (Col, Lower)) else a
+        return a.owner if isinstance(a, (Col, Lower, _Rotulo)) else a
 
     def _linhas(self, q):
         linhas = [r for r in self.tables[self._modelo(q)] if all(c.test(r, self) for c in q.conds)]
@@ -482,7 +578,7 @@ class FakeDB:
                 return len(linhas)
             vals = [getattr(r, a.col.name) for r in linhas]
             return max(vals) if vals else None
-        if isinstance(a, (Col, Lower)):
+        if isinstance(a, (Col, Lower, _Rotulo)):
             return a.valor(linhas[0]) if linhas else None
         return linhas[0] if linhas else None
 
@@ -544,6 +640,7 @@ class Ctx:
         self.db = FakeDB()
         self.agora = datetime.now(timezone.utc)                                   # relógio de parede controlável
         self.ns["utcnow"] = lambda: self.agora
+        self.db.relogio = lambda: self.agora
         self.emails, self.envio_falha = [], False
 
         def _enviar(para, assunto, texto):
