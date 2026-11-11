@@ -328,7 +328,7 @@ def test_ct120_promover_e_rebaixar_coordenacao(adm):
 def test_ct121_excluir_professor_remove_aulas_e_presencas_so_dele(adm):
     a1, a2 = adm.semear_aluno(email="a1@alunos.unicerrado.edu.br"), adm.semear_aluno(email="a2@alunos.unicerrado.edu.br")
     alvo, outro = adm.prof(email="alvo@unicerrado.edu.br"), adm.prof(email="outro@unicerrado.edu.br")
-    x1, x2, y1 = adm.aula(alvo, "X1"), adm.aula(alvo, "X2"), adm.aula(outro, "Y1")
+    x1, x2, y1 = adm.aula(alvo, "X1", ativa=False), adm.aula(alvo, "X2"), adm.aula(outro, "Y1")
     adm.presenca(x1, a1), adm.presenca(x2, a2), adm.presenca(y1, a1)
     adm.db.add(Tentativa(aula_id=x1.id, aluno_id=a2.id))
     adm.db.add(Tentativa(aula_id=y1.id, aluno_id=a2.id))

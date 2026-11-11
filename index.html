@@ -567,6 +567,7 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
   <div class="card">
     <div class="top"><h3>Minhas aulas recentes</h3><button class="btn alt" id="btn-del-todos" type="button" style="color:var(--err);border-color:var(--err)" title="Apaga só os eventos criados por você, não os de outros professores">Excluir meus eventos</button></div>
     <ul id="hist"></ul>
+    <div class="acoes"><button class="btn alt" id="hist-mais" type="button" hidden>Ver eventos mais antigos</button></div>
   </div>
 </section>
 <!-- ============ PAINEL DA COORDENAÇÃO (o login fica na aba Coordenação da tela inicial) ============ -->
@@ -644,9 +645,24 @@ async function api(path, {method='GET', body} = {}){
   let d = null; try { d = await r.json(); } catch {}
   if (!r.ok){
     if (r.status === 401 && S.token){ sair(typeof d?.detail === 'string' ? d.detail : 'Sessão expirada. Entre novamente.'); }  // inclui "conta desativada ou removida"
-    throw new Error(typeof d?.detail === 'string' ? d.detail : r.status === 422 ? 'Dados inválidos. Confira os campos.' : 'Erro ' + r.status);
+    throw new Error(typeof d?.detail === 'string' ? d.detail : r.status === 422 ? erroDeValidacao(d?.detail) : 'Erro ' + r.status);
   }
   return d;
+}
+/* O FastAPI manda os erros de validação como lista ({type, loc, ctx}). Diz QUAL campo errou e o limite, em português. */
+const CAMPOS_API = {titulo:'Nome do evento', raio_metros:'Raio de tolerância', latitude:'Latitude', longitude:'Longitude', periodo:'Período',
+  codigo_validacao:'Código de validação', local_descricao:'Descrição do local', disciplina:'Disciplina', tipo:'Tipo', local_tipo:'Local',
+  nome:'Nome', email:'E-mail', senha:'Senha', matricula:'Matrícula', registro_funcional:'Registro funcional', departamento:'Departamento'};
+function erroDeValidacao(det){
+  const it = Array.isArray(det) ? det[0] : null, campo = it && Array.isArray(it.loc) ? CAMPOS_API[it.loc[it.loc.length - 1]] : null;
+  if (!campo) return 'Dados inválidos. Confira os campos.';
+  const t = it.type || '', c = it.ctx || {}; let quando = 'é inválido';
+  if (t === 'string_too_short' && c.min_length != null) quando = `precisa ter pelo menos ${c.min_length} caracteres`;
+  else if (t === 'string_too_long' && c.max_length != null) quando = `pode ter no máximo ${c.max_length} caracteres`;
+  else if (t === 'greater_than_equal' && c.ge != null) quando = `precisa ser no mínimo ${c.ge}`;
+  else if (t === 'less_than_equal' && c.le != null) quando = `precisa ser no máximo ${c.le}`;
+  else if (t === 'missing' || /_type$|_parsing$/.test(t)) quando = 'está vazio ou não é um valor válido';
+  return `${campo} ${quando}. Corrija e tente de novo.`;
 }
 
 /* ---------------- Geolocalização com antifraude ---------------- */
@@ -1109,7 +1125,9 @@ $('#btn-gps').onclick = async () => {
 };
 $('#form-aula').onsubmit = async e => {
   e.preventDefault(); const m = $('#msg-prof'); msg(m, '');
+  if (S.abrindo) return;  // duplo clique/toque: o segundo envio fecharia a chamada que acabou de abrir
   if (!$('#lat').value.trim() || !$('#lon').value.trim()) return msg(m, 'Defina a localização da sala (use sua localização atual ou clique no mapa).', 'err');
+  const bt = $('#form-aula button[type="submit"]'); S.abrindo = true; bt.disabled = true;
   try {
     const a = await api('/aulas', {method:'POST', body:{titulo:$('#titulo').value.trim(),
       latitude:parseFloat($('#lat').value.replace(',', '.')), longitude:parseFloat($('#lon').value.replace(',', '.')), raio_metros:parseFloat($('#raio').value),
@@ -1119,6 +1137,7 @@ $('#form-aula').onsubmit = async e => {
       codigo_validacao:$('#codigo').value.trim() || null}});
     $('#codigo').value = ''; abrirAula(a); recarregarHist();
   } catch (x) { msg(m, x.message, 'err'); }
+  finally { S.abrindo = false; bt.disabled = false; }
 };
 
 /* ---------------- Professor: painel em tempo real ---------------- */
@@ -1202,15 +1221,27 @@ $('#btn-del-todos').onclick = async () => {
     msg(m, `${r.aulas_removidas} evento(s) seus e ${r.presencas_removidas} presença(s) excluídos. Os eventos de outros professores não foram alterados.`, 'ok'); recarregarHist();
   } catch (x) { msg(m, x.message, 'err'); }
 };
+const HIST_PAG = 30;  // o servidor devolve 30 por página
 async function recarregarHist(retomar){
   try {
-    S.hist = await api('/professor/aulas');
+    S.hist = await api('/professor/aulas'); S.histPag = 1; S.histMais = S.hist.length >= HIST_PAG;
+    renderHist();
+    const aberta = retomar && S.hist.find(a => a.ativa); if (aberta) abrirAula(aberta);
+  } catch (x) { msg($('#msg-prof'), x.message, 'err'); }
+}
+$('#hist-mais').onclick = async () => {
+  const b = $('#hist-mais'); b.disabled = true;
+  try {
+    const mais = await api('/professor/aulas?pagina=' + (S.histPag + 1)), ja = new Set(S.hist.map(a => a.id));
+    S.histPag++; S.hist = S.hist.concat(mais.filter(a => !ja.has(a.id))); S.histMais = mais.length >= HIST_PAG; renderHist();
+  } catch (x) { msg($('#msg-prof'), x.message, 'err'); } finally { b.disabled = false; }
+};
+function renderHist(){
     $('#hist').innerHTML = S.hist.map(a => `<li><span><button class="link" data-i="${a.id}">${esc(a.titulo)}</button>
       <span class="mut"> · ${a.disciplina ? esc(a.disciplina) + ' · ' : ''}${esc(rotulo(a))} · ${new Date(a.aberta_em).toLocaleString('pt-BR')} · ${a.total} presença(s)${a.codigo_validacao ? ' · código ' + esc(a.codigo_validacao) : ''}${a.ativa ? ' · aberta' : ''}</span></span>
       <button class="link del" data-x="${a.id}">Excluir</button></li>`).join('')
       || '<li class="mut">Você ainda não abriu nenhuma chamada.</li>';
-    const aberta = retomar && S.hist.find(a => a.ativa); if (aberta) abrirAula(aberta);
-  } catch (x) { msg($('#msg-prof'), x.message, 'err'); }
+    $('#hist-mais').hidden = !S.histMais;
 }
 $('#hist').onclick = e => {
   const v = e.target.closest('button[data-i]'), d = e.target.closest('button[data-x]');
@@ -1394,8 +1425,11 @@ const ADM_ABAS = {
         <td>${m.utilizada ? '' : `<button class="link del" data-act="mat-del" data-id="${m.id}" data-t="${esc(m.matricula)}">Excluir</button>`}</td></tr>`)) + pager(r.total, 'matrícula(s)');
   },
   async aulas(){
-    const l = await api('/admin/aulas');
-    return tb(['Evento','Tipo','Curso','Período','Professor','Aberta em','Presenças','Situação',''], l.map(a => `<tr><td>${esc(a.titulo)}${a.disciplina ? `<div class="mut">${esc(a.disciplina)}</div>` : ''}</td><td>${a.tipo === 'palestra' ? 'Palestra' : 'Aula'} · ${a.local_tipo === 'fora' ? 'fora' : 'dentro'}</td><td>${esc(a.curso || 'Todos')}</td><td>${a.periodo ? a.periodo + 'º' : 'Todos'}</td><td>${esc(a.professor)}</td><td>${dh(a.aberta_em)}</td><td>${a.total}</td><td>${a.ativa ? 'Aberta' : 'Encerrada'}</td>
+    const l = await api('/admin/aulas?pagina=' + ADM.pag);
+    const nav = ADM.pag > 1 || l.length >= 60 ? `<div class="row"><button class="btn alt" data-act="pag" data-v="-1"${ADM.pag <= 1 ? ' disabled' : ''}>‹ Anterior</button>
+      <span class="mut">Página ${ADM.pag} · os eventos abertos aparecem primeiro</span>
+      <button class="btn alt" data-act="pag" data-v="1"${l.length < 60 ? ' disabled' : ''}>Próxima ›</button></div>` : '';
+    return nav + tb(['Evento','Tipo','Curso','Período','Professor','Aberta em','Presenças','Situação',''], l.map(a => `<tr><td>${esc(a.titulo)}${a.disciplina ? `<div class="mut">${esc(a.disciplina)}</div>` : ''}</td><td>${a.tipo === 'palestra' ? 'Palestra' : 'Aula'} · ${a.local_tipo === 'fora' ? 'fora' : 'dentro'}</td><td>${esc(a.curso || 'Todos')}</td><td>${a.periodo ? a.periodo + 'º' : 'Todos'}</td><td>${esc(a.professor)}</td><td>${dh(a.aberta_em)}</td><td>${a.total}</td><td>${a.ativa ? 'Aberta' : 'Encerrada'}</td>
       <td>${a.ativa ? `<button class="link" data-act="aula-fim" data-id="${a.id}">Encerrar</button> · ` : ''}<button class="link" data-act="aula-csv" data-id="${a.id}">CSV</button> · <button class="link del" data-act="aula-del" data-id="${a.id}" data-t="${esc(a.titulo)}" data-n="${a.total}">Excluir</button></td></tr>`));
   },
   async alertas(){

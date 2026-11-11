@@ -70,14 +70,14 @@ class CtxEv(Ctx):
     def excluir_todas(self, confirmar="EXCLUIR", p=None):
         return status_de(self.ns["excluir_todas_as_aulas"], FakeReq(), confirmar, self.eu(p), self.db)
 
-    def minhas(self, p=None):
-        return status_de(self.ns["minhas_aulas"], self.eu(p), self.db)
+    def minhas(self, p=None, pagina=1):
+        return status_de(self.ns["minhas_aulas"], self.eu(p), self.db, pagina)
 
     def ativas(self, aluno=None):
         return status_de(self.ns["aulas_ativas"], self.sessao_aluno(aluno), self.db)
 
-    def adm_lista(self):
-        return status_de(self.ns["adm_aulas"], self.adm, self.db)
+    def adm_lista(self, pagina=1):
+        return status_de(self.ns["adm_aulas"], self.adm, self.db, pagina)
 
     def adm_encerrar(self, aula_id):
         return status_de(self.ns["adm_aula_encerrar"], aula_id, self.adm, self.db)
@@ -97,6 +97,11 @@ class CtxEv(Ctx):
         self.db.add(a)
         self.db.commit()
         return a
+
+    def outro_prof(self):
+        """Mais um professor (cada professor só pode ter UMA chamada ativa: o banco garante)."""
+        self._extra = getattr(self, "_extra", 1000) + 1
+        return self.prof_barato(self._extra)
 
     def prof_barato(self, i):
         """Professor sem gastar o PBKDF2 (para testes com dezenas de contas)."""
@@ -340,13 +345,28 @@ def test_ct333_duplo_envio_simultaneo_nao_pode_deixar_duas_chamadas_ativas(ev):
     ev.abrir(titulo="Chamada anterior")
     segunda_requisicao = FakeDB(tables=ev.db.tables)         # outra requisição = outra sessão, mesmo banco
     segunda_requisicao.relogio = ev.db.relogio
+    resposta = {}
 
     def outra():
-        status_de(ev.ns["abrir_aula"], ev.corpo(titulo="Toque duplo"), ev.eu(), segunda_requisicao)
+        resposta["r"] = status_de(ev.ns["abrir_aula"], ev.corpo(titulo="Toque duplo"), ev.eu(), segunda_requisicao)
     ev.db.antes_do_commit = outra                            # ela comita no meio da primeira
-    assert cod(ev.abrir(titulo="Toque duplo")) == 200
+    r1 = ev.abrir(titulo="Toque duplo")
+    r2 = resposta["r"]
     ativas = ev.ativas_do_banco(ev.prof)
-    assert len(ativas) <= 1, f"{len(ativas)} chamadas ativas do mesmo professor: a presença dos alunos se divide entre elas"
+    assert len(ativas) == 1, f"{len(ativas)} chamadas ativas do mesmo professor: a presença dos alunos se divide entre elas"
+    assert sorted([cod(r1), cod(r2)]) == [200, 409], (r1, r2)           # uma vence; a outra é avisada
+    perdedora = r1 if cod(r1) == 409 else r2
+    assert "outro envio" in perdedora[1]
+    assert [a.id for a in ativas] == [(r2 if cod(r1) == 409 else r1)[1]["id"]], "a chamada ativa não é a que recebeu 200"
+
+
+def test_ct333b_trava_de_uma_chamada_ativa_esta_no_modelo_e_na_migracao():
+    fonte = APP.read_text(encoding="utf-8")
+    modelo = fonte[fonte.index("class Aula(Base)"):fonte.index("class Presenca(Base)")]
+    assert 'Index("uq_aula_ativa_prof", "professor_id", unique=True' in modelo and "postgresql_where" in modelo and "sqlite_where" in modelo
+    migracao = fonte[fonte.index("def migrar_esquema"):fonte.index("def resetar_dados_de_teste")]
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_aula_ativa_prof ON aulas (professor_id) WHERE ativa" in migracao
+    assert "SELECT MAX(id) FROM aulas WHERE ativa GROUP BY professor_id" in migracao, "a migração não limpa duplicatas antigas antes do índice"
 
 
 # =====================================================================================================
@@ -394,7 +414,7 @@ def test_ct344_encerrar_tira_o_evento_da_lista_do_aluno_na_hora(ev):
 # BLOCO E - Excluir
 # =====================================================================================================
 def test_ct351_excluir_evento_apaga_presencas_e_tentativas_dele_e_so_dele(ev):
-    a, b = ev.aula(ev.prof, "Apagar"), ev.aula(ev.prof, "Manter")
+    a, b = ev.aula(ev.prof, "Apagar", ativa=False), ev.aula(ev.prof, "Manter")
     outro = ev.semear_aluno(email=EMAIL_ALUNO2)
     for aula in (a, b):
         ev.presenca(aula, ev.aluno)
@@ -428,7 +448,7 @@ def test_ct353_excluir_evento_de_outro_professor_ou_inexistente_nao_apaga_nada(e
 
 
 def test_ct354_excluir_todas_exige_confirmacao_e_so_apaga_as_do_professor_logado(ev):
-    minhas = [ev.aula(ev.prof, f"M{i}") for i in range(3)]
+    minhas = [ev.aula(ev.prof, f"M{i}", ativa=(i == 2)) for i in range(3)]
     dela = ev.aula(ev.ana, "Da Ana")
     for a in minhas + [dela]:
         ev.presenca(a)
@@ -478,7 +498,8 @@ def test_ct356_excluir_evento_ativo_tira_da_lista_do_aluno_na_hora(ev):
 # BLOCO F - Listagens
 # =====================================================================================================
 def test_ct361_lista_do_professor_so_tem_os_dele_do_mais_novo_ao_mais_antigo_com_contagem(ev):
-    a1, a2, a3 = ev.aula(ev.prof, "A1", codigo_validacao="111"), ev.aula(ev.prof, "A2"), ev.aula(ev.prof, "A3", curso_id=ev.curso.id)
+    a1, a2, a3 = (ev.aula(ev.prof, "A1", codigo_validacao="111", ativa=False), ev.aula(ev.prof, "A2", ativa=False),
+                  ev.aula(ev.prof, "A3", curso_id=ev.curso.id))
     ev.aula(ev.ana, "Da Ana")
     outro = ev.semear_aluno(email=EMAIL_ALUNO2)
     ev.presenca(a1, ev.aluno)
@@ -494,22 +515,31 @@ def test_ct361_lista_do_professor_so_tem_os_dele_do_mais_novo_ao_mais_antigo_com
 
 def test_ct362_professor_com_mais_de_30_eventos_consegue_chegar_aos_mais_antigos(ev):
     ids = [ev.aula(ev.prof, f"Evento {i:02d}", ativa=False).id for i in range(35)]
-    r = ev.minhas()
-    assert cod(r) == 200
-    visiveis = {x["id"] for x in r[1]}
-    assert visiveis == set(ids), (f"a lista devolve só {len(visiveis)} dos {len(ids)} eventos e não há paginação: "
-                                  "o professor não alcança os mais antigos (nem para exportar a chamada nem para excluir)")
+    vistos, pagina = [], 1
+    while True:
+        r = ev.minhas(pagina=pagina)
+        assert cod(r) == 200
+        if not r[1]:
+            break
+        vistos += [x["id"] for x in r[1]]
+        pagina += 1
+        assert pagina < 10, "paginação não termina"
+    assert vistos == sorted(ids, reverse=True), "faltam eventos, ou repetem, ou fora de ordem (do mais novo ao mais antigo)"
+    assert len(ev.minhas(pagina=1)[1]) == 30 and len(ev.minhas(pagina=2)[1]) == 5 and ev.minhas(pagina=3)[1] == []
+    for ruim in (0, -3):                                                    # página inválida: devolve a primeira, não quebra
+        assert [x["id"] for x in ev.minhas(pagina=ruim)[1]] == vistos[:30], ruim
+    assert ev.minhas(pagina=999_999)[1] == []
 
 
 def test_ct363_lista_do_aluno_filtra_por_curso_e_periodo_e_nunca_traz_o_codigo(ev):
     outro_curso = ev.curso_novo("Direito")
-    todos = ev.aula(ev.prof, "Para todos", codigo_validacao="SEGREDO1")
-    do_curso = ev.aula(ev.prof, "Só TI", curso_id=ev.curso.id, codigo_validacao="SEGREDO2")
-    do_per = ev.aula(ev.prof, "Só 2º período", periodo=2, codigo_validacao="SEGREDO3")
-    do_per5 = ev.aula(ev.prof, "Só 5º período", periodo=5, codigo_validacao="SEGREDO4")
-    outro = ev.aula(ev.prof, "Só Direito", curso_id=outro_curso.id, codigo_validacao="SEGREDO5")
-    exato = ev.aula(ev.prof, "TI 2º", curso_id=ev.curso.id, periodo=2, codigo_validacao="SEGREDO6")
-    ev.aula(ev.prof, "Encerrado", ativa=False, codigo_validacao="SEGREDO7")
+    todos = ev.aula(ev.outro_prof(), "Para todos", codigo_validacao="SEGREDO1")
+    do_curso = ev.aula(ev.outro_prof(), "Só TI", curso_id=ev.curso.id, codigo_validacao="SEGREDO2")
+    do_per = ev.aula(ev.outro_prof(), "Só 2º período", periodo=2, codigo_validacao="SEGREDO3")
+    do_per5 = ev.aula(ev.outro_prof(), "Só 5º período", periodo=5, codigo_validacao="SEGREDO4")
+    outro = ev.aula(ev.outro_prof(), "Só Direito", curso_id=outro_curso.id, codigo_validacao="SEGREDO5")
+    exato = ev.aula(ev.outro_prof(), "TI 2º", curso_id=ev.curso.id, periodo=2, codigo_validacao="SEGREDO6")
+    ev.aula(ev.outro_prof(), "Encerrado", ativa=False, codigo_validacao="SEGREDO7")
     r = ev.ativas()                                                          # aluno: curso TI, 2º período
     assert cod(r) == 200
     assert {x["titulo"] for x in r[1]} == {"Para todos", "Só TI", "Só 2º período", "TI 2º"}
@@ -524,9 +554,9 @@ def test_ct363_lista_do_aluno_filtra_por_curso_e_periodo_e_nunca_traz_o_codigo(e
 
 def test_ct364_aluno_sem_curso_ou_sem_periodo_so_ve_eventos_abertos_a_todos(ev):
     sem = ev.semear_aluno(email=EMAIL_ALUNO2, curso_id=None, periodo=None)
-    ev.aula(ev.prof, "Para todos")
-    ev.aula(ev.prof, "Só TI", curso_id=ev.curso.id)
-    ev.aula(ev.prof, "Só 3º", periodo=3)
+    ev.aula(ev.outro_prof(), "Para todos")
+    ev.aula(ev.outro_prof(), "Só TI", curso_id=ev.curso.id)
+    ev.aula(ev.outro_prof(), "Só 3º", periodo=3)
     assert [x["titulo"] for x in ev.ativas(sem)[1]] == ["Para todos"]
 
 
@@ -554,8 +584,8 @@ def test_ct367_lista_da_coordenacao_traz_todos_com_professor_e_contagem_sem_codi
     a, b = ev.aula(ev.prof, "A", codigo_validacao="SEGREDO"), ev.aula(ev.ana, "B", ativa=False)
     ev.presenca(a)
     r = ev.adm_lista()
-    assert cod(r) == 200 and [x["titulo"] for x in r[1]] == ["B", "A"]
-    assert [x["professor"] for x in r[1]] == ["Ana Prof", "Carlos Lima"] and [x["total"] for x in r[1]] == [0, 1]
+    assert cod(r) == 200 and [x["titulo"] for x in r[1]] == ["A", "B"], "os eventos abertos vêm primeiro, depois os mais novos"
+    assert [x["professor"] for x in r[1]] == ["Carlos Lima", "Ana Prof"] and [x["total"] for x in r[1]] == [1, 0]
     assert "SEGREDO" not in _json.dumps(r[1]) and all("codigo_validacao" not in x for x in r[1])
 
 
@@ -601,3 +631,102 @@ def test_ct374_codigo_de_validacao_so_aparece_para_o_dono(ev):
     assert ev.ns["aula_dict"](a, com_codigo=True)["codigo_validacao"] == "ABC123"
     assert ev.minhas()[1][0]["codigo_validacao"] == "ABC123"
     assert ev.minhas(ev.ana)[1] == []
+
+
+def test_ct369_painel_da_coordenacao_pagina_e_nao_perde_nem_repete_eventos(ev):
+    abertos = [ev.aula(ev.outro_prof(), f"Aberto {i}").id for i in range(3)]
+    fechados = [ev.aula(ev.ana, f"Fechado {i:02d}", ativa=False).id for i in range(70)]
+    p1, p2, p3 = (ev.adm_lista(n) for n in (1, 2, 3))
+    assert cod(p1) == cod(p2) == cod(p3) == 200
+    assert [x["id"] for x in p1[1][:3]] == sorted(abertos, reverse=True), "os abertos devem ser os primeiros da primeira página"
+    assert (len(p1[1]), len(p2[1]), p3[1]) == (60, 13, [])
+    todos = [x["id"] for x in p1[1] + p2[1]]
+    assert len(set(todos)) == 73 == len(todos) and set(todos) == set(abertos + fechados)
+    assert [x["id"] for x in p1[1][3:]] == sorted(fechados, reverse=True)[:57]
+    assert [x["id"] for x in ev.adm_lista(0)[1]] == [x["id"] for x in p1[1]]
+
+
+def test_ct375_chamada_passa_do_prazo_e_e_encerrada_pelo_sistema(ev):
+    a = ev.abrir(titulo="Aula de ontem")[1]
+    aberta_em = ev.db.get(Aula, a["id"]).aberta_em
+    ev.avancar(12 * 3600 - 60)                                              # 11 h 59 min: ainda vale
+    assert [x["id"] for x in ev.ativas()[1]] == [a["id"]] and ev.db.get(Aula, a["id"]).ativa is True
+    ev.avancar(120)                                                         # 12 h 01 min: passou do prazo
+    assert ev.ativas()[1] == []
+    guardada = ev.db.get(Aula, a["id"])
+    assert guardada.ativa is False and guardada.encerrada_em == aberta_em + timedelta(hours=12), \
+        "o encerramento automático deve gravar a hora do vencimento (abertura + 12 h), não a de agora"
+    nova = ev.abrir(titulo="Aula de hoje")
+    assert cod(nova) == 200 and [x["id"] for x in ev.ativas()[1]] == [nova[1]["id"]]
+
+
+def test_ct375b_professor_e_coordenacao_tambem_veem_a_chamada_vencida_como_encerrada(ev):
+    ev.abrir(titulo="Esquecida")
+    ev.avancar(13 * 3600)
+    h = ev.minhas()[1][0]
+    assert h["ativa"] is False and h["encerrada_em"] is not None
+    ev.abrir(ev.ana, titulo="Esquecida 2")
+    ev.avancar(13 * 3600)
+    assert {x["titulo"]: x["ativa"] for x in ev.adm_lista()[1]} == {"Esquecida": False, "Esquecida 2": False}
+
+
+def test_ct375c_prazo_configuravel_e_zero_desliga(ev):
+    curto = CtxEv(AULA_MAX_HORAS="2")
+    a = curto.abrir()[1]
+    curto.avancar(2 * 3600 - 60)
+    assert len(curto.ativas()[1]) == 1
+    curto.avancar(120)
+    assert curto.ativas()[1] == []
+    sem = CtxEv(AULA_MAX_HORAS="0")
+    sem.abrir()
+    sem.avancar(72 * 3600)
+    assert len(sem.ativas()[1]) == 1, "AULA_MAX_HORAS=0 deve desligar o prazo"
+    ruim = CtxEv(AULA_MAX_HORAS="doze")
+    assert ruim.ns["AULA_MAX_HORAS"] == 12.0, "valor inválido volta ao padrão de 12 h"
+    assert CtxEv().ns["AULA_MAX_HORAS"] == 12.0
+
+
+def test_ct376_quem_registra_presenca_respeita_o_prazo():
+    """registrar_presenca roda no teste da Funcionalidade 4; aqui: a regra que ele usa, e a garantia de que ele a usa."""
+    ev = CtxEv()
+    a = ev.aula(ev.prof, "Aula")
+    aula_aberta = ev.ns["aula_aberta"]
+    assert aula_aberta(a) is True
+    ev.avancar(12 * 3600 + 1)
+    assert aula_aberta(a) is False, "passou do prazo: não aceita presença, mesmo ainda marcada como ativa"
+    a.ativa = False
+    assert aula_aberta(a) is False
+    sem_data = Aula(professor_id=ev.prof.id, titulo="x", ativa=True)
+    assert aula_aberta(sem_data) is True                                    # registro antigo sem data: não bloqueia
+    fontes = {n.name: n for n in _ast.parse(APP.read_text(encoding="utf-8")).body if isinstance(n, _ast.FunctionDef)}
+    for nome in ("registrar_presenca", "presencas_da_aula"):
+        chamadas = {x.func.id for x in _ast.walk(fontes[nome]) if isinstance(x, _ast.Call) and isinstance(x.func, _ast.Name)}
+        assert "aula_aberta" in chamadas, f"{nome} deixou de usar aula_aberta (o prazo não vale mais ali)"
+    # quem LÊ chamadas abertas limpa as vencidas antes (adm_resumo usa SQL que o harness não executa: conferido pelo código)
+    for nome in ("_aulas_ativas", "minhas_aulas", "adm_aulas", "adm_resumo"):
+        chamadas = {x.func.id for x in _ast.walk(fontes[nome]) if isinstance(x, _ast.Call) and isinstance(x.func, _ast.Name)}
+        assert "encerrar_vencidas" in chamadas, f"{nome} deixou de encerrar as chamadas vencidas"
+
+
+def test_ct377_desativar_professor_encerra_a_chamada_dele_e_so_a_dele(ev):
+    dele = ev.abrir(ev.prof, titulo="Dele")[1]
+    da_ana = ev.abrir(ev.ana, titulo="Da Ana")[1]
+    ev.avancar(300)
+    assert cod(ev.adm_prof_ativo(ev.prof, False)) == 200
+    encerrada = ev.db.get(Aula, dele["id"])
+    assert encerrada.ativa is False and encerrada.encerrada_em == ev.agora
+    assert ev.db.get(Aula, da_ana["id"]).ativa is True and [x["titulo"] for x in ev.ativas()[1]] == ["Da Ana"]
+    log = ev.logs("professor_ativo")
+    assert len(log) == 1 and log[0].detalhe == f"{EMAIL_PROF}: desativado; chamadas encerradas=1"
+    assert cod(ev.adm_prof_ativo(ev.prof, True)) == 200
+    assert ev.db.get(Aula, dele["id"]).ativa is False, "reativar o professor não pode reabrir a chamada antiga"
+    assert cod(ev.abrir(ev.prof, titulo="De novo")) == 200
+    assert cod(ev.adm_prof_ativo(ev.ana, False)) == 200 and cod(ev.adm_prof_ativo(ev.ana, False)) == 200
+    assert ev.logs("professor_ativo")[-1].detalhe == f"{EMAIL_PROF2}: desativado"      # sem chamada aberta: sem sufixo
+
+
+def test_ct378_titulo_com_espacos_e_quebras_vira_uma_linha_so(ev):
+    r = ev.abrir(titulo="  Cálculo   II\n\t(turma  B) ")
+    assert cod(r) == 200 and r[1]["titulo"] == "Cálculo II (turma B)"
+    r = ev.abrir(titulo="   ")
+    assert cod(r) == 422 and "nome do evento" in r[1]

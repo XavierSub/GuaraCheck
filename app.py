@@ -61,6 +61,14 @@ IDADE_MAX_POSICAO_S = int(os.getenv("IDADE_MAX_POSICAO_S", "120"))
 RISCO_MAX = int(os.getenv("RISCO_MAX", "3"))                # pontuação de suspeita que bloqueia
 VELOCIDADE_MAX_MS = float(os.getenv("VELOCIDADE_MAX_MS", "70"))  # ~250 km/h entre dois check-ins
 LIMITE_PRESENCAS_POR_CONSULTA = 2000
+# Prazo máximo de uma chamada aberta (horas). Passou disso, o sistema encerra sozinho e o aluno não registra mais presença:
+# um evento esquecido aberto não vira presença tardia nem acumula na lista. 0 = sem prazo.
+try:
+    AULA_MAX_HORAS = max(0.0, float(os.getenv("AULA_MAX_HORAS", "12")))
+except ValueError:
+    AULA_MAX_HORAS = 12.0
+HIST_POR_PAGINA = 30        # eventos por página no histórico do professor e no painel da coordenação (60)
+AULAS_ATIVAS_MAX = 500      # teto da lista de chamadas abertas (filtrada por curso/período depois, por aluno)
 
 # Matrícula (Pasta 1): formato numérico + lista pré-aprovada (tabela MatriculasAutorizadas)
 # Matrícula: letras e números (ex.: 202610405 ou GTI202610405), de 4 a 30 caracteres, sem espaços. Guardada em MAIÚSCULAS.
@@ -236,6 +244,9 @@ class Aula(Base):
     ativa: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     aberta_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     encerrada_em: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # no máximo UMA chamada ativa por professor (dois envios simultâneos não criam duas: o segundo recebe 409)
+    __table_args__ = (Index("uq_aula_ativa_prof", "professor_id", unique=True,
+                            postgresql_where=text("ativa"), sqlite_where=text("ativa")),)
 
 
 class Presenca(Base):
@@ -406,6 +417,14 @@ def migrar_esquema():
                 conn.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {indice} ON {tabela} ({coluna})"))
         except Exception as exc:
             print(f"Índice único {indice} não criado (há {coluna} repetido?):", exc)
+    # Uma chamada ativa por professor. Bancos antigos podem ter duas ativas do mesmo professor: fica só a mais nova.
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE aulas SET ativa = FALSE, encerrada_em = COALESCE(encerrada_em, CURRENT_TIMESTAMP) "
+                              "WHERE ativa AND id NOT IN (SELECT MAX(id) FROM aulas WHERE ativa GROUP BY professor_id)"))
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_aula_ativa_prof ON aulas (professor_id) WHERE ativa"))
+    except Exception as exc:
+        print("Índice uq_aula_ativa_prof não criado:", exc)
 
 
 def resetar_dados_de_teste():
@@ -1640,12 +1659,38 @@ def login(b: LoginIn, request: Request, db: Session = Depends(get_db)):
 _cache_ativas = {"t": 0.0, "v": []}
 
 
+def aula_aberta(a) -> bool:
+    """Aberta de verdade: marcada como ativa E dentro do prazo (AULA_MAX_HORAS). Quem registra presença confere isto."""
+    if not a.ativa:
+        return False
+    if AULA_MAX_HORAS <= 0 or a.aberta_em is None:
+        return True
+    return aware(a.aberta_em) + timedelta(hours=AULA_MAX_HORAS) > utcnow()
+
+
+def encerrar_vencidas(db: Session) -> int:
+    """Encerra de vez as chamadas que passaram do prazo (a hora de encerramento é a do vencimento, não a de agora)."""
+    if AULA_MAX_HORAS <= 0:
+        return 0
+    prazo = timedelta(hours=AULA_MAX_HORAS)
+    vencidas = db.scalars(select(Aula).where(Aula.ativa.is_(True), Aula.aberta_em < utcnow() - prazo)).all()
+    for a in vencidas:
+        a.ativa, a.encerrada_em = False, aware(a.aberta_em) + prazo
+    if vencidas:
+        db.commit()
+        _cache_ativas["t"] = 0
+    return len(vencidas)
+
+
 def _aulas_ativas(db: Session) -> list:
     if time.monotonic() - _cache_ativas["t"] < 2:
         return _cache_ativas["v"]
+    encerrar_vencidas(db)
+    # o teto é alto de propósito: o filtro por curso/período é feito depois, por aluno. Com 50, vinte chamadas de um
+    # curso escondiam a chamada de outro.
     rows = db.execute(select(Aula, Professor.nome, Curso.nome).join(Professor, Professor.id == Aula.professor_id)
                       .outerjoin(Curso, Curso.id == Aula.curso_id)
-                      .where(Aula.ativa.is_(True)).order_by(Aula.id.desc()).limit(50)).all()
+                      .where(Aula.ativa.is_(True)).order_by(Aula.id.desc()).limit(AULAS_ATIVAS_MAX)).all()
     _cache_ativas.update(t=time.monotonic(), v=[{**aula_dict(a, curso=cn), "professor": n} for a, n, cn in rows])
     return _cache_ativas["v"]
 
@@ -1659,6 +1704,9 @@ def _aula_do_professor(db: Session, aula_id: int, prof_id: int) -> Aula:
 
 @app.post("/api/aulas")
 def abrir_aula(b: AulaIn, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
+    titulo = re.sub(r"\s+", " ", b.titulo).strip()  # o Pydantic conta os espaços: '   ' passava e abria evento sem nome
+    if len(titulo) < 2:
+        raise HTTPException(422, "Informe o nome do evento (mínimo 2 letras ou números).")
     curso = None
     if b.curso_id is not None:
         curso = db.get(Curso, b.curso_id)
@@ -1670,13 +1718,18 @@ def abrir_aula(b: AulaIn, u: dict = Depends(so_professor), db: Session = Depends
         raise HTTPException(422, "O código de validação deve ter de 3 a 12 letras ou números, sem símbolos (ex.: 081).")
     db.execute(update(Aula).where(Aula.professor_id == u["id"], Aula.ativa.is_(True))
                .values(ativa=False, encerrada_em=utcnow()))
-    a = Aula(professor_id=u["id"], titulo=b.titulo.strip(), latitude=b.latitude, longitude=b.longitude,
+    a = Aula(professor_id=u["id"], titulo=titulo, latitude=b.latitude, longitude=b.longitude,
              raio_metros=b.raio_metros, tipo=b.tipo, local_tipo=b.local_tipo,
              local_descricao=(b.local_descricao or "").strip() or None, curso_id=b.curso_id,
              periodo=b.periodo, disciplina=(b.disciplina or "").strip() or None,
              codigo_validacao=codigo or gerar_codigo())
     db.add(a)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:  # dois envios ao mesmo tempo: o banco só aceita uma chamada ativa por professor
+        db.rollback()
+        _cache_ativas["t"] = 0
+        raise HTTPException(409, "A chamada já foi aberta por outro envio. Atualize a tela e confira o histórico.")
     _cache_ativas["t"] = 0
     return aula_dict(a, 0, curso.nome if curso else None, com_codigo=True)
 
@@ -1722,11 +1775,14 @@ def excluir_todas_as_aulas(request: Request, confirmar: str = "", u: dict = Depe
 
 
 @app.get("/api/professor/aulas")
-def minhas_aulas(u: dict = Depends(so_professor), db: Session = Depends(get_db)):
+def minhas_aulas(u: dict = Depends(so_professor), db: Session = Depends(get_db), pagina: int = 1):
+    """Histórico do professor, do mais novo ao mais antigo, HIST_POR_PAGINA por página (?pagina=2 traz os mais antigos)."""
+    encerrar_vencidas(db)
+    pagina = min(max(pagina, 1), 10_000)
     rows = db.execute(select(Aula, func.count(Presenca.id), Curso.nome)
                       .outerjoin(Presenca, Presenca.aula_id == Aula.id).outerjoin(Curso, Curso.id == Aula.curso_id)
                       .where(Aula.professor_id == u["id"]).group_by(Aula.id, Curso.nome)
-                      .order_by(Aula.id.desc()).limit(30)).all()
+                      .order_by(Aula.id.desc()).limit(HIST_POR_PAGINA).offset((pagina - 1) * HIST_POR_PAGINA)).all()
     return [aula_dict(a, n, cn, com_codigo=True) for a, n, cn in rows]
 
 
@@ -1761,7 +1817,7 @@ def presencas_da_aula(aula_id: int, apos_id: int = 0, u: dict = Depends(so_profe
         .outerjoin(Curso, Curso.id == Aluno.curso_id)
         .where(Presenca.aula_id == aula_id, Presenca.id > apos_id)
         .order_by(Presenca.id).limit(LIMITE_PRESENCAS_POR_CONSULTA)).all()
-    return {"ativa": a.ativa, "total": total, "limite": LIMITE_PRESENCAS_POR_CONSULTA,
+    return {"ativa": aula_aberta(a), "total": total, "limite": LIMITE_PRESENCAS_POR_CONSULTA,
             "presencas": [{"id": r.id, "nome": r.nome, "matricula": r.matricula, "email": r.email,
                            "curso": r.curso, "periodo": r.periodo, "distancia_m": round(r.distancia_m, 1),
                            "registrado_em": iso(r.registrado_em), "alertas": r.alertas} for r in rows]}
@@ -2098,7 +2154,7 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
     aula = db.get(Aula, aula_id)
     if not aula:
         raise HTTPException(404, "Aula não encontrada.")
-    if not aula.ativa:
+    if not aula_aberta(aula):  # encerrada pelo professor, pela coordenação ou por passar do prazo (AULA_MAX_HORAS)
         raise HTTPException(409, "Esta chamada já foi encerrada.")
     al = db.execute(select(Aluno.curso_id, Aluno.periodo, Aluno.status).where(Aluno.id == u["id"])).first()
     if not al:
@@ -2351,6 +2407,7 @@ def adm_pedidos_senha(u: dict = Depends(so_admin), db: Session = Depends(get_db)
 
 @app.get("/api/admin/resumo")
 def adm_resumo(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+    encerrar_vencidas(db)  # o contador de chamadas abertas não pode incluir as que já passaram do prazo
     por_curso = db.execute(select(Curso.nome, func.count(Aluno.id)).select_from(Curso)
                            .outerjoin(Aluno, Aluno.curso_id == Curso.id).group_by(Curso.id, Curso.nome)
                            .order_by(Curso.nome)).all()
@@ -2462,9 +2519,15 @@ def adm_professor_ativo(prof_id: int, b: AtivoIn, request: Request, u: dict = De
     if p.id == u["id"] and not b.ativo:
         raise HTTPException(400, "Você não pode desativar a própria conta.")
     p.ativo = b.ativo
-    log_seg(db, u["id"], "professor_ativo", f"{p.email}: {'ativo' if b.ativo else 'desativado'}", ip_cliente(request))
+    encerradas = 0
+    if not b.ativo:  # ele não consegue mais entrar para encerrar: a chamada aberta dele não pode continuar valendo
+        encerradas = db.execute(update(Aula).where(Aula.professor_id == p.id, Aula.ativa.is_(True))
+                                .values(ativa=False, encerrada_em=utcnow())).rowcount
+    log_seg(db, u["id"], "professor_ativo", f"{p.email}: {'ativo' if b.ativo else 'desativado'}"
+            + (f"; chamadas encerradas={encerradas}" if encerradas else ""), ip_cliente(request))
     db.commit()
     esquecer_contas()  # desativar vale já: a sessão aberta do professor deixa de funcionar na próxima chamada
+    _cache_ativas["t"] = 0
     return {"ok": True}
 
 
@@ -3186,12 +3249,16 @@ def adm_matricula_excluir(mid: int, request: Request, u: dict = Depends(so_admin
 
 # ---- Aulas, alertas e auditoria ----
 @app.get("/api/admin/aulas")
-def adm_aulas(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+def adm_aulas(u: dict = Depends(so_admin), db: Session = Depends(get_db), pagina: int = 1):
+    """Eventos abertos primeiro (um esquecido aberto nunca some do painel), depois os mais novos; 60 por página."""
+    encerrar_vencidas(db)
+    pagina = min(max(pagina, 1), 10_000)
     rows = db.execute(select(Aula, Professor.nome, func.count(Presenca.id), Curso.nome)
                       .join(Professor, Professor.id == Aula.professor_id)
                       .outerjoin(Presenca, Presenca.aula_id == Aula.id)
                       .outerjoin(Curso, Curso.id == Aula.curso_id)
-                      .group_by(Aula.id, Professor.nome, Curso.nome).order_by(Aula.id.desc()).limit(60)).all()
+                      .group_by(Aula.id, Professor.nome, Curso.nome).order_by(Aula.ativa.desc(), Aula.id.desc())
+                      .limit(60).offset((pagina - 1) * 60)).all()
     return [{**aula_dict(a, n, cn), "professor": nome} for a, nome, n, cn in rows]
 
 

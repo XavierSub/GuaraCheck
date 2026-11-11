@@ -74,7 +74,7 @@ NOMES = {
     # --- Funcionalidade 3: eventos (aulas e palestras) ---
     "AulaIn", "aula_dict", "CODIGO_RE", "BRT", "normalizar_codigo", "gerar_codigo", "_aulas_ativas",
     "_aula_do_professor", "abrir_aula", "encerrar_aula", "excluir_aula", "excluir_todas_as_aulas", "minhas_aulas",
-    "aulas_ativas", "adm_aulas", "adm_aula_encerrar", "adm_aula_excluir",
+    "aulas_ativas", "adm_aulas", "adm_aula_encerrar", "adm_aula_excluir", "aula_aberta", "encerrar_vencidas",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
@@ -84,7 +84,7 @@ ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MAS
               "CADASTRO_ALUNO_JANELA_S", "ADMIN_FALHAS_IP", "ADMIN_FALHAS_CONTA", "ADMIN_FALHAS_GERAL_HORA",
               "EMAIL_PROVEDOR", "EMAIL_API_KEY", "EMAIL_REMETENTE", "EMAIL_REMETENTE_NOME", "SMTP_HOST", "SMTP_PORT",
               "SMTP_USUARIO", "SMTP_SENHA", "VERIFICAR_EMAIL", "CODIGO_EMAIL_MIN", "CODIGO_MAX_TENTATIVAS",
-              "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP"]
+              "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP", "AULA_MAX_HORAS"]
 
 
 def _compilar():
@@ -254,6 +254,7 @@ class Cmp:
 class Modelo:
     _padroes: dict = {}
     _unicos: tuple = ()
+    _unicos_parciais: tuple = ()      # ((campos, condição), ...): UNIQUE (campos) WHERE condição (índice parcial)
 
     def __init__(self, **kw):
         for k, v in kw.items():
@@ -291,12 +292,13 @@ class MatriculasAutorizadas(Modelo):
 
 
 class Aula(Modelo):
-    id, professor_id, titulo, ativa, curso_id, periodo = (Col() for _ in range(6))
+    id, professor_id, titulo, ativa, curso_id, periodo, aberta_em = (Col() for _ in range(7))
     _padroes = {"ativa": True}
     _carimbos = ("aberta_em",)                                   # default=utcnow no modelo real
+    _unicos_parciais = ((("professor_id",), lambda r: r.ativa is not False),)   # uq_aula_ativa_prof: uma ativa por professor
     # colunas que o aula_dict lê e que o banco devolveria como NULL quando ninguém preencheu
     latitude = longitude = raio_metros = tipo = local_tipo = local_descricao = disciplina = None
-    codigo_validacao = encerrada_em = aberta_em = None
+    codigo_validacao = encerrada_em = None
 
 
 class Presenca(Modelo):
@@ -435,6 +437,14 @@ class FakeDB:
                         any(type(x) is type(o) and tuple(getattr(x, c) for c in campos) == v for x in novos[:i]):
                     self.pending.clear()
                     raise IntegrityError(f"UNIQUE {campos}={v}")
+            for campos, cond in o._unicos_parciais:
+                if not cond(o):
+                    continue
+                v = tuple(getattr(o, c) for c in campos)
+                if any(cond(r) and tuple(getattr(r, c) for c in campos) == v for r in self.tables[type(o)]) or \
+                        any(type(x) is type(o) and cond(x) and tuple(getattr(x, c) for c in campos) == v for x in novos[:i]):
+                    self.pending.clear()
+                    raise IntegrityError(f"UNIQUE parcial {campos}={v}")
         for o in novos:
             for k, v in o._padroes.items():
                 if getattr(o, k) is None:
