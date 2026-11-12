@@ -20,6 +20,7 @@ import os
 import re
 import secrets
 import statistics
+import threading
 import time as _time
 import types
 import unicodedata
@@ -91,6 +92,9 @@ NOMES = {
     # --- Funcionalidade 7: anotações privadas do aluno e PDFs ---
     "NOTA_MAX", "NOTAS_MAX_PDF", "limpar_nota", "gerar_pdf_anotacoes", "NotaIn", "_nota_dict", "minhas_notas", "salvar_nota",
     "excluir_nota", "_pdf_notas", "notas_pdf_todas", "nota_pdf",
+    # --- Funcionalidade 10: busca de lugar pelo nome (mapa da sala) ---
+    "NOMINATIM_URL", "NOMINATIM_UA", "LUGAR_MIN", "LUGAR_MAX", "LUGAR_POR_MINUTO", "LUGAR_INTERVALO_S", "LUGAR_CACHE_S",
+    "LUGAR_CACHE_MAX", "_lugar_cache", "_lugar_lock", "_lugar_ultima", "_lugar_float", "_lugar_buscar", "buscar_lugares",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
@@ -100,7 +104,7 @@ ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MAS
               "CADASTRO_ALUNO_JANELA_S", "ADMIN_FALHAS_IP", "ADMIN_FALHAS_CONTA", "ADMIN_FALHAS_GERAL_HORA",
               "EMAIL_PROVEDOR", "EMAIL_API_KEY", "EMAIL_REMETENTE", "EMAIL_REMETENTE_NOME", "SMTP_HOST", "SMTP_PORT",
               "SMTP_USUARIO", "SMTP_SENHA", "VERIFICAR_EMAIL", "CODIGO_EMAIL_MIN", "CODIGO_MAX_TENTATIVAS",
-              "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP", "AULA_MAX_HORAS"]
+              "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP", "AULA_MAX_HORAS", "NOMINATIM_UA"]
 
 
 def _compilar():
@@ -162,6 +166,9 @@ class FakeTime:
 
     def time(self):
         return self.t
+
+    def sleep(self, s):                 # não dorme de verdade: só anda o relógio de mentira
+        self.t += s
 
 
 class Col:
@@ -704,7 +711,7 @@ def novo_ns(**env):
     try:
         ns = dict(
             __file__=str(APP), __name__="app_extraido", os=os, re=re, time=FakeTime(), hashlib=hashlib, hmac=hmac,
-            secrets=secrets, ipaddress=ipaddress, math=math, json=json, unicodedata=unicodedata, urllib=urllib, jwt=jwt,
+            secrets=secrets, ipaddress=ipaddress, math=math, json=json, unicodedata=unicodedata, urllib=urllib, jwt=jwt, threading=threading,
             datetime=datetime, timedelta=timedelta, timezone=timezone, Path=Path, Dict=Dict, List=List,
             Literal=Literal, Optional=Optional, BaseModel=BaseModel, Field=Field,
             load_dotenv=lambda *a, **k: None, print=lambda *a, **k: None, HTTPException=HTTPException,

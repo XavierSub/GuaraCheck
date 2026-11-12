@@ -84,12 +84,15 @@ with sync_playwright() as pw:
     b, pg, erros = abrir(pw, 50000)
     r = aviso(pg)
     conf("err" not in r["cls"].split(), f"CT-1130 | computador com localização de ±50 km: o aviso não é mais um erro vermelho (classe: {r['cls']!r})")
-    conf("Este computador não tem GPS" in r["txt"] and "±50 km" in r["txt"] and "Clique no mapa" in r["txt"], f"CT-1131 | o texto diz que o computador não tem GPS, a margem e que é para clicar no mapa: {r['txt'][:120]!r}")
+    conf("Este computador não tem GPS" in r["txt"] and "±50 km" in r["txt"] and "clique no mapa" in r["txt"].lower() and "procure o lugar pelo nome" in r["txt"].lower(), f"CT-1131 | o texto diz que o computador não tem GPS, a margem, e que é para procurar o lugar pelo nome ou clicar no mapa: {r['txt'][:120]!r}")
     conf(pg.input_value("#lat") == "" and pg.input_value("#lon") == "", "CT-1132 | a localização aproximada NÃO preenche latitude e longitude (continua recusando)")
     pg.wait_for_timeout(900)
+    vis_aviso = pg.evaluate("(() => { const r = document.querySelector('#gps-info').getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight })()")
+    vis_busca = pg.evaluate("(() => { const r = document.querySelector('#busca-q').getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight })()")
+    conf(vis_aviso and vis_busca, "CT-1133a | a tela rola para o aviso e a caixa 'Procurar um lugar no mapa' ficam à vista")
     if LEAFLET:
         vis = pg.evaluate("(() => { const r = document.querySelector('#mapa').getBoundingClientRect(); return r.height > 100 && r.bottom > 0 && r.top < window.innerHeight })()")
-        conf(vis, "CT-1133 | a tela rola até o mapa para o professor já clicar no lugar da sala")
+        conf(vis, "CT-1133 | o mapa também aparece na tela, para o professor já clicar no lugar da sala")
         box = pg.locator("#mapa").bounding_box()
         pg.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
         try:
@@ -98,8 +101,7 @@ with sync_playwright() as pw:
             pass
         conf(pg.input_value("#lat") != "" and pg.input_value("#lon") != "", "CT-1134 | clicar no mapa preenche a localização da sala")
     else:
-        vis = pg.evaluate("(() => { const r = document.querySelector('#gps-info').getBoundingClientRect(); return r.bottom > 0 && r.top < window.innerHeight })()")
-        conf(vis, "CT-1133 | sem o mapa carregado, a tela rola até o aviso (para clicar no mapa use GC_LEAFLET)")
+        print("PULADO CT-1133 | mapa visível (precisa de GC_LEAFLET)")
         print("PULADO CT-1134 | clique no mapa (precisa de GC_LEAFLET)")
     conf(not erros, f"CT-1135 | sem erro de JavaScript {erros}")
     b.close()
@@ -107,7 +109,7 @@ with sync_playwright() as pw:
     # ---- celular com GPS aproximado
     b, pg, erros = abrir(pw, 50000, celular=True)
     r = aviso(pg)
-    conf("localização precisa" in r["txt"] and "toque de novo" in r["txt"] and "computador" not in r["txt"] and "err" not in r["cls"].split(),
+    conf("localização precisa" in r["txt"] and "toque de novo" in r["txt"] and "pelo nome" in r["txt"] and "computador" not in r["txt"] and "err" not in r["cls"].split(),
          f"CT-1136 | celular: o texto manda ligar a 'localização precisa' e tocar de novo (sem falar em computador): {r['txt'][:100]!r}")
     conf(pg.input_value("#lat") == "", "CT-1137 | celular com GPS aproximado também não preenche a sala")
     b.close()

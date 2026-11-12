@@ -69,6 +69,13 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid v
 .auth-card{margin:0}
 .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 14px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
 #mapa{height:340px;border-radius:14px;margin-top:12px;border:1px solid var(--line)}
+#gps-info{scroll-margin-top:12px}
+.busca{margin-top:14px}.busca label{margin-top:0}
+#busca-res{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}
+#busca-res li{display:block;padding:0;border:0}
+#busca-res button{display:block;width:100%;text-align:left;padding:10px 12px;border:1.5px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);font:inherit;font-size:14px;line-height:1.35;cursor:pointer;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+#busca-res button:hover{border-color:var(--pri)}
+#busca-res button[aria-current="true"]{border-color:var(--pri);background:var(--okbg);font-weight:600}
 #gps-info{margin-bottom:0}
 /* o estilo geral de label/input do site distorce o seletor de camadas do mapa: aqui volta ao tamanho normal */
 #mapa .leaflet-control-layers label{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:14px;font-weight:600;color:var(--ink)}
@@ -520,8 +527,18 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
         <button class="btn alt" id="btn-gps" type="button">Usar minha localização atual</button>
         <button class="btn" type="submit">Abrir chamada</button>
       </div>
-      <p class="mut">Estando na sala, use sua localização atual (no celular, ao ar livre ou perto de uma janela, é mais precisa) ou toque no mapa; depois arraste o marcador para acertar o ponto exato. Troque entre Satélite e Mapa no canto do mapa. Prefira raios de 30 m ou mais: o GPS dentro de prédios oscila. Para acompanhar os alunos ausentes, escolha um curso específico (e o período, se quiser). O código de validação (3 a 12 letras ou números) aparece só no PDF que o aluno baixa depois de registrar presença: use-o para conferir os comprovantes.</p>
+      <p class="mut">Estando na sala, use sua localização atual (no celular, ao ar livre ou perto de uma janela, é mais precisa), toque no mapa ou, no computador (que não tem GPS), procure o lugar pelo nome na caixa acima do mapa; depois arraste o marcador para acertar o ponto exato. Troque entre Satélite e Mapa no canto do mapa. Prefira raios de 30 m ou mais: o GPS dentro de prédios oscila. Para acompanhar os alunos ausentes, escolha um curso específico (e o período, se quiser). O código de validação (3 a 12 letras ou números) aparece só no PDF que o aluno baixa depois de registrar presença: use-o para conferir os comprovantes.</p>
       <div class="msg" id="gps-info" hidden></div>
+      <div class="busca" role="search">
+        <label for="busca-q">Procurar um lugar no mapa</label>
+        <div class="row">
+          <input id="busca-q" type="search" maxlength="120" autocomplete="off" enterkeyhint="search" placeholder="Ex.: Passeio das Águas Shopping, Goiânia">
+          <button class="btn alt" id="busca-ok" type="button">Procurar</button>
+        </div>
+        <div class="msg" id="busca-msg" role="status" hidden></div>
+        <ul id="busca-res" hidden></ul>
+        <p class="mut" style="font-size:12.5px;margin:4px 0 0">Busca com dados do OpenStreetMap.</p>
+      </div>
       <div id="mapa"></div>
     </form>
     <div class="msg" id="msg-prof" hidden></div>
@@ -632,7 +649,7 @@ const SITE = {
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const S = {token:null, user:null, perfil:'aluno', modo:'login', pend:null, aula:null, rows:[], ultimo:0, hist:[], poll:null, timer:null,
-           map:null, marker:null, circle:null, geo:{pos:null, erro:null, id:null}, cursos:[], cfg:{dominio_aluno:'alunos.unicerrado.edu.br', dominios_professor:['unicerrado.edu.br'], matricula_regex:'^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$', coordenacao_aberta:false}, tick:0};
+           map:null, marker:null, circle:null, geo:{pos:null, erro:null, id:null}, cursos:[], cfg:{dominio_aluno:'alunos.unicerrado.edu.br', dominios_professor:['unicerrado.edu.br'], matricula_regex:'^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$', coordenacao_aberta:false}, tick:0, buscaN:0, lugares:null};
 const store = {get:k=>{try{return localStorage.getItem(k)}catch{return null}}, set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}, del:k=>{try{localStorage.removeItem(k)}catch{}}};
 
 const KT = 'gc_token', KU = 'gc_user';
@@ -851,7 +868,7 @@ function iniciar(){
 }
 function sair(aviso){
   clearInterval(S.timer); clearInterval(S.poll); geoDesligar(); S.geo.pos = S.geo.erro = null;
-  S.token = S.user = S.aula = null; store.del(KT); store.del(KU); limparNotas();
+  S.token = S.user = S.aula = null; store.del(KT); store.del(KU); limparNotas(); limparBusca();
   $('#painel').hidden = true; S.modo = 'login'; S.pend = null;
   fecharMostrar(); renderAuth(); show('auth'); if (aviso) msg($('#msg-auth'), aviso, 'err');
 }
@@ -1183,14 +1200,60 @@ $('#btn-gps').onclick = async () => {
       limparPrecisao();
       const movel = /Android|iPhone|iPad|Mobi/i.test(navigator.userAgent), prec = fmtPrec(c.accuracy);
       msg($('#gps-info'), movel
-        ? `O GPS veio aproximado (±${prec}) e não foi usado para marcar a sala. Ligue o GPS e a "localização precisa" para este navegador (Android: Configurações > Localização; iPhone: Ajustes > Privacidade > Serviços de Localização > Safari/Chrome > Localização Precisa) e toque de novo, ou toque no mapa no lugar da sala.`
-        : `Este computador não tem GPS: a localização veio aproximada (±${prec}) e não foi usada. Clique no mapa no lugar da sala, ou abra esta tela no celular e use o botão de novo.`);
-      ($('#mapa').hidden ? $('#gps-info') : $('#mapa')).scrollIntoView({block:'center', behavior:'smooth'});  // sem GPS (computador) o caminho é clicar no mapa
+        ? `O GPS veio aproximado (±${prec}) e não foi usado para marcar a sala. Ligue o GPS e a "localização precisa" para este navegador (Android: Configurações > Localização; iPhone: Ajustes > Privacidade > Serviços de Localização > Safari/Chrome > Localização Precisa) e toque de novo, ou procure o lugar pelo nome na caixa logo abaixo, ou toque no mapa no lugar da sala.`
+        : `Este computador não tem GPS: a localização veio aproximada (±${prec}) e não foi usada. Procure o lugar pelo nome na caixa logo abaixo, clique no mapa no lugar da sala ou abra esta tela no celular e use o botão de novo.`);
+      $('#gps-info').scrollIntoView({block:'start', behavior:'smooth'});  // lê o aviso e já vê a caixa de busca e o mapa logo abaixo
       return;
     }
     setPonto(c.latitude, c.longitude, false, c.accuracy);
   } catch (x) { msg(m, x.message, 'err'); } finally { b.disabled = false; b.textContent = rot; }
 };
+/* Procurar um lugar pelo nome (o computador não tem GPS). A busca passa pelo servidor (GET /api/lugares): o serviço gratuito do
+   OpenStreetMap aceita no máximo 1 consulta por segundo no total, então o servidor segura o ritmo e lembra as buscas repetidas.
+   Aqui: uma busca por clique ou Enter (nunca a cada letra) e uma de cada vez. */
+function limparBusca(){
+  S.buscaN++; S.lugares = null; $('#busca-q').value = ''; $('#busca-res').replaceChildren(); $('#busca-res').hidden = true;
+  msg($('#busca-msg'), ''); const b = $('#busca-ok'); b.disabled = false; b.textContent = 'Procurar';
+}
+function irParaLugar(l){
+  setPonto(l.lat, l.lon, true);   // preenche latitude e longitude e põe o marcador; true = quem move o mapa é o código abaixo
+  if (!S.map) return;
+  if (l.caixa) S.map.fitBounds([[l.caixa[0], l.caixa[1]], [l.caixa[2], l.caixa[3]]], {maxZoom:18, padding:[24, 24]});
+  else S.map.setView([l.lat, l.lon], 18);
+}
+async function procurarLugar(){
+  const q = $('#busca-q').value.replace(/\s+/g, ' ').trim(), m = $('#busca-msg'), ul = $('#busca-res'), b = $('#busca-ok');
+  ul.replaceChildren(); ul.hidden = true; S.lugares = null;
+  if (q.length < 3) return msg(m, 'Digite pelo menos 3 letras: o nome do lugar e a cidade, por exemplo "Passeio das Águas Shopping, Goiânia".', 'err');
+  const n = ++S.buscaN; b.disabled = true; b.textContent = 'Procurando…'; msg(m, '');
+  try {
+    const lista = (await api('/lugares?q=' + encodeURIComponent(q))).resultados || [];
+    if (n !== S.buscaN) return;
+    if (!lista.length) return msg(m, 'Não achei esse lugar. Tente o nome da rua com a cidade (ex.: Av. Goiás, Goiânia) ou clique no mapa.');
+    irParaLugar(lista[0]);
+    if (lista.length > 1){
+      lista.forEach((l, i) => {
+        const li = document.createElement('li'), bt = document.createElement('button');
+        bt.type = 'button'; bt.textContent = bt.title = l.nome; bt.dataset.i = i; if (!i) bt.setAttribute('aria-current', 'true');
+        li.append(bt); ul.append(li);
+      });
+      ul.hidden = false; S.lugares = lista;
+    }
+    msg(m, lista.length > 1 ? 'Marquei o primeiro resultado. Se não for o lugar certo, escolha outro abaixo. Depois arraste o marcador até a sala.'
+      : 'Lugar marcado no mapa. Arraste o marcador até a sala.', 'ok');
+  } catch (x) { if (n === S.buscaN) msg(m, x.message, 'err'); }
+  finally { if (n === S.buscaN){ b.disabled = false; b.textContent = 'Procurar'; } }
+}
+$('#busca-ok').onclick = procurarLugar;
+$('#busca-q').addEventListener('keydown', e => {   // Enter aqui NÃO pode enviar o formulário (abriria a chamada)
+  if (e.key !== 'Enter' || e.isComposing) return;
+  e.preventDefault(); if (!$('#busca-ok').disabled) procurarLugar();
+});
+$('#busca-res').addEventListener('click', e => {
+  const bt = e.target.closest('button[data-i]'), l = bt && S.lugares && S.lugares[+bt.dataset.i]; if (!l) return;
+  $('#busca-res').querySelectorAll('button').forEach(x => x.removeAttribute('aria-current')); bt.setAttribute('aria-current', 'true');
+  irParaLugar(l); msg($('#busca-msg'), 'Lugar marcado no mapa. Arraste o marcador até a sala.', 'ok');
+});
 $('#form-aula').onsubmit = async e => {
   e.preventDefault(); const m = $('#msg-prof'); msg(m, '');
   if (S.abrindo) return;  // duplo clique/toque: o segundo envio fecharia a chamada que acabou de abrir

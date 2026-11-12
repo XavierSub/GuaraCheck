@@ -16,8 +16,10 @@ import math
 import os
 import re
 import secrets
+import threading
 import time
 import unicodedata
+import urllib.parse
 import urllib.request
 import zipfile
 from contextlib import asynccontextmanager
@@ -1745,6 +1747,101 @@ def _aula_do_professor(db: Session, aula_id: int, prof_id: int) -> Aula:
     if not a or a.professor_id != prof_id:
         raise HTTPException(404, "Aula não encontrada.")
     return a
+
+
+# ---------------- Busca de lugar (marcar a sala pelo nome, em computador sem GPS) ----------------
+# O professor digita o nome de um lugar ("Passeio das Águas Shopping, Goiânia") e o mapa vai até lá. A busca usa o Nominatim do
+# OpenStreetMap, que permite no MÁXIMO 1 consulta por segundo somando TODOS os usuários do site, exige um User-Agent que identifique
+# o aplicativo e pede cache. Por isso a página não fala com o Nominatim: ela chama esta rota, que só atende professor logado, freia
+# cada professor, lembra as buscas repetidas por 24 h e espaça as idas ao Nominatim em pelo menos 1,1 s. (Assim o CSP da página
+# continua sem endereço externo de dados e o IP do professor não vai para um terceiro.) NOMINATIM_UA pode levar um e-mail de contato.
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_UA = os.getenv("NOMINATIM_UA", "GuaraCheck/1.0 (presenca por geolocalizacao; UniCerrado Goiatuba)")
+LUGAR_MIN = 3                         # tamanho do texto buscado
+LUGAR_MAX = 120
+LUGAR_POR_MINUTO = 20                  # buscas por professor por minuto (o resto vem do cache)
+LUGAR_INTERVALO_S = 1.1                # espaço mínimo entre duas idas ao Nominatim, de qualquer professor
+LUGAR_CACHE_S = 24 * 3600
+LUGAR_CACHE_MAX = 500
+_lugar_cache: dict = {}                # busca normalizada -> (vale até, resultados)
+_lugar_lock = threading.Lock()         # uma ida ao Nominatim por vez
+_lugar_ultima = [0.0]                  # quando começou a última ida
+
+
+def _lugar_float(x, limite: float):
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) and abs(v) <= limite else None
+
+
+def _lugar_buscar(q: str) -> list:
+    """Uma ida ao Nominatim. Devolve só o que a página usa: nome, lat, lon e a caixa [sul, oeste, norte, leste] (ou None)."""
+    params = urllib.parse.urlencode({
+        "format": "jsonv2", "q": q, "countrycodes": "br", "accept-language": "pt-BR", "limit": 5, "dedupe": 1,
+        "viewbox": "-52.5,-14.5,-46.5,-20.5", "bounded": 0})   # prefere (sem limitar a) Goiás e arredores quando o nome é ambíguo
+    req = urllib.request.Request(f"{NOMINATIM_URL}?{params}", headers={"User-Agent": NOMINATIM_UA, "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=6) as r:
+        dados = json.loads(r.read(262144).decode("utf-8"))   # no máximo 256 KB: a resposta vem de fora, não se confia no tamanho
+    if not isinstance(dados, list):
+        raise ValueError("resposta inesperada do serviço de busca")
+    saida = []
+    for d in dados[:50]:                                 # filtra primeiro (itens estragados no começo não derrubam os bons) e só depois limita a 5
+        if len(saida) == 5:
+            break
+        if not isinstance(d, dict):
+            continue
+        lat, lon = _lugar_float(d.get("lat"), 90), _lugar_float(d.get("lon"), 180)
+        if lat is None or lon is None:
+            continue
+        caixa, bb = None, d.get("boundingbox")
+        if isinstance(bb, list) and len(bb) == 4:       # o Nominatim manda [sul, norte, oeste, leste]
+            sul, norte, oeste, leste = (_lugar_float(bb[0], 90), _lugar_float(bb[1], 90),
+                                        _lugar_float(bb[2], 180), _lugar_float(bb[3], 180))
+            if None not in (sul, norte, oeste, leste) and sul <= norte and oeste <= leste:
+                caixa = [sul, oeste, norte, leste]
+        nome = " ".join(str(d.get("display_name") or "").split())[:200] or "Lugar sem nome"
+        saida.append({"nome": nome, "lat": lat, "lon": lon, "caixa": caixa})
+    return saida
+
+
+@app.get("/api/lugares")
+def buscar_lugares(q: str = "", u: dict = Depends(so_professor)):
+    q = " ".join(q.split())
+    if len(q) < LUGAR_MIN:
+        raise HTTPException(422, f"Digite pelo menos {LUGAR_MIN} letras do nome do lugar.")
+    if len(q) > LUGAR_MAX:
+        raise HTTPException(422, f"Use no máximo {LUGAR_MAX} caracteres na busca.")
+    limitar_tentativas("lugar:" + str(u["id"]), LUGAR_POR_MINUTO, 60)
+    chave = unicodedata.normalize("NFKC", q).casefold()
+    guardado = _lugar_cache.get(chave)
+    if guardado and guardado[0] > time.monotonic():
+        return {"resultados": guardado[1]}
+    if not _lugar_lock.acquire(timeout=8):
+        raise HTTPException(503, "Muitas buscas ao mesmo tempo. Tente de novo em instantes ou clique no mapa.")
+    try:
+        guardado = _lugar_cache.get(chave)               # outra busca igual pode ter acabado enquanto esta esperava a vez
+        if guardado and guardado[0] > time.monotonic():
+            return {"resultados": guardado[1]}
+        falta = LUGAR_INTERVALO_S - (time.monotonic() - _lugar_ultima[0])
+        if falta > 0:
+            time.sleep(falta)
+        _lugar_ultima[0] = time.monotonic()
+        try:
+            resultados = _lugar_buscar(q)
+        except Exception as e:                           # rede, tempo esgotado, bloqueio (429) ou resposta quebrada: nada é guardado
+            print(f"[lugares] a busca falhou: {type(e).__name__}")
+            raise HTTPException(503, "A busca de lugares não respondeu agora. Clique no mapa no lugar da sala "
+                                     "ou tente a busca de novo daqui a pouco.")
+    finally:
+        _lugar_lock.release()
+    agora = time.monotonic()
+    if len(_lugar_cache) >= LUGAR_CACHE_MAX:
+        for k in [k for k, v in _lugar_cache.items() if v[0] <= agora] or sorted(_lugar_cache, key=lambda k: _lugar_cache[k][0])[: LUGAR_CACHE_MAX // 2]:
+            del _lugar_cache[k]
+    _lugar_cache[chave] = (agora + LUGAR_CACHE_S, resultados)
+    return {"resultados": resultados}
 
 
 @app.post("/api/aulas")
