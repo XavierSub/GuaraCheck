@@ -1181,8 +1181,11 @@ $('#btn-gps').onclick = async () => {
     if (c.accuracy > 1000){
       // ±1 km ou mais é localização por rede/IP (pode cair em outra cidade): não preenche nada, para não gravar uma sala no lugar errado
       limparPrecisao();
-      msg($('#gps-info'), `O aparelho só conseguiu uma localização aproximada (±${fmtPrec(c.accuracy)}), que não serve para marcar a sala, então não foi usada. Ligue o GPS e a "localização precisa" para este navegador (Android: Configurações > Localização; iPhone: Ajustes > Privacidade > Serviços de Localização > Safari/Chrome > Localização Precisa) e tente de novo, de preferência no celular. Ou toque no mapa e arraste o marcador até a sala.`, 'err');
-      $('#gps-info').scrollIntoView({block:'nearest', behavior:'smooth'});
+      const movel = /Android|iPhone|iPad|Mobi/i.test(navigator.userAgent), prec = fmtPrec(c.accuracy);
+      msg($('#gps-info'), movel
+        ? `O GPS veio aproximado (±${prec}) e não foi usado para marcar a sala. Ligue o GPS e a "localização precisa" para este navegador (Android: Configurações > Localização; iPhone: Ajustes > Privacidade > Serviços de Localização > Safari/Chrome > Localização Precisa) e toque de novo, ou toque no mapa no lugar da sala.`
+        : `Este computador não tem GPS: a localização veio aproximada (±${prec}) e não foi usada. Clique no mapa no lugar da sala, ou abra esta tela no celular e use o botão de novo.`);
+      ($('#mapa').hidden ? $('#gps-info') : $('#mapa')).scrollIntoView({block:'center', behavior:'smooth'});  // sem GPS (computador) o caminho é clicar no mapa
       return;
     }
     setPonto(c.latitude, c.longitude, false, c.accuracy);
