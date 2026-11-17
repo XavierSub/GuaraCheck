@@ -148,7 +148,7 @@ ROTAS_EVENTO = {
     "desfazer_presenca_manual": "so_professor", "excluir_aula": "so_professor",
     "excluir_todas_as_aulas": "so_professor", "minhas_aulas": "so_professor", "conferir_comprovante": "so_professor",
     "presencas_da_aula": "so_professor", "tentativas_da_aula": "so_professor", "ausentes_da_aula": "so_professor",
-    "exportar_chamada": "so_professor", "aulas_ativas": "so_aluno", "registrar_presenca": "so_aluno",
+    "exportar_chamada": "so_professor", "aulas_ativas": "so_aluno", "registrar_presenca": "so_aluno", "registrar_saida": "so_aluno",
     "adm_aulas": "so_admin", "adm_aula_encerrar": "so_admin", "adm_aula_excluir": "so_admin",
 }
 

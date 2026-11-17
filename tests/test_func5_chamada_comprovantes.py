@@ -142,7 +142,7 @@ def test_ct507_nao_vaza_dados_sensiveis(ch):
     ch.registrar()
     (l,) = ch.lista()[1]["presencas"]
     assert set(l) == {"id", "nome", "matricula", "email", "curso", "periodo", "distancia_m", "registrado_em", "alertas",
-                    "manual", "justificativa", "saida_em", "permanencia_min"}
+                    "manual", "justificativa", "saida_em", "permanencia_min", "situacao"}
     assert set(ch.lista()[1]) == {"ativa", "total", "limite", "presencas"}
 
 
@@ -476,7 +476,7 @@ def test_ct541_lista_do_aluno(ch):
     assert r[0]["titulo"] == "Palestra IA" and r[0]["tipo"] == "palestra" and r[0]["local_tipo"] == "fora" and r[0]["professor"] == "Ana Prof"
     assert r[1]["disciplina"] == "Estruturas de Dados" and r[1]["professor"] == "Carlos Lima"
     assert set(r[0]) == {"id", "registrado_em", "titulo", "tipo", "local_tipo", "disciplina", "periodo", "professor",
-                       "manual", "saida_em", "exige_saida"}
+                       "manual", "saida_em", "exige_saida", "permanencia_min", "permanencia_exigida", "situacao"}
 
 
 def test_ct542_comprovante_continua_depois_de_encerrar(ch):

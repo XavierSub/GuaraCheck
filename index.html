@@ -91,6 +91,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid v
 table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
 th{position:sticky;top:0;background:var(--card);color:var(--mut);font-weight:600}
+span.warn,b.warn,p.warn{color:var(--warn)}
 td.warn{color:var(--warn);white-space:normal;min-width:140px}
 ul{list-style:none;margin:0;padding:0}
 li{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -258,7 +259,8 @@ main{position:relative;z-index:1}header{position:relative;z-index:2}
 .previa{border:1.5px solid var(--lima);border-radius:16px;padding:16px;margin-top:14px;background:var(--card)}.previa h3{margin:0 0 4px}.previa h4{margin:16px 0 4px;font-size:15px;font-weight:600}
 .previa .stats{margin:12px 0 4px}.previa .grid2 label{margin-top:8px}.previa td select{min-width:150px}.previa .ck{display:flex;gap:8px;align-items:flex-start;font-weight:400;font-size:14px;margin:14px 0 0}.previa .ck input{width:auto;flex:none;margin-top:4px}
 .previa .bad{color:var(--err);font-size:13.5px;margin:6px 0 0}.previa .acoes{margin-top:16px}
-details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}label.chk{display:flex;gap:8px;align-items:center;margin:8px 0;font-size:14px}label.chk input{width:auto}
+details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}#pt-presentes:not(.com-saida) .col-saida{display:none}
+label.chk{display:flex;gap:8px;align-items:center;margin:8px 0;font-size:14px}label.chk input{width:auto}
 details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
 @media(max-width:860px){.entrada{grid-template-columns:1fr;gap:20px}.geo{display:none}.hero p{margin-bottom:6px}.fio-topo{display:none}}
 @media(max-width:560px){.row input,.row select{min-width:100%}.atabs button{padding:7px 13px}.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}main{padding:20px 16px 40px}.topo{padding:10px 16px}.marcas{gap:10px;padding:4px 0}.marcas img{height:34px}.marcas img.curso{height:46px}.produto{gap:8px;padding:4px 0}.produto .p-icone{height:36px}.produto .p-nome{height:20px}.lema{display:none}.card{padding:18px}.faixa{min-height:150px;padding:18px 16px;gap:8px;border-radius:18px;margin-bottom:18px}.faixa h1{font-size:24px}.faixa p{font-size:14px}.faixa-chips{margin-top:10px}.faixa-chips span{font-size:12px;padding:4px 10px}.faixa-art{top:50%;height:150px;transform:translateY(-50%)}.faixa-tec{-webkit-mask-image:linear-gradient(90deg,transparent 46%,#000 72%);mask-image:linear-gradient(90deg,transparent 46%,#000 72%)}.faixa-txt{max-width:58%}}
@@ -609,7 +611,7 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
     </div>
     <div id="pt-presentes">
     <div class="scroll"><table>
-      <thead><tr><th>Nº</th><th>Aluno</th><th>Matrícula</th><th>Curso</th><th>Período</th><th>Distância</th><th>Hora</th><th>Alertas</th><th>Origem</th></tr></thead>
+      <thead><tr><th>Nº</th><th>Aluno</th><th>Matrícula</th><th>Curso</th><th>Período</th><th>Distância</th><th>Hora</th><th class="col-saida">Saída</th><th>Alertas</th><th>Origem</th></tr></thead>
       <tbody id="tbody"></tbody>
     </table></div>
     <p class="mut" id="p-mais"></p>
@@ -948,18 +950,23 @@ function agendarAtualizacao(ok){
     if (S.token) agendarAtualizacao(deuCerto);
   }, S.espera * (0.8 + Math.random() * 0.4));
 }
+const fmtMin = m => { m = Math.max(0, Math.round(m || 0)); const h = Math.floor(m / 60), r = m % 60; return h ? `${h} h ${String(r).padStart(2, '0')} min` : `${r} min`; };
+const botaoGeo = (a, saida) => `<button class="btn big fora" data-id="${a.id}" data-lat="${a.latitude}" data-lon="${a.longitude}" data-raio="${a.raio_metros}"${saida ? ' data-modo="saida"' : a.qr_rotativo ? ' data-qr="1"' : ''} disabled>Verificando sua localização…</button><div class="zona"></div>`;
+const avisoSaida = a => a.exige_saida ? `<div class="mut">Este evento tem entrada e saída: registre a presença ao chegar e a saída ao ir embora${a.permanencia_min ? ` (permanência mínima de ${fmtMin(a.permanencia_min)})` : ''}.</div>` : '';
+const blocoPresenca = a => !a.ja_registrou ? botaoGeo(a, false)
+  : `<div class="ok-badge">✓ Presença registrada${a.exige_saida && a.entrada_em ? ' às ' + new Date(a.entrada_em).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'}) : ''}</div>`
+    + (a.exige_saida ? (a.ja_saiu ? '<div class="ok-badge">✓ Saída registrada</div>' : botaoGeo(a, true)) : '');
 async function carregarAulas(){
   try {
     const l = await api('/aulas/ativas');
     $('#aulas').innerHTML = l.length ? l.map(a => `<article class="card${a.id === S.aulaDestaque ? ' destaque' : ''}" id="aula-${a.id}"><h3>${esc(a.titulo)}</h3>
       <div class="mut">${esc(rotulo(a))}${a.local_descricao ? ' · ' + esc(a.local_descricao) : ''}</div>
       <div class="mut">${a.disciplina ? 'Disciplina: ' + esc(a.disciplina) + ' · ' : ''}Prof. ${esc(a.professor)} · raio de ${Math.round(a.raio_metros)} m</div>
-      ${a.ja_registrou ? '<div class="ok-badge">✓ Presença registrada</div>'
-                       : `<button class="btn big fora" data-id="${a.id}" data-lat="${a.latitude}" data-lon="${a.longitude}" data-raio="${a.raio_metros}"${a.qr_rotativo ? ' data-qr="1"' : ''} disabled>Verificando sua localização…</button><div class="zona"></div>`}</article>`).join('')
+      ${avisoSaida(a)}${blocoPresenca(a)}</article>`).join('')
       : '<div class="card vazio mut">Nenhuma chamada aberta agora. Esta tela atualiza sozinha quando o professor abrir a chamada.</div>';
     const cv = $('#chip-vivo'); if (cv){ cv.classList.toggle('on', l.length > 0); cv.textContent = l.length ? (l.length === 1 ? '1 chamada aberta agora' : l.length + ' chamadas abertas agora') : 'Nenhuma chamada aberta no momento'; }
     atualizarZona(); aplicarLinkAula(l);
-    if (l.some(a => !a.ja_registrou)) geoLigar(); else geoDesligar();  // GPS ligado só enquanto há presença a registrar
+    if (l.some(a => !a.ja_registrou || (a.exige_saida && !a.ja_saiu))) geoLigar(); else geoDesligar();  // GPS ligado só enquanto há presença ou saída a registrar
   } catch (x) { msg($('#msg-aluno'), x.message, 'err'); S.erroAulas = x.message; return false; }
   if (S.erroAulas){   // o servidor voltou: tira o aviso de erro da atualização (só se ainda for ele que está na tela)
     if ($('#msg-aluno').textContent === S.erroAulas) msg($('#msg-aluno'), '');
@@ -983,7 +990,7 @@ function aplicarLinkAula(l){
   if (a.qr_rotativo && k) S.qrCodigo = {aula:id, k};   // código do QR rotativo, guardado só na memória desta aba
   S.aulaDestaque = id; setTimeout(() => { if (S.aulaDestaque === id){ S.aulaDestaque = null; const c = $('#aula-' + id); if (c) c.classList.remove('destaque'); } }, 20000);
   const c = $('#aula-' + id); if (c){ c.classList.add('destaque'); c.scrollIntoView({behavior:'smooth', block:'center'}); }
-  msg(m, a.ja_registrou ? 'Sua presença nesta chamada já está registrada.'
+  msg(m, a.ja_registrou ? (a.exige_saida && !a.ja_saiu ? 'Sua entrada já está registrada. Ao ir embora, volte aqui e registre a saída.' : 'Sua presença nesta chamada já está registrada.')
        : a.qr_rotativo && !(S.qrCodigo && S.qrCodigo.aula === id) ? 'Este evento exige o QR code do telão: o link que você abriu não tem o código. Leia o QR da tela de novo.'
        : a.qr_rotativo ? 'QR code lido. Aguarde o GPS e toque em "Registrar Presença" logo em seguida (o código vale por poucos minutos).'
        : 'Chamada do QR code encontrada. Aguarde o GPS e toque em "Registrar Presença".', a.ja_registrou ? 'ok' : '');
@@ -1009,16 +1016,17 @@ function atualizarZona(){
   document.querySelectorAll('#aulas button[data-id]').forEach(b => {
     if (b.dataset.ocupado) return;  // enviando a presença agora
     const g = S.geo, z = b.parentElement.querySelector('.zona');
-    let liberar = false, rot = 'Registrar Presença', txt = '', cls = '';
-    if (b.dataset.qr === '1' && !(S.qrCodigo && S.qrCodigo.aula === +b.dataset.id)){
+    const saida = b.dataset.modo === 'saida';
+    let liberar = false, rot = saida ? 'Registrar saída' : 'Registrar Presença', txt = '', cls = '';
+    if (!saida && b.dataset.qr === '1' && !(S.qrCodigo && S.qrCodigo.aula === +b.dataset.id)){
       rot = 'Leia o QR code do telão'; txt = 'Este evento exige ler o QR code que o professor mostra no telão (ele muda a cada poucos segundos). Aponte a câmera do celular para ele.';
     } else if (g.erro){ rot = 'Localização indisponível'; txt = g.erro; cls = 'longe'; }
     else if (!g.pos){ rot = 'Obtendo localização…'; txt = 'Permita o acesso à localização quando o navegador perguntar.'; }
     else {
       const d = dist({lat:g.pos.lat, lon:g.pos.lon}, {lat:+b.dataset.lat, lon:+b.dataset.lon}), r = +b.dataset.raio;
       const prec = g.pos.acc > 50 ? ` Precisão do GPS baixa (±${Math.round(g.pos.acc)} m): vá para um local aberto.` : '';
-      if (d <= r){ liberar = true; cls = 'dentro'; txt = `✓ Você está na área da aula (a ${Math.round(d)} m do ponto do evento; limite de ${Math.round(r)} m).${prec}`; }
-      else { rot = 'Fora da área da aula'; cls = 'longe'; txt = `Você está a ${Math.round(d)} m do local do evento (limite de ${Math.round(r)} m). Aproxime-se para liberar o botão.${prec}`; }
+      if (d <= r){ liberar = true; cls = 'dentro'; txt = `✓ Você está na área da aula (a ${Math.round(d)} m do ponto do evento; limite de ${Math.round(r)} m).${saida ? ' Toque no botão só quando for embora.' : ''}${prec}`; }
+      else { rot = 'Fora da área da aula'; cls = 'longe'; txt = `Você está a ${Math.round(d)} m do local do evento (limite de ${Math.round(r)} m). Aproxime-se para liberar o botão${saida ? ' da saída' : ''}.${prec}`; }
     }
     b.disabled = !liberar; b.classList.toggle('fora', !liberar); b.textContent = rot;
     if (z){
@@ -1030,17 +1038,25 @@ function atualizarZona(){
 $('#aulas').onclick = async e => {
   if (e.target.closest('button[data-geo]')) return geoReiniciar();
   const b = e.target.closest('button[data-id]'); if (!b || b.disabled) return;
+  const saida = b.dataset.modo === 'saida';
+  if (saida && !confirm('Registrar a sua saída agora? Depois de registrada, não dá para registrar de novo.')) return;
   const m = $('#msg-aluno'); msg(m, ''); b.disabled = true; b.dataset.ocupado = '1';
   try {
     b.textContent = 'Obtendo localização…';
     const c = await amostrar();
     b.textContent = 'Enviando…';
-    const r = await api(`/aulas/${b.dataset.id}/presenca`, {method:'POST', body:{
+    const r = await api(`/aulas/${b.dataset.id}/${saida ? 'saida' : 'presenca'}`, {method:'POST', body:{
       latitude:c.lat, longitude:c.lon, precisao_m:c.acc, pos_ts:c.ts, amostras:c.n, variacao_m:c.variacao,
       webdriver:!!navigator.webdriver, device_id:deviceId(), fp_hash:await fpHash(),
-      qr:S.qrCodigo && S.qrCodigo.aula === +b.dataset.id ? S.qrCodigo.k : undefined}});
-    msg(m, `Presença registrada em "${r.aula}"! Seu comprovante está logo abaixo.`, 'ok');
-    await carregarComprovantes(true);
+      qr:!saida && S.qrCodigo && S.qrCodigo.aula === +b.dataset.id ? S.qrCodigo.k : undefined}});
+    if (saida){
+      msg(m, r.ja_saiu ? 'Sua saída já estava registrada.' : `Saída registrada. Permanência de ${fmtMin(r.permanencia_min)}.`
+             + (r.cumpriu ? '' : ` Atenção: o mínimo deste evento é ${fmtMin(r.permanencia_exigida)}, então sua presença consta como "permanência insuficiente".`), r.cumpriu ? 'ok' : 'err');
+      await carregarComprovantes(true);
+    } else {
+      msg(m, `Presença registrada em "${r.aula}"! Seu comprovante está logo abaixo.`, 'ok');
+      await carregarComprovantes(true);
+    }
     carregarAulas();
   } catch (x) {
     if (/QR code/.test(x.message) && S.qrCodigo && S.qrCodigo.aula === +b.dataset.id) S.qrCodigo = null;   // venceu ou foi recusado: precisa ler o QR de novo
@@ -1065,6 +1081,9 @@ async function baixarPdfDe(url, nomeArquivo, btn, aviso){
   finally { btn.disabled = false; btn.textContent = rot; }
 }
 
+const saidaComp = p => !p.exige_saida ? '' : p.saida_em
+  ? `<p class="mut">Saída registrada em <b>${new Date(p.saida_em).toLocaleString('pt-BR')}</b> · permanência de <b>${fmtMin(p.permanencia_min)}</b>${p.permanencia_exigida ? ` (mínimo: ${fmtMin(p.permanencia_exigida)})` : ''}.${p.situacao === 'Permanência insuficiente' ? ' <b class="warn">Abaixo do mínimo do evento.</b>' : ''}</p>`
+  : '<p class="mut warn">Saída ainda não registrada. Este evento exige entrada e saída.</p>';
 const COMP_PAG = 20;  // o servidor devolve 20 comprovantes por página
 function renderComprovantes(destacar){
   const box = $('#comprov'), me = S.me, l = S.comp;
@@ -1073,7 +1092,7 @@ function renderComprovantes(destacar){
   box.innerHTML = (l.length ? l.map((p, i) => `<article class="card comp${destacar && i === 0 ? ' novo' : ''}">
       <h3>✓ ${p.manual ? 'Presença lançada pelo professor' : 'Presença registrada'} · Protocolo nº ${p.id}</h3>
       <p>${p.manual ? `A presença do aluno ${quem(p)}, em ${evento(p)}, foi lançada pelo(a) prof. ${esc(p.professor)} em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.`
-        : `O aluno ${quem(p)}, registrou presença em ${evento(p)}, com o(a) prof. ${esc(p.professor)}, em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.`}</p>
+        : `O aluno ${quem(p)}, registrou presença em ${evento(p)}, com o(a) prof. ${esc(p.professor)}, em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.`}</p>${saidaComp(p)}
       <div class="acoes"><button class="btn" type="button" data-m="${i}">Mostrar ao professor</button><button class="btn alt" type="button" data-pdf="${p.id}">Baixar PDF</button><button class="btn alt" type="button" data-nota="${p.id}">Anotar</button></div>
     </article>`).join('') : '<div class="card vazio mut">Você ainda não registrou nenhuma presença.</div>')
     + (S.compMais ? '<button class="btn alt" type="button" id="comp-mais">Ver comprovantes mais antigos</button>' : '');
@@ -1101,10 +1120,10 @@ function mostrarAoProfessor(i){
   const p = S.comp && S.comp[i], me = S.me; if (!p || !me) return;
   const q = new Date(p.registrado_em), data = q.toLocaleDateString('pt-BR'), hora = q.toLocaleTimeString('pt-BR');
   const tipo = p.tipo === 'palestra' ? 'Palestra' : 'Aula', onde = p.local_tipo === 'fora' ? 'fora da faculdade' : 'dentro da faculdade';
-  $('#m-nome').textContent = me.nome;
+  $('#m-titulo').textContent = p.manual ? '✓ PRESENÇA LANÇADA PELO PROFESSOR' : '✓ PRESENÇA REGISTRADA'; $('#m-nome').textContent = me.nome;
   $('#m-dados').textContent = ['Matrícula ' + (me.matricula || '—'), me.curso, me.periodo ? me.periodo + 'º período' : null].filter(Boolean).join(' · ');
   $('#m-evento').textContent = `${tipo}: ${p.titulo}${p.disciplina ? ' (' + p.disciplina + ')' : ''} · ${onde} · Prof. ${p.professor}`;
-  $('#m-quando').textContent = `${p.manual ? 'Lançada' : 'Registrado'} em ${data} às ${hora} · Protocolo nº ${p.id}`;
+  $('#m-quando').textContent = `${p.manual ? 'Lançada' : 'Registrado'} em ${data} às ${hora} · Protocolo nº ${p.id}${p.exige_saida ? (p.saida_em ? ' · Saída às ' + new Date(p.saida_em).toLocaleTimeString('pt-BR') + ' (permanência de ' + fmtMin(p.permanencia_min) + ')' : ' · Saída ainda não registrada') : ''}`;
   $('#m-frase').textContent = p.manual
     ? `A presença de ${me.nome}, matrícula ${me.matricula || '—'}${me.curso ? ', do curso de ' + me.curso : ''}${me.periodo ? ' (' + me.periodo + 'º período)' : ''}, no evento "${p.titulo}"${p.disciplina ? ', disciplina ' + p.disciplina : ''}, foi lançada pelo(a) prof. ${p.professor} em ${data} às ${hora}.`
     : `Eu, ${me.nome}, matrícula ${me.matricula || '—'}${me.curso ? ', do curso de ' + me.curso : ''}${me.periodo ? ' (' + me.periodo + 'º período)' : ''}, registrei presença no evento "${p.titulo}"${p.disciplina ? ', disciplina ' + p.disciplina : ''}, em ${data} às ${hora}.`;
@@ -1371,7 +1390,8 @@ $('#form-aula').onsubmit = async e => {
 function abrirAula(a){
   S.aula = a; S.rows = []; S.ultimo = 0;
   $('#painel').hidden = false; $('#p-titulo').textContent = a.titulo; $('#p-total').textContent = a.total ?? 0;
-  $('#p-info').textContent = `${a.disciplina ? a.disciplina + ' · ' : ''}${rotulo(a)}${a.local_descricao ? ' · ' + a.local_descricao : ''} · raio de ${Math.round(a.raio_metros)} m`;
+  $('#pt-presentes').classList.toggle('com-saida', !!a.exige_saida);
+  $('#p-info').textContent = `${a.disciplina ? a.disciplina + ' · ' : ''}${rotulo(a)}${a.local_descricao ? ' · ' + a.local_descricao : ''} · raio de ${Math.round(a.raio_metros)} m${a.exige_saida ? ' · entrada e saída' + (a.permanencia_min ? ` (mínimo ${fmtMin(a.permanencia_min)})` : '') : ''}`;
   $('#btn-fim').hidden = !a.ativa;
   $('#p-cod').textContent = a.codigo_validacao ? 'Código de validação do PDF: ' + a.codigo_validacao : '';
   $('#conf-cod').value = ''; msg($('#conf-res'), ''); manualLimpar();
@@ -1479,9 +1499,9 @@ async function buscar(){
 function renderRows(){
   const v = S.rows.slice(-200).reverse();
   $('#tbody').innerHTML = v.map(p => `<tr><td>${p.id}</td><td>${esc(p.nome)}</td><td>${esc(p.matricula || '—')}</td><td>${esc(p.curso || '—')}</td><td>${p.periodo ? p.periodo + 'º' : '—'}</td><td>${p.manual ? '—' : p.distancia_m + ' m'}</td>
-    <td>${new Date(p.registrado_em).toLocaleTimeString('pt-BR')}</td><td class="warn">${p.manual ? '' : esc(p.alertas || '')}</td>
+    <td>${new Date(p.registrado_em).toLocaleTimeString('pt-BR')}</td><td class="col-saida">${p.saida_em ? `${new Date(p.saida_em).toLocaleTimeString('pt-BR')} · ${fmtMin(p.permanencia_min)}${p.situacao === 'Permanência insuficiente' ? ' <span class="warn">(abaixo do mínimo)</span>' : ''}` : '<span class="warn">Sem saída</span>'}</td><td class="warn">${p.manual ? '' : esc(p.alertas || '')}</td>
     <td>${p.manual ? `<span class="chip azul">Lançada por você</span> <span class="mut">${esc(p.justificativa || '')}</span> <button class="link del" type="button" data-des="${p.id}" data-nome="${esc(p.nome)}">Desfazer</button>` : 'Aluno'}</td></tr>`).join('')
-    || '<tr><td colspan="9" class="mut">Aguardando os alunos…</td></tr>';
+    || '<tr><td colspan="10" class="mut">Aguardando os alunos…</td></tr>';
   $('#p-mais').textContent = S.rows.length > 200 ? `Mostrando as 200 mais recentes de ${S.rows.length}. O CSV traz a lista completa.` : '';
 }
 /* Presença lançada pelo professor: o motivo é obrigatório e vai para o CSV, o comprovante do aluno e a auditoria. Vale com a chamada encerrada. */

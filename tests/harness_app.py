@@ -100,6 +100,7 @@ NOMES = {
     "_int_env", "QR_JANELA_S", "QR_JANELAS_ACEITAS", "qr_token", "qr_token_valido", "qr_renova_em_s",
     # --- Funcionalidade 13: presença manual (lançada pelo professor) ---
     "_permanencia_min", "PresencaManualIn", "lancar_presenca_manual", "desfazer_presenca_manual",
+    "_fmt_duracao", "_status_presenca", "registrar_saida",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",

@@ -1100,6 +1100,16 @@ def gerar_pdf_comprovante(d: dict) -> bytes:
                  + f", registrei presença no evento \"{d['titulo']}\""
                  + (f", disciplina {d['disciplina']}" if d.get("disciplina") else "")
                  + f", em {quando.strftime('%d/%m/%Y')} às {quando.strftime('%H:%M')}.")
+    if d.get("exige_saida"):   # evento com entrada e saída: o comprovante diz o que o sistema registrou da saída
+        if d.get("saida_em"):
+            sq = d["saida_em"].astimezone(BRT)
+            frase += (f" Saída registrada em {sq.strftime('%d/%m/%Y')} às {sq.strftime('%H:%M')}, permanência de "
+                      f"{_fmt_duracao(d['permanencia_min'] or 0)}"
+                      + (f" (mínimo do evento: {_fmt_duracao(d['permanencia_exigida'])})" if d.get("permanencia_exigida") else "") + ".")
+            if d.get("permanencia_exigida") and (d["permanencia_min"] or 0) < d["permanencia_exigida"]:
+                frase += " A permanência ficou abaixo do mínimo do evento."
+        else:
+            frase += " Este evento exige registro de saída e a saída não foi registrada."
     linhas = _quebrar_texto(frase, "Helvetica", 10.5, W - 2 * M - 16)
     alt = len(linhas) * 14 + 12
     c.setFillColor(colors.HexColor("#f3f6f4"))
@@ -2088,7 +2098,9 @@ def presencas_da_aula(aula_id: int, apos_id: int = 0, u: dict = Depends(so_profe
                            "curso": r.curso, "periodo": r.periodo, "distancia_m": round(r.distancia_m, 1),
                            "registrado_em": iso(r.registrado_em), "alertas": r.alertas, "manual": bool(r.manual),
                            "justificativa": r.justificativa, "saida_em": iso(r.saida_em),
-                           "permanencia_min": _permanencia_min(r.registrado_em, r.saida_em)} for r in rows]}
+                           "permanencia_min": _permanencia_min(r.registrado_em, r.saida_em),
+                           "situacao": _status_presenca(bool(a.exige_saida), a.permanencia_min, r.saida_em,
+                                                        _permanencia_min(r.registrado_em, r.saida_em))} for r in rows]}
 
 
 @app.get("/api/aulas/{aula_id}/tentativas")
@@ -2148,6 +2160,23 @@ def _permanencia_min(entrada, saida) -> Optional[int]:
     if saida is None or entrada is None:
         return None
     return max(0, int((aware(saida) - aware(entrada)).total_seconds() // 60))
+
+
+def _fmt_duracao(minutos: int) -> str:
+    h, m = divmod(max(0, int(minutos)), 60)
+    return f"{h} h {m:02d} min" if h else f"{m} min"
+
+
+def _status_presenca(exige_saida: bool, minimo: Optional[int], saida, perm: Optional[int]) -> str:
+    """Situação da presença no relatório. Evento sem saída: sempre 'Presente'. Com saída: sem saída registrada, ou com
+    permanência abaixo do mínimo do evento, a presença NÃO cumpre o evento (não dá certificado)."""
+    if not exige_saida:
+        return "Presente"
+    if saida is None:
+        return "Presente (sem saída)"
+    if minimo and (perm or 0) < minimo:
+        return "Permanência insuficiente"
+    return "Presente"
 
 
 class PresencaManualIn(BaseModel):
@@ -2213,7 +2242,8 @@ EXPORT_CABECALHO = ["Matrícula", "Nome do Aluno", "E-mail", "Curso", "Período"
                     "Data/Hora do Check-in", "Distância (m)", "Origem", "Justificativa", "Saída", "Permanência (min)"]
 
 
-def _gerar_csv(aula_id: int, curso_id: Optional[int], periodo: Optional[int], exige_saida: bool = False):
+def _gerar_csv(aula_id: int, curso_id: Optional[int], periodo: Optional[int], exige_saida: bool = False,
+                minimo: Optional[int] = None):
     """
     Gerador de CSV em lotes (HTTP streaming): lê o banco em blocos de 500 linhas e envia cada bloco
     assim que fica pronto, então relatórios com milhares de alunos não ocupam memória do servidor.
@@ -2238,7 +2268,7 @@ def _gerar_csv(aula_id: int, curso_id: Optional[int], periodo: Optional[int], ex
         for mat, nome, email, curso, per, quando, dist, manual, just, saida in db.execute(presentes.execution_options(yield_per=500)):
             perm = _permanencia_min(quando, saida)
             lote.append([_seguro(mat), _seguro(nome), _seguro(email), _seguro(curso), f"{per}º" if per else "",
-                         "Presente (sem saída)" if exige_saida and saida is None else "Presente",
+                         _status_presenca(exige_saida, minimo, saida, perm),
                          aware(quando).astimezone(fuso).strftime("%d/%m/%Y %H:%M:%S"),
                          f"{dist:.1f}".replace(".", ","),
                          "Lançada pelo professor" if manual else "Aluno", _seguro(just),
@@ -2273,7 +2303,7 @@ def export_chamada(request: Request, aula_id: int, u: dict = Depends(_prof_ou_ad
         raise HTTPException(404, "Aula não encontrada.")
     log_seg(db, u["id"], "exportar_chamada", f"perfil={u['role']}; aula={aula_id}; titulo={a.titulo}",
             ip_cliente(request), commit=True)
-    return StreamingResponse(_gerar_csv(a.id, a.curso_id, a.periodo, bool(a.exige_saida)), media_type="text/csv; charset=utf-8",
+    return StreamingResponse(_gerar_csv(a.id, a.curso_id, a.periodo, bool(a.exige_saida), a.permanencia_min), media_type="text/csv; charset=utf-8",
                              headers={"Content-Disposition": f'attachment; filename="chamada-{aula_id}.csv"',
                                       "Cache-Control": "no-store"})
 
@@ -2334,7 +2364,7 @@ def minhas_presencas(u: dict = Depends(so_aluno), db: Session = Depends(get_db),
     pagina = min(max(pagina, 1), 10_000)
     rows = db.execute(
         select(Presenca.id, Presenca.registrado_em, Aula.titulo, Aula.tipo, Aula.local_tipo, Aula.disciplina,
-               Aula.periodo, Professor.nome.label("professor"), Presenca.manual, Presenca.saida_em, Aula.exige_saida)
+               Aula.periodo, Professor.nome.label("professor"), Presenca.manual, Presenca.saida_em, Aula.exige_saida, Aula.permanencia_min.label("minimo"))
         .select_from(Presenca).join(Aula, Aula.id == Presenca.aula_id)
         .join(Professor, Professor.id == Aula.professor_id)
         .where(Presenca.aluno_id == u["id"]).order_by(Presenca.id.desc())
@@ -2342,7 +2372,10 @@ def minhas_presencas(u: dict = Depends(so_aluno), db: Session = Depends(get_db),
     return [{"id": r.id, "registrado_em": iso(r.registrado_em), "titulo": r.titulo, "tipo": r.tipo or "aula",
              "local_tipo": r.local_tipo or "dentro", "disciplina": r.disciplina, "periodo": r.periodo,
              "professor": r.professor, "manual": bool(r.manual), "saida_em": iso(r.saida_em),
-             "exige_saida": bool(r.exige_saida)} for r in rows]
+             "exige_saida": bool(r.exige_saida), "permanencia_min": _permanencia_min(r.registrado_em, r.saida_em),
+             "permanencia_exigida": r.minimo,
+             "situacao": _status_presenca(bool(r.exige_saida), r.minimo, r.saida_em, _permanencia_min(r.registrado_em, r.saida_em))}
+            for r in rows]
 
 
 @app.get("/api/aluno/presencas/{presenca_id}/pdf")
@@ -2370,6 +2403,8 @@ def comprovante_pdf(presenca_id: int, u: dict = Depends(so_aluno), db: Session =
             "disciplina": a.disciplina, "professor": prof, "registrado_em": aware(p.registrado_em),
             "protocolo": p.id, "codigo": a.codigo_validacao, "emitido_em": utcnow(),
             "manual": bool(p.manual), "justificativa": p.justificativa,
+            "exige_saida": bool(a.exige_saida), "saida_em": aware(p.saida_em) if p.saida_em else None,
+            "permanencia_min": _permanencia_min(p.registrado_em, p.saida_em), "permanencia_exigida": a.permanencia_min,
             "autenticacao": f"{p.id}-{assinatura_presenca(p, a)}"})
     except ImportError:
         raise HTTPException(503, "A geração de PDF não está disponível no servidor. Avise a coordenação.")
@@ -2586,6 +2621,61 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
         raise HTTPException(409, "Este aparelho já foi usado para registrar a presença de outro aluno "
                                  "nesta aula. Cada aluno deve usar o próprio celular.")
     return {"ok": True, "ja_registrado": False, "distancia_m": round(dist, 1), "aula": aula.titulo}
+
+
+@app.post("/api/aulas/{aula_id}/saida")
+def registrar_saida(aula_id: int, b: PresencaIn, request: Request,
+                    u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """Saída do aluno em evento que exige entrada e saída. Só vale para quem já registrou a entrada, com a chamada aberta,
+    pelo MESMO celular da entrada e dentro do raio (mesmas regras de GPS do check-in). Registra uma vez: repetir a chamada
+    devolve o que já foi gravado. A permanência é só informada aqui; quem decide se cumpriu o mínimo é o relatório/certificado."""
+    aula = db.get(Aula, aula_id)
+    if not aula:
+        raise HTTPException(404, "Aula não encontrada.")
+    if not aula.exige_saida:
+        raise HTTPException(409, "Este evento não pede registro de saída.")
+    p = db.scalar(select(Presenca).where(Presenca.aula_id == aula_id, Presenca.aluno_id == u["id"]))
+    if p is None:
+        raise HTTPException(409, "Registre a entrada antes de registrar a saída.")
+
+    def resposta(ja: bool, dist=None):
+        perm = _permanencia_min(p.registrado_em, p.saida_em)
+        return {"ok": True, "ja_saiu": ja, "saida_em": iso(p.saida_em), "permanencia_min": perm,
+                "permanencia_exigida": aula.permanencia_min,
+                "cumpriu": _status_presenca(True, aula.permanencia_min, p.saida_em, perm) == "Presente",
+                "distancia_m": round(dist if dist is not None else (p.saida_distancia_m or 0), 1)}
+    if p.saida_em is not None:        # duplo toque ou aba antiga: responde como a primeira vez
+        return resposta(True)
+    if not aula_aberta(aula):
+        raise HTTPException(409, "Esta chamada já foi encerrada. Procure o professor para registrar a sua saída.")
+    if p.manual:
+        raise HTTPException(409, "Sua presença foi lançada pelo professor, então a saída também é lançada por ele. Procure o professor.")
+    if p.device_id and b.device_id != p.device_id:
+        raise HTTPException(403, "Registre a saída no mesmo celular em que registrou a entrada.")
+    if b.precisao_m is not None and b.precisao_m > PRECISAO_MAX_M:
+        raise HTTPException(422, f"Sinal de GPS impreciso (±{round(b.precisao_m)} m). "
+                                 "Ative o GPS, vá para um local aberto e tente de novo.")
+    if abs(time.time() * 1000 - b.pos_ts) > IDADE_MAX_POSICAO_S * 1000:
+        raise HTTPException(422, "Leitura de localização desatualizada. Deixe data e hora do aparelho em "
+                                 "modo automático e tente novamente.")
+    ip = ip_cliente(request)
+    risco, alertas = avaliar_risco(b)
+    if risco >= RISCO_MAX:
+        registrar_tentativa(db, aula_id, u["id"], "gps_suspeito", "Saída: " + "; ".join(alertas), b, None, ip)
+        raise HTTPException(403, "Sua localização parece falsificada ou inconsistente. Desative apps de "
+                                 "localização falsa e use o GPS real do aparelho.")
+    dist = haversine(b.latitude, b.longitude, aula.latitude, aula.longitude)
+    if dist > aula.raio_metros:
+        registrar_tentativa(db, aula_id, u["id"], "fora_raio",
+                            f"Saída a {round(dist)} m da sala (limite de {round(aula.raio_metros)} m)", b, dist, ip)
+        raise HTTPException(400, f"Você está a {round(dist)} m da sala; o limite deste evento é "
+                                 f"{round(aula.raio_metros)} m. Aproxime-se para registrar a saída.")
+    agora = utcnow()
+    r = db.execute(update(Presenca).where(Presenca.id == p.id, Presenca.saida_em.is_(None))
+                   .values(saida_em=agora, saida_distancia_m=dist))
+    db.commit()
+    db.refresh(p)                     # a atualização acima é em lote: relê a linha para devolver o que ficou gravado
+    return resposta(not r.rowcount)
 
 
 # =====================================================================
