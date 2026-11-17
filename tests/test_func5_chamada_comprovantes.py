@@ -141,7 +141,8 @@ def test_ct507_nao_vaza_dados_sensiveis(ch):
     """CT-507 | O painel do professor NÃO recebe coordenadas, aparelho, impressão digital, IP nem senha."""
     ch.registrar()
     (l,) = ch.lista()[1]["presencas"]
-    assert set(l) == {"id", "nome", "matricula", "email", "curso", "periodo", "distancia_m", "registrado_em", "alertas"}
+    assert set(l) == {"id", "nome", "matricula", "email", "curso", "periodo", "distancia_m", "registrado_em", "alertas",
+                    "manual", "justificativa", "saida_em", "permanencia_min"}
     assert set(ch.lista()[1]) == {"ativa", "total", "limite", "presencas"}
 
 
@@ -347,7 +348,7 @@ def test_ct529_ausente_nao_expoe_dados_alem_do_necessario(ch):
     """CT-529 | Cada ausente traz só nome, matrícula, e-mail e período (sem senha, curso_id nem status)."""
     ch.aula.curso_id = ch.curso.id
     (a,) = ch.aus()[1]["itens"]
-    assert set(a) == {"nome", "matricula", "email", "periodo"}
+    assert set(a) == {"id", "nome", "matricula", "email", "periodo"}
 
 
 # =====================================================================================================
@@ -474,7 +475,8 @@ def test_ct541_lista_do_aluno(ch):
     assert [x["id"] for x in r] == [p2.id, p_dele.id]
     assert r[0]["titulo"] == "Palestra IA" and r[0]["tipo"] == "palestra" and r[0]["local_tipo"] == "fora" and r[0]["professor"] == "Ana Prof"
     assert r[1]["disciplina"] == "Estruturas de Dados" and r[1]["professor"] == "Carlos Lima"
-    assert set(r[0]) == {"id", "registrado_em", "titulo", "tipo", "local_tipo", "disciplina", "periodo", "professor"}
+    assert set(r[0]) == {"id", "registrado_em", "titulo", "tipo", "local_tipo", "disciplina", "periodo", "professor",
+                       "manual", "saida_em", "exige_saida"}
 
 
 def test_ct542_comprovante_continua_depois_de_encerrar(ch):

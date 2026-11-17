@@ -1036,7 +1036,7 @@ def gerar_pdf_comprovante(d: dict) -> bytes:
     y = H - 124
     c.setFillColor(verde)
     c.setFont("Helvetica-Bold", 15)
-    c.drawString(M, y, _l1("PRESENÇA REGISTRADA"))
+    c.drawString(M, y, _l1("PRESENÇA LANÇADA PELO PROFESSOR" if d.get("manual") else "PRESENÇA REGISTRADA"))
     y -= 30
 
     def campo(rotulo: str, valor: str):
@@ -1087,11 +1087,19 @@ def gerar_pdf_comprovante(d: dict) -> bytes:
     y -= 28
 
     quando = d["registrado_em"].astimezone(BRT)
-    frase = (f"Eu, {d['nome']}, matrícula {d['matricula'] or '—'}"
-             + (f", do curso de {d['curso']}" if d.get("curso") else "")
-             + f", registrei presença no evento \"{d['titulo']}\""
-             + (f", disciplina {d['disciplina']}" if d.get("disciplina") else "")
-             + f", em {quando.strftime('%d/%m/%Y')} às {quando.strftime('%H:%M')}.")
+    if d.get("manual"):   # presença lançada pelo professor: o texto não pode dizer que o aluno registrou
+        frase = (f"A presença de {d['nome']}, matrícula {d['matricula'] or '—'}"
+                 + (f", do curso de {d['curso']}" if d.get("curso") else "")
+                 + f", no evento \"{d['titulo']}\""
+                 + (f", disciplina {d['disciplina']}" if d.get("disciplina") else "")
+                 + f", foi lançada manualmente pelo(a) professor(a) {d['professor']} em {quando.strftime('%d/%m/%Y')} às {quando.strftime('%H:%M')}."
+                 + (f" Justificativa: {d['justificativa']}." if d.get("justificativa") else ""))
+    else:
+        frase = (f"Eu, {d['nome']}, matrícula {d['matricula'] or '—'}"
+                 + (f", do curso de {d['curso']}" if d.get("curso") else "")
+                 + f", registrei presença no evento \"{d['titulo']}\""
+                 + (f", disciplina {d['disciplina']}" if d.get("disciplina") else "")
+                 + f", em {quando.strftime('%d/%m/%Y')} às {quando.strftime('%H:%M')}.")
     linhas = _quebrar_texto(frase, "Helvetica", 10.5, W - 2 * M - 16)
     alt = len(linhas) * 14 + 12
     c.setFillColor(colors.HexColor("#f3f6f4"))
@@ -2069,7 +2077,8 @@ def presencas_da_aula(aula_id: int, apos_id: int = 0, u: dict = Depends(so_profe
     total = db.scalar(select(func.count()).select_from(Presenca).where(Presenca.aula_id == aula_id))
     rows = db.execute(
         select(Presenca.id, Aluno.nome, Aluno.matricula, Aluno.email, Curso.nome.label("curso"), Aluno.periodo,
-               Presenca.distancia_m, Presenca.registrado_em, Presenca.alertas)
+               Presenca.distancia_m, Presenca.registrado_em, Presenca.alertas, Presenca.manual, Presenca.justificativa,
+               Presenca.saida_em)
         .select_from(Presenca).join(Aluno, Aluno.id == Presenca.aluno_id)
         .outerjoin(Curso, Curso.id == Aluno.curso_id)
         .where(Presenca.aula_id == aula_id, Presenca.id > apos_id)
@@ -2077,7 +2086,9 @@ def presencas_da_aula(aula_id: int, apos_id: int = 0, u: dict = Depends(so_profe
     return {"ativa": aula_aberta(a), "total": total, "limite": LIMITE_PRESENCAS_POR_CONSULTA,
             "presencas": [{"id": r.id, "nome": r.nome, "matricula": r.matricula, "email": r.email,
                            "curso": r.curso, "periodo": r.periodo, "distancia_m": round(r.distancia_m, 1),
-                           "registrado_em": iso(r.registrado_em), "alertas": r.alertas} for r in rows]}
+                           "registrado_em": iso(r.registrado_em), "alertas": r.alertas, "manual": bool(r.manual),
+                           "justificativa": r.justificativa, "saida_em": iso(r.saida_em),
+                           "permanencia_min": _permanencia_min(r.registrado_em, r.saida_em)} for r in rows]}
 
 
 @app.get("/api/aulas/{aula_id}/tentativas")
@@ -2125,18 +2136,84 @@ def ausentes_da_aula(aula_id: int, u: dict = Depends(so_professor), db: Session 
                           "abra a chamada para um curso específico."}
     cond = _cond_ausentes(a.id, a.curso_id, a.periodo)
     total = _contar(db, Aluno, *cond)
-    rows = db.execute(select(Aluno.nome, Aluno.matricula, Aluno.email, Aluno.periodo)
+    rows = db.execute(select(Aluno.id, Aluno.nome, Aluno.matricula, Aluno.email, Aluno.periodo)
                       .where(*cond).order_by(Aluno.nome).limit(500)).all()
     return {"disponivel": True, "total": total, "limite": 500,
-            "itens": [{"nome": r.nome, "matricula": r.matricula, "email": r.email, "periodo": r.periodo}
+            "itens": [{"id": r.id, "nome": r.nome, "matricula": r.matricula, "email": r.email, "periodo": r.periodo}
                       for r in rows]}
 
 
+def _permanencia_min(entrada, saida) -> Optional[int]:
+    """Minutos entre a entrada e a saída (None se ainda não saiu)."""
+    if saida is None or entrada is None:
+        return None
+    return max(0, int((aware(saida) - aware(entrada)).total_seconds() // 60))
+
+
+class PresencaManualIn(BaseModel):
+    aluno_id: Optional[int] = Field(None, ge=1, le=2_147_483_647)    # pelo botão da lista de ausentes
+    matricula: Optional[str] = Field(None, max_length=40)             # ou digitando a matrícula
+    justificativa: str = Field(max_length=400)
+    com_saida: bool = False                                           # eventos com saída: lança a saída junto (agora)
+
+
+@app.post("/api/aulas/{aula_id}/presenca-manual")
+def lancar_presenca_manual(aula_id: int, b: PresencaManualIn, request: Request,
+                           u: dict = Depends(so_professor), db: Session = Depends(get_db)):
+    """O PROFESSOR (dono da chamada) lança a presença de um aluno que não conseguiu registrar (celular sem bateria, GPS
+    ruim...). A justificativa é obrigatória, a presença fica marcada como 'lançada pelo professor' (lista, CSV e PDF do
+    aluno) e a ação vai para a auditoria. Vale também com a chamada encerrada, para corrigir depois."""
+    a = _aula_do_professor(db, aula_id, u["id"])
+    just = re.sub(r"\s+", " ", b.justificativa).strip()
+    if len(just) < 5:
+        raise HTTPException(422, "Explique o motivo em pelo menos 5 letras (ex.: celular sem bateria).")
+    just = just[:200]
+    if b.aluno_id is not None:
+        aluno = db.get(Aluno, b.aluno_id)
+    elif b.matricula and b.matricula.strip():
+        aluno = db.scalar(select(Aluno).where(Aluno.matricula == normalizar_matricula(b.matricula)))
+    else:
+        raise HTTPException(422, "Informe a matrícula do aluno.")
+    if not aluno:
+        raise HTTPException(404, "Aluno não encontrado. Confira a matrícula.")
+    if aluno.status == "inativo":
+        raise HTTPException(409, "A matrícula deste aluno está inativa. Procure a coordenação.")
+    if db.scalar(select(Presenca.id).where(Presenca.aula_id == a.id, Presenca.aluno_id == aluno.id)):
+        raise HTTPException(409, f"{aluno.nome} já tem presença registrada nesta chamada.")
+    ip = ip_cliente(request)
+    db.add(Presenca(aula_id=a.id, aluno_id=aluno.id, latitude=a.latitude, longitude=a.longitude, distancia_m=0.0,
+                    ip=ip[:64] or None, alertas="lançada pelo professor", manual=True, lancada_por=u["id"],
+                    justificativa=just, saida_em=utcnow() if (b.com_saida and a.exige_saida) else None))
+    log_seg(db, u["id"], "presenca_manual", f"aula={a.id}; aluno={aluno.id}; motivo={just}", ip)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Não foi possível lançar: a presença já existe ou o evento foi excluído. Atualize a tela.")
+    return {"ok": True, "aluno": aluno.nome, "matricula": aluno.matricula}
+
+
+@app.delete("/api/aulas/{aula_id}/presenca-manual/{presenca_id}")
+def desfazer_presenca_manual(aula_id: int, presenca_id: int, request: Request,
+                             u: dict = Depends(so_professor), db: Session = Depends(get_db)):
+    """Desfaz uma presença lançada por engano. SÓ vale para presença lançada pelo professor: a que o aluno registrou é dele."""
+    a = _aula_do_professor(db, aula_id, u["id"])
+    p = db.get(Presenca, presenca_id)
+    if not p or p.aula_id != a.id:
+        raise HTTPException(404, "Presença não encontrada.")
+    if not p.manual:
+        raise HTTPException(409, "Só é possível desfazer presenças lançadas pelo professor. A presença que o aluno registrou não pode ser apagada.")
+    db.execute(delete(Presenca).where(Presenca.id == p.id))
+    log_seg(db, u["id"], "desfazer_presenca_manual", f"aula={a.id}; presenca={p.id}; aluno={p.aluno_id}", ip_cliente(request))
+    db.commit()
+    return {"ok": True}
+
+
 EXPORT_CABECALHO = ["Matrícula", "Nome do Aluno", "E-mail", "Curso", "Período", "Status",
-                    "Data/Hora do Check-in", "Distância (m)"]
+                    "Data/Hora do Check-in", "Distância (m)", "Origem", "Justificativa", "Saída", "Permanência (min)"]
 
 
-def _gerar_csv(aula_id: int, curso_id: Optional[int], periodo: Optional[int]):
+def _gerar_csv(aula_id: int, curso_id: Optional[int], periodo: Optional[int], exige_saida: bool = False):
     """
     Gerador de CSV em lotes (HTTP streaming): lê o banco em blocos de 500 linhas e envia cada bloco
     assim que fica pronto, então relatórios com milhares de alunos não ocupam memória do servidor.
@@ -2152,15 +2229,21 @@ def _gerar_csv(aula_id: int, curso_id: Optional[int], periodo: Optional[int]):
     yield "﻿" + pacote([EXPORT_CABECALHO])
     with SessionLocal() as db:
         presentes = (select(Aluno.matricula, Aluno.nome, Aluno.email, Curso.nome.label("curso"), Aluno.periodo,
-                            Presenca.registrado_em, Presenca.distancia_m)
+                            Presenca.registrado_em, Presenca.distancia_m, Presenca.manual, Presenca.justificativa,
+                            Presenca.saida_em)
                      .select_from(Presenca).join(Aluno, Aluno.id == Presenca.aluno_id)
                      .outerjoin(Curso, Curso.id == Aluno.curso_id)
                      .where(Presenca.aula_id == aula_id).order_by(Aluno.nome))
         lote = []
-        for mat, nome, email, curso, per, quando, dist in db.execute(presentes.execution_options(yield_per=500)):
+        for mat, nome, email, curso, per, quando, dist, manual, just, saida in db.execute(presentes.execution_options(yield_per=500)):
+            perm = _permanencia_min(quando, saida)
             lote.append([_seguro(mat), _seguro(nome), _seguro(email), _seguro(curso), f"{per}º" if per else "",
-                         "Presente", aware(quando).astimezone(fuso).strftime("%d/%m/%Y %H:%M:%S"),
-                         f"{dist:.1f}".replace(".", ",")])
+                         "Presente (sem saída)" if exige_saida and saida is None else "Presente",
+                         aware(quando).astimezone(fuso).strftime("%d/%m/%Y %H:%M:%S"),
+                         f"{dist:.1f}".replace(".", ","),
+                         "Lançada pelo professor" if manual else "Aluno", _seguro(just),
+                         aware(saida).astimezone(fuso).strftime("%d/%m/%Y %H:%M:%S") if saida is not None else "",
+                         perm if perm is not None else ""])
             if len(lote) >= 500:
                 yield pacote(lote)
                 lote = []
@@ -2173,7 +2256,7 @@ def _gerar_csv(aula_id: int, curso_id: Optional[int], periodo: Optional[int]):
             lote = []
             for mat, nome, email, curso, per in db.execute(ausentes.execution_options(yield_per=500)):
                 lote.append([_seguro(mat), _seguro(nome), _seguro(email), _seguro(curso),
-                             f"{per}º" if per else "", "Ausente", "", ""])
+                             f"{per}º" if per else "", "Ausente", "", "", "", "", "", ""])
                 if len(lote) >= 500:
                     yield pacote(lote)
                     lote = []
@@ -2190,7 +2273,7 @@ def export_chamada(request: Request, aula_id: int, u: dict = Depends(_prof_ou_ad
         raise HTTPException(404, "Aula não encontrada.")
     log_seg(db, u["id"], "exportar_chamada", f"perfil={u['role']}; aula={aula_id}; titulo={a.titulo}",
             ip_cliente(request), commit=True)
-    return StreamingResponse(_gerar_csv(a.id, a.curso_id, a.periodo), media_type="text/csv; charset=utf-8",
+    return StreamingResponse(_gerar_csv(a.id, a.curso_id, a.periodo, bool(a.exige_saida)), media_type="text/csv; charset=utf-8",
                              headers={"Content-Disposition": f'attachment; filename="chamada-{aula_id}.csv"',
                                       "Cache-Control": "no-store"})
 
@@ -2251,14 +2334,15 @@ def minhas_presencas(u: dict = Depends(so_aluno), db: Session = Depends(get_db),
     pagina = min(max(pagina, 1), 10_000)
     rows = db.execute(
         select(Presenca.id, Presenca.registrado_em, Aula.titulo, Aula.tipo, Aula.local_tipo, Aula.disciplina,
-               Aula.periodo, Professor.nome.label("professor"))
+               Aula.periodo, Professor.nome.label("professor"), Presenca.manual, Presenca.saida_em, Aula.exige_saida)
         .select_from(Presenca).join(Aula, Aula.id == Presenca.aula_id)
         .join(Professor, Professor.id == Aula.professor_id)
         .where(Presenca.aluno_id == u["id"]).order_by(Presenca.id.desc())
         .limit(COMPROVANTES_POR_PAGINA).offset((pagina - 1) * COMPROVANTES_POR_PAGINA)).all()
     return [{"id": r.id, "registrado_em": iso(r.registrado_em), "titulo": r.titulo, "tipo": r.tipo or "aula",
              "local_tipo": r.local_tipo or "dentro", "disciplina": r.disciplina, "periodo": r.periodo,
-             "professor": r.professor} for r in rows]
+             "professor": r.professor, "manual": bool(r.manual), "saida_em": iso(r.saida_em),
+             "exige_saida": bool(r.exige_saida)} for r in rows]
 
 
 @app.get("/api/aluno/presencas/{presenca_id}/pdf")
@@ -2285,6 +2369,7 @@ def comprovante_pdf(presenca_id: int, u: dict = Depends(so_aluno), db: Session =
             "tipo": a.tipo or "aula", "local_tipo": a.local_tipo or "dentro", "local_descricao": a.local_descricao,
             "disciplina": a.disciplina, "professor": prof, "registrado_em": aware(p.registrado_em),
             "protocolo": p.id, "codigo": a.codigo_validacao, "emitido_em": utcnow(),
+            "manual": bool(p.manual), "justificativa": p.justificativa,
             "autenticacao": f"{p.id}-{assinatura_presenca(p, a)}"})
     except ImportError:
         raise HTTPException(503, "A geração de PDF não está disponível no servidor. Avise a coordenação.")

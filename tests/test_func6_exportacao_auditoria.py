@@ -20,7 +20,7 @@ from harness_app import APP, FakeDB, FakeReq, LogSeguranca, Professor  # noqa: F
 from test_func4_presenca import DEV, IP_PUBLICO, LAT, LON, dev  # noqa: F401
 from test_func5_chamada_comprovantes import CtxCh
 
-CABECALHO = '"Matrícula";"Nome do Aluno";"E-mail";"Curso";"Período";"Status";"Data/Hora do Check-in";"Distância (m)"\r\n'
+CABECALHO = '"Matrícula";"Nome do Aluno";"E-mail";"Curso";"Período";"Status";"Data/Hora do Check-in";"Distância (m)";"Origem";"Justificativa";"Saída";"Permanência (min)"\r\n'
 
 
 class CtxEx(CtxCh):
@@ -179,11 +179,11 @@ def test_ct610_bom_cabecalho_e_formato(ex):
 
 
 def test_ct611_colunas_de_uma_presenca(ex):
-    """CT-611 | Uma linha de presente | 8 colunas, valores do aluno, 'Presente', distância com vírgula decimal."""
+    """CT-611 | Uma linha de presente | 12 colunas, valores do aluno, 'Presente', distância com vírgula decimal."""
     ex.semear_presenca(ex.aluno, dist=12.345, quando=_dt(2026, 11, 11, 15, 4, 5, tzinfo=_tz.utc))
     (linha,) = ex.tabela()
     assert linha == ["GTI202600001", "Aluno 1", "aluno1@alunos.unicerrado.edu.br", "Gestão da TI", "2º", "Presente",
-                     "11/11/2026 12:04:05", "12,3"]
+                     "11/11/2026 12:04:05", "12,3", "Aluno", "", "", ""]
 
 
 def test_ct612_fuso_de_brasilia_e_virada_de_dia(ex):
@@ -325,7 +325,8 @@ def test_ct625_dados_pessoais_minimos(ex):
         else:
             assert proibido not in texto
     assert ex.linhas(texto)[0] == ["Matrícula", "Nome do Aluno", "E-mail", "Curso", "Período", "Status",
-                                   "Data/Hora do Check-in", "Distância (m)"]
+                                   "Data/Hora do Check-in", "Distância (m)", "Origem", "Justificativa", "Saída",
+                                   "Permanência (min)"]
 
 
 # =====================================================================================================
@@ -365,11 +366,11 @@ def test_ct632_injecao_no_nome_do_curso(ex):
 
 
 def test_ct633_aspas_ponto_e_virgula_e_quebra_de_linha(ex):
-    """CT-633 | Nome com aspas, ';' e quebra de linha | o CSV continua com 8 colunas por linha e o texto volta igual."""
+    """CT-633 | Nome com aspas, ';' e quebra de linha | o CSV continua com 12 colunas por linha e o texto volta igual."""
     nome = 'Ana "Nana"; Dias\nSilva'
     ex.semear_presenca(ex.novo_aluno(2, nome=nome))
     (linha,) = ex.tabela()
-    assert len(linha) == 8 and linha[1] == nome
+    assert len(linha) == 12 and linha[1] == nome
 
 
 def test_ct634_acentos_e_emoji(ex):
