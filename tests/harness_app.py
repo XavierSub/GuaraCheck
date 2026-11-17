@@ -97,6 +97,7 @@ NOMES = {
     "LUGAR_CACHE_MAX", "_lugar_cache", "_lugar_lock", "_lugar_ultima", "_lugar_float", "_lugar_buscar", "buscar_lugares",
     # --- Funcionalidade 11: QR code da chamada (professor mostra, aluno lê) ---
     "PUBLIC_URL", "_HOST_OK", "url_base", "qr_svg", "qr_da_aula",
+    "_int_env", "QR_JANELA_S", "QR_JANELAS_ACEITAS", "qr_token", "qr_token_valido", "qr_renova_em_s",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
@@ -106,7 +107,7 @@ ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MAS
               "CADASTRO_ALUNO_JANELA_S", "ADMIN_FALHAS_IP", "ADMIN_FALHAS_CONTA", "ADMIN_FALHAS_GERAL_HORA",
               "EMAIL_PROVEDOR", "EMAIL_API_KEY", "EMAIL_REMETENTE", "EMAIL_REMETENTE_NOME", "SMTP_HOST", "SMTP_PORT",
               "SMTP_USUARIO", "SMTP_SENHA", "VERIFICAR_EMAIL", "CODIGO_EMAIL_MIN", "CODIGO_MAX_TENTATIVAS",
-              "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP", "AULA_MAX_HORAS", "NOMINATIM_UA", "PUBLIC_URL"]
+              "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP", "AULA_MAX_HORAS", "NOMINATIM_UA", "PUBLIC_URL", "QR_JANELA_S", "QR_JANELAS_ACEITAS"]
 
 
 def _compilar():
@@ -351,15 +352,17 @@ class MatriculasAutorizadas(Modelo):
 
 class Aula(Modelo):
     (id, professor_id, titulo, ativa, curso_id, periodo, aberta_em, codigo_validacao, tipo, local_tipo, local_descricao,
-     disciplina, latitude, longitude, raio_metros, encerrada_em) = (Col() for _ in range(16))
-    _padroes = {"ativa": True}
+     disciplina, latitude, longitude, raio_metros, encerrada_em, qr_rotativo, exige_saida, permanencia_min,
+     carga_horas) = (Col() for _ in range(20))
+    _padroes = {"ativa": True, "qr_rotativo": False, "exige_saida": False}
     _carimbos = ("aberta_em",)                                   # default=utcnow no modelo real
     _unicos_parciais = ((("professor_id",), lambda r: r.ativa is not False),)   # uq_aula_ativa_prof: uma ativa por professor
 
 
 class Presenca(Modelo):
     (id, aula_id, aluno_id, latitude, longitude, distancia_m, precisao_m, device_id, fp_hash, ip, alertas,
-     registrado_em) = (Col() for _ in range(12))
+     registrado_em, manual, lancada_por, justificativa, saida_em, saida_distancia_m) = (Col() for _ in range(17))
+    _padroes = {"manual": False}
     _unicos = (("aula_id", "aluno_id"), ("aula_id", "device_id"))        # uq_presenca_aula_aluno / uq_presenca_aula_device
     _carimbos = ("registrado_em",)
     _fks = {"aula_id": "Aula"}                                           # FOREIGN KEY (aula_id) REFERENCES aulas

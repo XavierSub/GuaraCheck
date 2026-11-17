@@ -6,9 +6,12 @@ presença sozinho (nenhum POST /presenca). Valores estranhos em ?aula= são igno
 A API é simulada (imita o FastAPI); o desenho do QR vem da função REAL qr_svg do app.py.
 Uso:  pip install playwright && playwright install chromium && python tests/navegador/qr_tela.py
 (GC_HTML=caminho.html testa outra cópia do index.html; sai com código 1 se algo falhar)."""
-import ast, json, os
+import ast, json, os, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _gps import gps_falso
 
 WEB = str(Path(__file__).resolve().parents[2]) + "/"
 html = open(os.environ.get("GC_HTML", WEB + "index.html"), encoding="utf-8").read()
@@ -32,14 +35,15 @@ estado = {}
 
 def zerar(**kw):
     estado.clear()
-    estado.update(encerrada=False, qr="ok", pedidos_qr=0, posts_presenca=0, titulo="Algoritmos", registrou=False, abertas=[11])
+    estado.update(encerrada=False, qr="ok", pedidos_qr=0, posts_presenca=0, titulo="Algoritmos", registrou=False, abertas=[11],
+                  rotativo=False, renova=3, posts_aula=[], presenca_resp=("erro", 400, "mock"), corpos_presenca=[])
     estado.update(kw)
 
 
 def aula_ativa(i):
     return {"id": i, "titulo": "Algoritmos" if i == 11 else "Banco de Dados", "tipo": "aula", "local_tipo": "dentro", "local_descricao": "Sala 12",
             "curso": "Gestão da TI", "periodo": 3, "disciplina": "ED", "professor": "Marcos Lima", "raio_metros": 50, "latitude": LAT, "longitude": LON,
-            "ja_registrou": estado["registrou"] and i == 11, "ativa": True}
+            "ja_registrou": estado["registrou"] and i == 11, "ativa": True, "qr_rotativo": estado["rotativo"] and i == 11}
 
 
 def handler(route):
@@ -60,14 +64,21 @@ def handler(route):
         return js({"token": "t", "usuario": PROF if route.request.post_data and '"professor"' in route.request.post_data else ALUNO})
     # ---- professor ----
     if p == "/api/professor/aulas":
-        return js([dict(EVENTO, titulo=estado["titulo"], ativa=not estado["encerrada"])])
+        return js([dict(EVENTO, titulo=estado["titulo"], ativa=not estado["encerrada"], qr_rotativo=estado["rotativo"])])
+    if p == "/api/aulas" and route.request.method == "POST":
+        estado["posts_aula"].append(json.loads(route.request.post_data))
+        return js(dict(EVENTO, **estado["posts_aula"][-1], ativa=True), 200)
     if p == "/api/aulas/11/qr":
         estado["pedidos_qr"] += 1
         if estado["encerrada"]:
             return js({"detail": "Esta chamada já foi encerrada."}, 409)
         if estado["qr"] == "erro":
             return js({"detail": "Erro interno"}, 500)
-        return js({"url": LINK, "svg": qr_svg(LINK)})
+        if estado["rotativo"]:
+            n = estado["pedidos_qr"]
+            url = LINK + "&k=" + ("%012x" % (n * 7919))
+            return js({"url": url, "svg": qr_svg(url), "rotativo": True, "renova_em_s": estado["renova"]})
+        return js({"url": LINK, "svg": qr_svg(LINK), "rotativo": False, "renova_em_s": None})
     if p == "/api/aulas/11/presencas":
         return js({"ativa": not estado["encerrada"], "total": 0, "limite": 2000, "presencas": []})
     if p == "/api/aulas/11/tentativas":
@@ -79,7 +90,11 @@ def handler(route):
         return js([aula_ativa(i) for i in estado["abertas"]])
     if p == "/api/aulas/11/presenca":
         estado["posts_presenca"] += 1
-        return js({"detail": "mock"}, 400)
+        estado["corpos_presenca"].append(json.loads(route.request.post_data))
+        r = estado["presenca_resp"]
+        if r[0] == "ok":
+            return js({"ok": True, "ja_registrado": False, "distancia_m": 3.2, "aula": "Algoritmos"})
+        return js({"detail": r[2]}, r[1])
     if p == "/api/me":
         return js({"nome": ALUNO["nome"], "matricula": ALUNO["matricula"], "email": ALUNO["email"], "curso": ALUNO["curso"], "periodo": 3})
     if p == "/api/aluno/presencas":
@@ -101,10 +116,11 @@ def conf(ok, txt):
 def abrir(pw, url="http://localhost:8765/", largura=1366, sessao=None, geo=False):
     b = pw.chromium.launch()
     kw = {"viewport": {"width": largura, "height": 900}}
-    if geo:
-        kw.update(geolocation={"latitude": LAT, "longitude": LON, "accuracy": 8}, permissions=["geolocation"])
     c = b.new_context(**kw)
-    c.grant_permissions(["clipboard-read", "clipboard-write"], origin="http://localhost:8765") if not geo else None
+    if geo:
+        c.add_init_script(gps_falso(LAT, LON))
+    else:
+        c.grant_permissions(["clipboard-read", "clipboard-write"], origin="http://localhost:8765")
     c.route("**/*", handler)
     pg = c.new_page()
     erros, dialogos = [], []
@@ -284,6 +300,98 @@ with sync_playwright() as pw:
     b, pg, erros, _ = abrir(pw, "http://localhost:8765/?aula=11", sessao=PROF)
     pg.wait_for_selector("#v-prof:not([hidden])")
     conf(pg.evaluate("location.search") == "" and pg.is_hidden("#msg-aluno"), "professor abrindo o link do QR: ignora e limpa o endereço")
+    b.close()
+
+    # =========================== QR rotativo ===========================
+    zerar(rotativo=True, renova=3)
+    b, pg, erros, dialogos = abrir(pw)
+    login(pg, "professor", "#v-prof")
+    pg.wait_for_selector("#qr-box:not([hidden]) #qr-img svg")
+    conf(pg.is_hidden("#qr-link") and pg.is_hidden("#qr-copiar") and pg.is_visible("#qr-contagem"), "QR rotativo: sem link nem Copiar link (repassar derrotaria o rodízio) e com contagem regressiva")
+    conf("Renova em" in pg.inner_text("#qr-contagem") and "30 segundos" in pg.inner_text("#qr-dica"), "QR rotativo: a contagem e o texto de ajuda aparecem (%s)" % pg.inner_text("#qr-contagem"))
+    svg1 = pg.inner_html("#qr-img")
+    pg.click("#qr-ampliar")
+    pg.wait_for_selector("#qr-tela:not([hidden])")
+    conf(pg.is_hidden("#qr-t-link") and "Renova em" in pg.inner_text("#qr-t-contagem"), "QR rotativo: a tela cheia também mostra a contagem e esconde o link")
+    pg.wait_for_function("document.querySelector('#qr-img').innerHTML !== %s" % json.dumps(svg1), timeout=9000)
+    conf(estado["pedidos_qr"] >= 2, "QR rotativo: o painel pediu outro QR sozinho quando a contagem zerou (%d pedidos)" % estado["pedidos_qr"])
+    conf(pg.inner_html("#qr-t-img") == pg.inner_html("#qr-img"), "QR rotativo: o QR da tela cheia acompanha o do painel")
+    pg.keyboard.press("Escape")
+    # falha na renovação: mantém o QR atual, avisa e se recupera
+    estado["qr"] = "erro"
+    pg.wait_for_selector("#qr-contagem.erro", timeout=9000)
+    conf(pg.is_visible("#qr-img svg") and "Não foi possível renovar" in pg.inner_text("#qr-contagem"), "QR rotativo: falha ao renovar mantém o QR na tela e avisa")
+    estado["qr"] = "ok"
+    pg.wait_for_function("!document.querySelector('#qr-contagem').classList.contains('erro')", timeout=12000)
+    conf(True, "QR rotativo: o servidor voltou e a renovação normal retomou")
+    estado["encerrada"] = True
+    pg.wait_for_selector("#qr-box", state="hidden", timeout=8000)
+    n = estado["pedidos_qr"]
+    pg.wait_for_timeout(4500)
+    conf(estado["pedidos_qr"] <= n + 1, "chamada encerrada: a renovação do QR para (%d -> %d pedidos)" % (n, estado["pedidos_qr"]))
+    conf(not erros and not dialogos, "QR rotativo (professor): sem erro de JavaScript: %s" % erros)
+    b.close()
+
+    # formulário: as opções do evento vão no pedido
+    zerar()
+    b, pg, erros, _ = abrir(pw)
+    login(pg, "professor", "#v-prof")
+    pg.wait_for_selector("#form-aula")
+    pg.fill("#titulo", "Palestra de IA"); pg.fill("#lat", "-18.4"); pg.fill("#lon", "-49.2")
+    conf(pg.is_hidden("#saida-opc"), "formulário: permanência mínima fica escondida até marcar 'Exigir saída'")
+    pg.check("#qr-rot"); pg.check("#exige-saida")
+    conf(pg.is_visible("#saida-opc"), "formulário: marcar 'Exigir saída' mostra a permanência mínima")
+    pg.fill("#perm-min", "90"); pg.fill("#carga-h", "1,5")
+    pg.click('#form-aula button[type="submit"]')
+    pg.wait_for_function("window.__x = 1", timeout=500) if False else pg.wait_for_timeout(600)
+    c = estado["posts_aula"][-1] if estado["posts_aula"] else {}
+    conf(c.get("qr_rotativo") is True and c.get("exige_saida") is True and c.get("permanencia_min") == 90 and c.get("carga_horas") == 1.5,
+         "formulário: qr_rotativo, exige_saida, permanência 90 e carga 1,5 h (vírgula) vão no pedido: %s" % {k: c.get(k) for k in ("qr_rotativo", "exige_saida", "permanencia_min", "carga_horas")})
+    pg.uncheck("#exige-saida")
+    conf(pg.input_value("#perm-min") == "" and pg.is_hidden("#saida-opc"), "formulário: desmarcar 'Exigir saída' limpa e esconde a permanência")
+    pg.fill("#carga-h", "abc")
+    pg.click('#form-aula button[type="submit"]')
+    pg.wait_for_selector("#msg-prof.err")
+    conf("carga horária" in pg.inner_text("#msg-prof"), "formulário: carga horária inválida é recusada na tela")
+    b.close()
+
+    # aluno: evento com QR rotativo
+    zerar(rotativo=True)
+    b, pg, erros, dialogos = abrir(pw, "http://localhost:8765/?aula=11", sessao=ALUNO, geo=True)
+    pg.wait_for_selector("#aula-11 button[data-id]")
+    pg.wait_for_timeout(1500)
+    conf(pg.inner_text("#aula-11 button[data-id]") == "Leia o QR code do telão" and pg.is_disabled("#aula-11 button[data-id]"),
+         "aluno abre o link SEM código num evento rotativo: botão travado em 'Leia o QR code do telão' mesmo dentro do raio")
+    conf("não tem o código" in pg.inner_text("#msg-aluno"), "aluno: avisa que o link não tinha o código do QR")
+    b.close()
+
+    zerar(rotativo=True)
+    b, pg, erros, dialogos = abrir(pw, "http://localhost:8765/?aula=11&k=0123456789ab", sessao=ALUNO, geo=True)
+    pg.wait_for_selector("#aula-11.destaque")
+    pg.wait_for_function("document.querySelector('#aula-11 button[data-id]') && !document.querySelector('#aula-11 button[data-id]').disabled", timeout=8000)
+    conf("QR code lido" in pg.inner_text("#msg-aluno") and pg.evaluate("location.search") == "", "aluno com o link do QR rotativo: botão libera, mensagem certa e endereço limpo (k some da barra)")
+    estado["presenca_resp"] = ("erro", 403, "Este evento exige ler o QR code do telão, que muda a cada poucos segundos. Leia o QR de novo e registre logo em seguida.")
+    pg.click("#aula-11 button[data-id]")
+    pg.wait_for_function("document.querySelector('#msg-aluno').classList.contains('err')", timeout=20000)   # a coleta de GPS leva alguns segundos
+    conf(estado["corpos_presenca"] and estado["corpos_presenca"][-1].get("qr") == "0123456789ab", "aluno: o código do QR vai no pedido de presença")
+    pg.wait_for_function("document.querySelector('#aula-11 button[data-id]').textContent === 'Leia o QR code do telão'", timeout=8000)
+    conf(pg.is_disabled("#aula-11 button[data-id]"), "aluno: o servidor recusou o código vencido -> o botão volta a pedir a leitura do QR")
+    conf(not erros and not dialogos, "QR rotativo (aluno): sem erro de JavaScript: %s" % erros)
+    b.close()
+
+    zerar(rotativo=True, presenca_resp=("ok", 200, ""))
+    b, pg, erros, _ = abrir(pw, "http://localhost:8765/?aula=11&k=0123456789ab", sessao=ALUNO, geo=True)
+    pg.wait_for_function("document.querySelector('#aula-11 button[data-id]') && !document.querySelector('#aula-11 button[data-id]').disabled", timeout=8000)
+    pg.click("#aula-11 button[data-id]")
+    pg.wait_for_function("document.querySelector('#msg-aluno').classList.contains('ok') && /Presença registrada/.test(document.querySelector('#msg-aluno').textContent)", timeout=20000)
+    conf("Presença registrada" in pg.inner_text("#msg-aluno"), "aluno: com o código certo a presença é registrada")
+    b.close()
+
+    # evento comum: o botão não pede QR
+    zerar()
+    b, pg, erros, _ = abrir(pw, "http://localhost:8765/?aula=11", sessao=ALUNO, geo=True)
+    pg.wait_for_function("document.querySelector('#aula-11 button[data-id]') && !document.querySelector('#aula-11 button[data-id]').disabled", timeout=8000)
+    conf(pg.inner_text("#aula-11 button[data-id]") == "Registrar Presença", "evento comum: botão normal, sem pedir QR rotativo")
     b.close()
 
 print("\n%d falha(s)" % len(falhas))

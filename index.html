@@ -106,6 +106,9 @@ textarea{min-height:110px;resize:vertical}
 .qr-grande-img{width:min(82vw,58vh,640px);aspect-ratio:1;margin:14px auto;background:#fff;border-radius:12px;overflow:hidden}
 .qr-t-tit{font-size:26px;font-weight:800;line-height:1.15;overflow-wrap:anywhere}.qr-t-frase{font-size:18px;margin:4px 0 8px}
 .card.destaque{outline:3px solid var(--pri);outline-offset:3px}
+.opcoes{border:1.5px solid var(--line);border-radius:14px;padding:4px 16px 14px;margin:18px 0 0;min-width:0}.opcoes legend{font-weight:700;font-size:14px;padding:0 6px}
+label.ck{display:flex;gap:10px;align-items:flex-start;font-weight:400;font-size:14.5px;margin:12px 0 0}label.ck input{width:auto;min-width:0;flex:none;margin-top:3px}
+.qr-contagem{font-weight:700;color:var(--ok);margin:0 0 8px}.qr-contagem.erro{color:var(--err)}
 .overlay{position:fixed;inset:0;z-index:50;background:var(--bg);overflow:auto;padding:16px;display:flex;justify-content:center;align-items:flex-start}
 .overlay-box:focus{outline:none}.overlay-box{width:100%;max-width:560px;background:var(--card);border:2px solid var(--pri);border-radius:20px;padding:22px}
 .m-nome{font-size:28px;font-weight:800;line-height:1.15;margin:14px 0 4px}
@@ -527,6 +530,17 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
         <label>Código de validação do PDF<input id="cod-valid" maxlength="12" autocomplete="off" autocapitalize="characters" placeholder="Ex.: 081 (vazio = gerar um)"></label>
         <label>Descrição do local (opcional)<input id="local-desc" placeholder="Ex.: Auditório, Bloco B, sala 4"></label>
       </div>
+      <fieldset class="opcoes">
+        <legend>Opções do evento</legend>
+        <label class="ck"><input type="checkbox" id="qr-rot"><span>QR code rotativo: o aluno só registra lendo o QR do telão, que muda sozinho a cada 30 s (um print repassado no WhatsApp deixa de servir).</span></label>
+        <label class="ck"><input type="checkbox" id="exige-saida"><span>Exigir registro de saída: o aluno registra a entrada e, no fim, a saída dentro do raio.</span></label>
+        <div class="grid2" id="saida-opc" hidden>
+          <label>Permanência mínima (minutos)<input id="perm-min" type="number" min="1" max="1440" inputmode="numeric" placeholder="Ex.: 90 (vazio = só registrar a saída)"></label>
+        </div>
+        <div class="grid2">
+          <label>Carga horária do certificado (horas, opcional)<input id="carga-h" inputmode="decimal" placeholder="Ex.: 2 ou 1,5"></label>
+        </div>
+      </fieldset>
       <div class="grid">
         <label>Latitude<input id="lat" inputmode="decimal" placeholder="-18.0119"></label>
         <label>Longitude<input id="lon" inputmode="decimal" placeholder="-49.3561"></label>
@@ -562,7 +576,8 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
       <div class="qr-img" id="qr-img"></div>
       <div class="qr-txt">
         <h3>Presença por QR code</h3>
-        <p class="mut">Mostre ou projete para a turma. O aluno lê com a câmera do celular, entra no Guará Check e registra a presença dentro do raio de <span id="qr-raio"></span> m. O QR sozinho não dá presença: o GPS do aluno continua sendo conferido.</p>
+        <div class="qr-contagem" id="qr-contagem" hidden></div>
+        <p class="mut" id="qr-dica"><span id="qr-dica-fixo">Mostre ou projete para a turma. O aluno lê com a câmera do celular, entra no Guará Check e registra a presença dentro do raio de <span id="qr-raio"></span> m. O QR sozinho não dá presença: o GPS do aluno continua sendo conferido.</span><span id="qr-dica-rot" hidden>QR rotativo: o aluno só registra lendo este QR, que muda sozinho a cada 30 segundos. Projete na tela da sala. O GPS do aluno continua sendo conferido (raio de <span id="qr-raio-rot"></span> m).</span></p>
         <div class="qr-link mut" id="qr-link"></div>
         <div class="acoes">
           <button class="btn" id="qr-ampliar" type="button">Projetar QR code na tela</button>
@@ -661,6 +676,7 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}d
   <div class="overlay-box qr-grande" tabindex="-1">
     <div class="qr-t-tit" id="qr-t-titulo"></div>
     <div class="qr-grande-img" id="qr-t-img"></div>
+    <div class="qr-contagem" id="qr-t-contagem" hidden></div>
     <p class="qr-t-frase">Aponte a câmera do celular para o QR code e registre sua presença.</p>
     <div class="mut qr-link" id="qr-t-link"></div>
     <button class="btn alt big" id="qr-t-fechar" type="button">Fechar</button>
@@ -930,7 +946,7 @@ async function carregarAulas(){
       <div class="mut">${esc(rotulo(a))}${a.local_descricao ? ' · ' + esc(a.local_descricao) : ''}</div>
       <div class="mut">${a.disciplina ? 'Disciplina: ' + esc(a.disciplina) + ' · ' : ''}Prof. ${esc(a.professor)} · raio de ${Math.round(a.raio_metros)} m</div>
       ${a.ja_registrou ? '<div class="ok-badge">✓ Presença registrada</div>'
-                       : `<button class="btn big fora" data-id="${a.id}" data-lat="${a.latitude}" data-lon="${a.longitude}" data-raio="${a.raio_metros}" disabled>Verificando sua localização…</button><div class="zona"></div>`}</article>`).join('')
+                       : `<button class="btn big fora" data-id="${a.id}" data-lat="${a.latitude}" data-lon="${a.longitude}" data-raio="${a.raio_metros}"${a.qr_rotativo ? ' data-qr="1"' : ''} disabled>Verificando sua localização…</button><div class="zona"></div>`}</article>`).join('')
       : '<div class="card vazio mut">Nenhuma chamada aberta agora. Esta tela atualiza sozinha quando o professor abrir a chamada.</div>';
     const cv = $('#chip-vivo'); if (cv){ cv.classList.toggle('on', l.length > 0); cv.textContent = l.length ? (l.length === 1 ? '1 chamada aberta agora' : l.length + ' chamadas abertas agora') : 'Nenhuma chamada aberta no momento'; }
     atualizarZona(); aplicarLinkAula(l);
@@ -947,17 +963,21 @@ async function carregarAulas(){
    chamadas existe, então é aqui que a chamada do QR é destacada. O link não registra presença: o botão da chamada continua exigindo
    GPS dentro do raio. Professor e coordenação ignoram o link. */
 function limparLinkAula(){
-  S.aulaLink = null;
+  S.aulaLink = S.aulaK = null;
   try { if (/[?&]aula=/.test(location.search)) history.replaceState(null, '', location.pathname + location.hash); } catch {}
 }
 function aplicarLinkAula(l){
-  const id = S.aulaLink; if (!id) return;
+  const id = S.aulaLink, k = S.aulaK; if (!id) return;
   limparLinkAula();
   const a = l.find(x => x.id === id), m = $('#msg-aluno');
   if (!a){ msg(m, 'A chamada do QR code não está aberta para você agora. Ela pode ter sido encerrada ou ser de outro curso ou período.', 'err'); return; }
+  if (a.qr_rotativo && k) S.qrCodigo = {aula:id, k};   // código do QR rotativo, guardado só na memória desta aba
   S.aulaDestaque = id; setTimeout(() => { if (S.aulaDestaque === id){ S.aulaDestaque = null; const c = $('#aula-' + id); if (c) c.classList.remove('destaque'); } }, 20000);
   const c = $('#aula-' + id); if (c){ c.classList.add('destaque'); c.scrollIntoView({behavior:'smooth', block:'center'}); }
-  msg(m, a.ja_registrou ? 'Sua presença nesta chamada já está registrada.' : 'Chamada do QR code encontrada. Aguarde o GPS e toque em "Registrar Presença".', a.ja_registrou ? 'ok' : '');
+  msg(m, a.ja_registrou ? 'Sua presença nesta chamada já está registrada.'
+       : a.qr_rotativo && !(S.qrCodigo && S.qrCodigo.aula === id) ? 'Este evento exige o QR code do telão: o link que você abriu não tem o código. Leia o QR da tela de novo.'
+       : a.qr_rotativo ? 'QR code lido. Aguarde o GPS e toque em "Registrar Presença" logo em seguida (o código vale por poucos minutos).'
+       : 'Chamada do QR code encontrada. Aguarde o GPS e toque em "Registrar Presença".', a.ja_registrou ? 'ok' : '');
 }
 
 /* Posição ao vivo + trava do botão: fora do raio da aula o botão fica cinza e desabilitado. O navegador só avisa;
@@ -981,7 +1001,9 @@ function atualizarZona(){
     if (b.dataset.ocupado) return;  // enviando a presença agora
     const g = S.geo, z = b.parentElement.querySelector('.zona');
     let liberar = false, rot = 'Registrar Presença', txt = '', cls = '';
-    if (g.erro){ rot = 'Localização indisponível'; txt = g.erro; cls = 'longe'; }
+    if (b.dataset.qr === '1' && !(S.qrCodigo && S.qrCodigo.aula === +b.dataset.id)){
+      rot = 'Leia o QR code do telão'; txt = 'Este evento exige ler o QR code que o professor mostra no telão (ele muda a cada poucos segundos). Aponte a câmera do celular para ele.';
+    } else if (g.erro){ rot = 'Localização indisponível'; txt = g.erro; cls = 'longe'; }
     else if (!g.pos){ rot = 'Obtendo localização…'; txt = 'Permita o acesso à localização quando o navegador perguntar.'; }
     else {
       const d = dist({lat:g.pos.lat, lon:g.pos.lon}, {lat:+b.dataset.lat, lon:+b.dataset.lon}), r = +b.dataset.raio;
@@ -1006,11 +1028,15 @@ $('#aulas').onclick = async e => {
     b.textContent = 'Enviando…';
     const r = await api(`/aulas/${b.dataset.id}/presenca`, {method:'POST', body:{
       latitude:c.lat, longitude:c.lon, precisao_m:c.acc, pos_ts:c.ts, amostras:c.n, variacao_m:c.variacao,
-      webdriver:!!navigator.webdriver, device_id:deviceId(), fp_hash:await fpHash()}});
+      webdriver:!!navigator.webdriver, device_id:deviceId(), fp_hash:await fpHash(),
+      qr:S.qrCodigo && S.qrCodigo.aula === +b.dataset.id ? S.qrCodigo.k : undefined}});
     msg(m, `Presença registrada em "${r.aula}"! Seu comprovante está logo abaixo.`, 'ok');
     await carregarComprovantes(true);
     carregarAulas();
-  } catch (x) { msg(m, x.message, 'err'); delete b.dataset.ocupado; atualizarZona(); }
+  } catch (x) {
+    if (/QR code/.test(x.message) && S.qrCodigo && S.qrCodigo.aula === +b.dataset.id) S.qrCodigo = null;   // venceu ou foi recusado: precisa ler o QR de novo
+    msg(m, x.message, 'err'); delete b.dataset.ocupado; atualizarZona();
+  }
 };
 
 /* PDF do comprovante: o servidor gera (com o código de validação do evento e a autenticação) e o navegador baixa. */
@@ -1304,10 +1330,13 @@ $('#busca-res').addEventListener('click', e => {
   $('#busca-res').querySelectorAll('button').forEach(x => x.removeAttribute('aria-current')); bt.setAttribute('aria-current', 'true');
   irParaLugar(l); msg($('#busca-msg'), 'Lugar marcado no mapa. Arraste o marcador até a sala.', 'ok');
 });
+$('#exige-saida').onchange = () => { $('#saida-opc').hidden = !$('#exige-saida').checked; if (!$('#exige-saida').checked) $('#perm-min').value = ''; };
 $('#form-aula').onsubmit = async e => {
   e.preventDefault(); const m = $('#msg-prof'); msg(m, '');
   if (S.abrindo) return;  // duplo clique/toque: o segundo envio fecharia a chamada que acabou de abrir
   if (!$('#lat').value.trim() || !$('#lon').value.trim()) return msg(m, 'Defina a localização da sala (use sua localização atual ou clique no mapa).', 'err');
+  const ch = $('#carga-h').value.trim().replace(',', '.');
+  if (ch && !(parseFloat(ch) > 0 && parseFloat(ch) <= 200)) return msg(m, 'A carga horária deve ser um número de horas entre 0 e 200 (ex.: 2 ou 1,5).', 'err');
   const bt = $('#form-aula button[type="submit"]'); S.abrindo = true; bt.disabled = true;
   try {
     const a = await api('/aulas', {method:'POST', body:{titulo:$('#titulo').value.trim(),
@@ -1315,7 +1344,10 @@ $('#form-aula').onsubmit = async e => {
       tipo:$('#tipo').value, local_tipo:$('#local-tipo').value, local_descricao:$('#local-desc').value.trim() || null,
       curso_id:$('#aula-curso').value ? +$('#aula-curso').value : null,
       periodo:$('#aula-periodo').value ? +$('#aula-periodo').value : null, disciplina:$('#disciplina').value.trim() || null,
-      codigo_validacao:$('#cod-valid').value.trim() || null}});
+      codigo_validacao:$('#cod-valid').value.trim() || null,
+      qr_rotativo:$('#qr-rot').checked, exige_saida:$('#exige-saida').checked,
+      permanencia_min:$('#exige-saida').checked && $('#perm-min').value ? parseInt($('#perm-min').value, 10) : null,
+      carga_horas:$('#carga-h').value.trim() ? parseFloat($('#carga-h').value.replace(',', '.')) : null}});
     $('#cod-valid').value = ''; abrirAula(a); recarregarHist();
   } catch (x) { msg(m, x.message, 'err'); }
   finally { S.abrindo = false; bt.disabled = false; }
@@ -1334,28 +1366,51 @@ function abrirAula(a){
   $('#painel').scrollIntoView({behavior:'smooth', block:'start'});
 }
 /* QR code da chamada: o servidor devolve o link (/?aula=ID) e o desenho em SVG; a página só mostra. O QR não dá presença sozinho. */
-async function carregarQr(a){
-  if (S.qrBusy === a.id || (S.qrFalhou && Date.now() - S.qrFalhou < 15000)) return;   // uma ida por vez; depois de falha, espera 15 s
+async function carregarQr(a, renovando){
+  if (S.qrBusy === a.id || (!renovando && S.qrFalhou && Date.now() - S.qrFalhou < 15000)) return;   // uma ida por vez; depois de falha, espera 15 s
   S.qrBusy = a.id;
   try {
     const r = await api(`/aulas/${a.id}/qr`);
     if (!S.aula || S.aula.id !== a.id || !S.aula.ativa) return;
-    S.qr = {id:a.id, url:r.url, svg:r.svg}; S.qrFalhou = 0;
-    $('#qr-img').innerHTML = r.svg; $('#qr-link').textContent = r.url; $('#qr-raio').textContent = Math.round(a.raio_metros);
+    S.qr = {id:a.id, url:r.url, svg:r.svg, rotativo:!!r.rotativo, vence:r.rotativo ? Date.now() + (r.renova_em_s || 30) * 1000 : 0}; S.qrFalhou = 0;
+    $('#qr-img').innerHTML = r.svg; $('#qr-link').textContent = r.url; $('#qr-raio').textContent = $('#qr-raio-rot').textContent = Math.round(a.raio_metros);
     qrEstado(true); msg($('#qr-msg'), ''); $('#qr-box').hidden = false;
+    if (!$('#qr-tela').hidden){ $('#qr-t-img').innerHTML = r.svg; $('#qr-t-link').textContent = r.url; }
+    qrRotativo(!!r.rotativo);
   } catch (x) {   // o erro fica dentro do quadro do QR (não pisa nas mensagens do painel); a atualização de 3 s tenta de novo depois de 15 s
     S.qrFalhou = Date.now();
     if (S.aula && S.aula.id === a.id && S.aula.ativa){
-      qrEstado(false); $('#qr-box').hidden = false;
-      msg($('#qr-msg'), 'Não foi possível gerar o QR code agora (' + x.message + '). O painel tenta de novo sozinho em alguns segundos.', 'err');
+      if (S.qr && S.qr.rotativo){   // já havia um QR na tela: mantém, avisa e tenta de novo em 5 s (o antigo vale por ~2 min)
+        S.qr.vence = Date.now() + 5000;
+        $('#qr-contagem').textContent = 'Não foi possível renovar o QR agora. Tentando de novo…'; $('#qr-contagem').classList.add('erro');
+      } else {
+        qrEstado(false); $('#qr-box').hidden = false;
+        msg($('#qr-msg'), 'Não foi possível gerar o QR code agora (' + x.message + '). O painel tenta de novo sozinho em alguns segundos.', 'err');
+      }
     }
   } finally { if (S.qrBusy === a.id) S.qrBusy = null; }
+}
+/* QR rotativo: troca o texto de ajuda, esconde o link/copiar (repassar o link derrotaria o rodízio) e liga a contagem regressiva */
+function qrRotativo(on){
+  $('#qr-dica-fixo').hidden = on; $('#qr-dica-rot').hidden = !on;
+  $('#qr-link').hidden = on; $('#qr-copiar').hidden = on; $('#qr-t-link').hidden = on;
+  $('#qr-contagem').hidden = $('#qr-t-contagem').hidden = !on;
+  clearInterval(S.qrTick); S.qrTick = null;
+  if (!on) return;
+  qrTique(); S.qrTick = setInterval(qrTique, 1000);
+}
+function qrTique(){
+  if (!S.qr || !S.qr.rotativo || !S.aula || !S.aula.ativa) return;
+  const falta = Math.max(0, Math.ceil((S.qr.vence - Date.now()) / 1000));
+  if (!S.qrFalhou || Date.now() - S.qrFalhou > 5000){ $('#qr-contagem').classList.remove('erro'); $('#qr-contagem').textContent = 'Renova em ' + falta + ' s'; }
+  $('#qr-t-contagem').textContent = 'Renova em ' + falta + ' s';
+  if (falta <= 0) carregarQr(S.aula, true);
 }
 function qrEstado(ok){   // sem QR: esconde o desenho e trava os botões que dependem dele
   $('#qr-img').hidden = !ok; $('#qr-link').hidden = !ok; $('#qr-ampliar').disabled = $('#qr-copiar').disabled = !ok;
 }
 function qrLimpar(){
-  S.qr = null; S.qrFalhou = 0; $('#qr-box').hidden = true; $('#qr-img').innerHTML = ''; qrEstado(true); msg($('#qr-msg'), ''); qrFechar();
+  clearInterval(S.qrTick); S.qrTick = null; S.qr = null; S.qrFalhou = 0; $('#qr-box').hidden = true; $('#qr-img').innerHTML = ''; qrEstado(true); msg($('#qr-msg'), ''); qrFechar();
 }
 async function copiarTexto(t){
   try { await navigator.clipboard.writeText(t); return true; } catch {}
@@ -1371,6 +1426,7 @@ $('#qr-copiar').onclick = async () => {
 function qrAmpliar(){
   if (!S.qr || !S.aula) return;
   $('#qr-t-titulo').textContent = S.aula.titulo; $('#qr-t-img').innerHTML = S.qr.svg; $('#qr-t-link').textContent = S.qr.url;
+  if (S.qr.rotativo) qrTique();
   S.qrFoco = document.activeElement;
   $('#qr-tela').hidden = false; document.body.style.overflow = 'hidden';
   $('#qr-tela .overlay-box').focus();
@@ -1827,7 +1883,11 @@ $('#adm-corpo').onchange = async e => {
   if (window.GC_ADMIN) S.perfil = 'admin'; // endereço /coordenacao abre direto na aba Coordenação
   try {   // link do QR code do professor: /?aula=ID (ver aplicarLinkAula)
     const n = Number(new URLSearchParams(location.search).get('aula'));
-    if (Number.isInteger(n) && n > 0 && n < 2147483647 && !window.GC_ADMIN) S.aulaLink = n;
+    if (Number.isInteger(n) && n > 0 && n < 2147483647 && !window.GC_ADMIN){
+      S.aulaLink = n;
+      const k = new URLSearchParams(location.search).get('k');   // código do QR rotativo
+      if (k && /^[A-Za-z0-9]{6,64}$/.test(k)) S.aulaK = k;
+    }
   } catch {}
   if (S.token && S.user){ S.perfil = S.user.perfil; iniciar(); }
   else {

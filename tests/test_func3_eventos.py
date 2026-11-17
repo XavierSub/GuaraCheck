@@ -545,7 +545,8 @@ def test_ct363_lista_do_aluno_filtra_por_curso_e_periodo_e_nunca_traz_o_codigo(e
     assert {x["titulo"] for x in r[1]} == {"Para todos", "Só TI", "Só 2º período", "TI 2º"}
     assert "SEGREDO" not in _json.dumps(r[1]), "o código de validação vazou para a lista do aluno"
     assert all(set(x) == {"id", "titulo", "professor", "tipo", "local_tipo", "local_descricao", "curso", "periodo", "disciplina",
-                          "latitude", "longitude", "raio_metros", "aberta_em", "ja_registrou"} for x in r[1])
+                          "latitude", "longitude", "raio_metros", "aberta_em", "ja_registrou", "qr_rotativo", "exige_saida",
+                          "permanencia_min", "entrada_em", "ja_saiu"} for x in r[1])
     assert all(x["ja_registrou"] is False for x in r[1])
     ev.presenca(do_curso)
     ja = {x["titulo"]: x["ja_registrou"] for x in ev.ativas()[1]}

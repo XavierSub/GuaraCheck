@@ -247,6 +247,10 @@ class Aula(Base):
     ativa: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     aberta_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     encerrada_em: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    qr_rotativo: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)       # presença só com o QR do telão (muda a cada ~30 s)
+    exige_saida: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)       # o aluno registra entrada E saída
+    permanencia_min: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)    # minutos mínimos entre entrada e saída
+    carga_horas: Mapped[Optional[float]] = mapped_column(Float, nullable=True)        # carga horária que vai no certificado
     # no máximo UMA chamada ativa por professor (dois envios simultâneos não criam duas: o segundo recebe 409)
     __table_args__ = (Index("uq_aula_ativa_prof", "professor_id", unique=True,
                             postgresql_where=text("ativa"), sqlite_where=text("ativa")),)
@@ -271,6 +275,11 @@ class Presenca(Base):
     ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     alertas: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     registrado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    manual: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)            # lançada pelo professor (com justificativa)
+    lancada_por: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)        # id do professor que lançou
+    justificativa: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    saida_em: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    saida_distancia_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     __table_args__ = (
         UniqueConstraint("aula_id", "aluno_id", name="uq_presenca_aula_aluno"),
         UniqueConstraint("aula_id", "device_id", name="uq_presenca_aula_device"),
@@ -391,9 +400,13 @@ def migrar_esquema():
         "aulas": [("tipo", "VARCHAR(20) DEFAULT 'aula'"), ("local_tipo", "VARCHAR(10) DEFAULT 'dentro'"),
                   ("local_descricao", "VARCHAR(160)"), ("curso_id", "INTEGER REFERENCES cursos (id)"),
                   ("periodo", "INTEGER"), ("disciplina", "VARCHAR(140)"),
-                  ("codigo_validacao", "VARCHAR(16)")],
+                  ("codigo_validacao", "VARCHAR(16)"),
+                  ("qr_rotativo", "BOOLEAN DEFAULT FALSE"), ("exige_saida", "BOOLEAN DEFAULT FALSE"),
+                  ("permanencia_min", "INTEGER"), ("carga_horas", "FLOAT")],
         "presencas": [("device_id", "VARCHAR(64)"), ("fp_hash", "VARCHAR(64)"),
-                      ("ip", "VARCHAR(64)"), ("alertas", "VARCHAR(200)")],
+                      ("ip", "VARCHAR(64)"), ("alertas", "VARCHAR(200)"),
+                      ("manual", "BOOLEAN DEFAULT FALSE"), ("lancada_por", "INTEGER"), ("justificativa", "VARCHAR(200)"),
+                      ("saida_em", "TIMESTAMP WITH TIME ZONE"), ("saida_distancia_m", "FLOAT")],
     }
     insp = inspect(engine)
     for tabela, colunas in novas.items():
@@ -903,6 +916,10 @@ class AulaIn(BaseModel):
     periodo: Optional[int] = Field(None, ge=1, le=10)  # None = todos os períodos
     disciplina: Optional[str] = Field(None, max_length=140)
     codigo_validacao: Optional[str] = Field(None, max_length=32)  # em branco = o sistema gera um
+    qr_rotativo: bool = False                                     # presença só lendo o QR do telão, que muda a cada ~30 s
+    exige_saida: bool = False                                     # o aluno registra entrada e saída
+    permanencia_min: Optional[int] = Field(None, ge=1, le=1440)   # minutos mínimos entre a entrada e a saída (precisa de exige_saida)
+    carga_horas: Optional[float] = Field(None, gt=0, le=200, allow_inf_nan=False)  # carga horária do certificado (horas)
 
 
 class PresencaIn(BaseModel):
@@ -917,6 +934,7 @@ class PresencaIn(BaseModel):
     webdriver: bool = False                         # navigator.webdriver
     device_id: str = Field(pattern=r"^[A-Za-z0-9\-]{16,64}$")
     fp_hash: Optional[str] = Field(None, pattern=r"^[a-f0-9]{8,64}$")
+    qr: Optional[str] = Field(None, max_length=64)  # código do QR do telão (só conferido nos eventos de QR rotativo)
 
 
 def aula_dict(a: Aula, total: Optional[int] = None, curso: Optional[str] = None, com_codigo: bool = False) -> dict:
@@ -924,7 +942,9 @@ def aula_dict(a: Aula, total: Optional[int] = None, curso: Optional[str] = None,
          "raio_metros": a.raio_metros, "ativa": a.ativa, "tipo": a.tipo or "aula",
          "local_tipo": a.local_tipo or "dentro", "local_descricao": a.local_descricao,
          "curso_id": a.curso_id, "curso": curso, "periodo": a.periodo, "disciplina": a.disciplina,
-         "aberta_em": iso(a.aberta_em), "encerrada_em": iso(a.encerrada_em)}
+         "aberta_em": iso(a.aberta_em), "encerrada_em": iso(a.encerrada_em),
+         "qr_rotativo": bool(a.qr_rotativo), "exige_saida": bool(a.exige_saida),
+         "permanencia_min": a.permanencia_min, "carga_horas": a.carga_horas}
     if total is not None:
         d["total"] = total
     if com_codigo:  # só para o professor dono do evento: o aluno só vê o código dentro do PDF da própria presença
@@ -1858,13 +1878,16 @@ def abrir_aula(b: AulaIn, u: dict = Depends(so_professor), db: Session = Depends
         codigo = normalizar_codigo(b.codigo_validacao)
     except ValueError:
         raise HTTPException(422, "O código de validação deve ter de 3 a 12 letras ou números, sem símbolos (ex.: 081).")
+    if b.permanencia_min and not b.exige_saida:
+        raise HTTPException(422, "Para definir a permanência mínima, marque \"Exigir registro de saída\".")
     db.execute(update(Aula).where(Aula.professor_id == u["id"], Aula.ativa.is_(True))
                .values(ativa=False, encerrada_em=utcnow()))
     a = Aula(professor_id=u["id"], titulo=titulo, latitude=b.latitude, longitude=b.longitude,
              raio_metros=b.raio_metros, tipo=b.tipo, local_tipo=b.local_tipo,
              local_descricao=(b.local_descricao or "").strip() or None, curso_id=b.curso_id,
              periodo=b.periodo, disciplina=(b.disciplina or "").strip() or None,
-             codigo_validacao=codigo or gerar_codigo())
+             codigo_validacao=codigo or gerar_codigo(), qr_rotativo=b.qr_rotativo, exige_saida=b.exige_saida,
+             permanencia_min=b.permanencia_min if b.exige_saida else None, carga_horas=b.carga_horas)
     db.add(a)
     try:
         db.commit()
@@ -1933,14 +1956,49 @@ def qr_svg(texto: str, borda: int = 4) -> str:
             f'<rect width="{tam}" height="{tam}" fill="#fff"/><path d="{"".join(tracos)}" fill="#000"/></svg>')
 
 
+# QR ROTATIVO (opcional por evento): o link do QR leva um código (?k=) que o servidor calcula a partir da chave secreta, do número da
+# chamada e do "minuto" atual (janelas de QR_JANELA_S segundos). O professor projeta e a página troca o QR sozinha; o servidor só aceita o
+# código da janela atual e das QR_JANELAS_ACEITAS - 1 anteriores (folga para o aluno entrar na conta e esperar o GPS). Um print repassado
+# no WhatsApp deixa de servir em poucos minutos, e o GPS continua sendo conferido por cima.
+def _int_env(nome: str, padrao: int, minimo: int, maximo: int) -> int:
+    try:
+        return min(maximo, max(minimo, int(os.getenv(nome, str(padrao)))))
+    except ValueError:
+        return padrao
+
+
+QR_JANELA_S = _int_env("QR_JANELA_S", 30, 10, 300)
+QR_JANELAS_ACEITAS = _int_env("QR_JANELAS_ACEITAS", 4, 1, 20)
+
+
+def qr_token(aula_id: int, janela: int) -> str:
+    base = f"qr|{aula_id}|{janela}"
+    return hmac.new(SECRET_KEY.encode(), base.encode(), hashlib.sha256).hexdigest()[:12]
+
+
+def qr_token_valido(aula_id: int, token: Optional[str]) -> bool:
+    if not isinstance(token, str) or len(token) != 12:
+        return False
+    atual = int(time.time() // QR_JANELA_S)
+    return any(hmac.compare_digest(token, qr_token(aula_id, atual - i)) for i in range(QR_JANELAS_ACEITAS))
+
+
+def qr_renova_em_s() -> int:
+    return max(1, int(QR_JANELA_S - (time.time() % QR_JANELA_S)))
+
+
 @app.get("/api/aulas/{aula_id}/qr")
 def qr_da_aula(aula_id: int, request: Request, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
-    """QR code da chamada aberta do próprio professor: devolve o link (`url`) e o desenho (`svg`)."""
+    """QR code da chamada aberta do próprio professor: devolve o link (`url`) e o desenho (`svg`).
+    No QR rotativo o link leva o código da janela atual e `renova_em_s` diz quando a página deve pedir outro."""
     a = _aula_do_professor(db, aula_id, u["id"])
     if not aula_aberta(a):
         raise HTTPException(409, "Esta chamada já foi encerrada.")
     url = f"{url_base(request)}/?aula={a.id}"
-    return {"url": url, "svg": qr_svg(url)}
+    if a.qr_rotativo:
+        url += "&k=" + qr_token(a.id, int(time.time() // QR_JANELA_S))
+    return {"url": url, "svg": qr_svg(url), "rotativo": bool(a.qr_rotativo),
+            "renova_em_s": qr_renova_em_s() if a.qr_rotativo else None}
 
 
 @app.delete("/api/aulas/{aula_id}")
@@ -2339,16 +2397,18 @@ def aulas_ativas(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
     ativas = [a for a in _aulas_ativas(db)
               if a["curso_id"] in (None, cid) and a["periodo"] in (None, per)]
     ids = [a["id"] for a in ativas]
-    ja = set(db.scalars(select(Presenca.aula_id).where(Presenca.aluno_id == u["id"],
-                                                       Presenca.aula_id.in_(ids)))) if ids else set()
+    reg = {r.aula_id: r for r in db.execute(select(Presenca.aula_id, Presenca.registrado_em, Presenca.saida_em)
+                                            .where(Presenca.aluno_id == u["id"], Presenca.aula_id.in_(ids)))} if ids else {}
     # latitude/longitude vão para o aluno só para o navegador travar o botão fora da zona; quem manda é o servidor,
     # que recalcula a distância no check-in (HTTP 400 fora do raio). O código de validação NUNCA vai aqui.
     return [{"id": a["id"], "titulo": a["titulo"], "professor": a["professor"], "tipo": a["tipo"],
              "local_tipo": a["local_tipo"], "local_descricao": a["local_descricao"], "curso": a["curso"],
              "periodo": a["periodo"], "disciplina": a["disciplina"],
              "latitude": a["latitude"], "longitude": a["longitude"],
-             "raio_metros": a["raio_metros"], "aberta_em": a["aberta_em"],
-             "ja_registrou": a["id"] in ja} for a in ativas]
+             "raio_metros": a["raio_metros"], "aberta_em": a["aberta_em"], "qr_rotativo": a["qr_rotativo"],
+             "exige_saida": a["exige_saida"], "permanencia_min": a["permanencia_min"],
+             "ja_registrou": a["id"] in reg, "entrada_em": iso(reg[a["id"]].registrado_em) if a["id"] in reg else None,
+             "ja_saiu": a["id"] in reg and reg[a["id"]].saida_em is not None} for a in ativas]
 
 
 @app.post("/api/aulas/{aula_id}/presenca")
@@ -2374,6 +2434,9 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
     ja = db.execute(select(Presenca.distancia_m).where(Presenca.aula_id == aula_id, Presenca.aluno_id == u["id"])).first()
     if ja is not None:
         return {"ok": True, "ja_registrado": True, "distancia_m": round(ja.distancia_m or 0, 1), "aula": aula.titulo}
+    if aula.qr_rotativo and not qr_token_valido(aula.id, b.qr):
+        raise HTTPException(403, "Este evento exige ler o QR code do telão, que muda a cada poucos segundos. "
+                                 "Leia o QR de novo e registre logo em seguida.")
 
     # 1) qualidade e coerência da leitura de GPS (barato, sem banco)
     if b.precisao_m is not None and b.precisao_m > PRECISAO_MAX_M:
