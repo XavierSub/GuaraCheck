@@ -90,6 +90,8 @@ def handler(route):
             return js([])
         return js([EVENTO if estado["prof_com_ativa"] else dict(EVENTO, ativa=False, encerrada_em="2026-11-11T15:00:00+00:00"),
                    dict(EVENTO, id=9, ativa=False, titulo="Cálculo II", encerrada_em="2026-11-10T15:00:00+00:00", total=31)])
+    if p == "/api/aulas/11/qr":
+        return js({"url": "http://localhost:8765/?aula=11", "svg": '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 9 9"><rect width="9" height="9" fill="#fff"/><path d="M1 1h3v3h-3z" fill="#000"/></svg>'})
     if p == "/api/aulas/11/presencas":
         return js({"ativa": True, "total": 3, "limite": 2000, "presencas": [pres(1), pres(2), pres(3)]})
     if p == "/api/aulas/11/tentativas":

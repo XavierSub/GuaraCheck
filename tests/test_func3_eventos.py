@@ -144,7 +144,7 @@ def erro_em(r, campo):
 # BLOCO A - Acesso e permissões
 # =====================================================================================================
 ROTAS_EVENTO = {
-    "abrir_aula": "so_professor", "encerrar_aula": "so_professor", "excluir_aula": "so_professor",
+    "abrir_aula": "so_professor", "encerrar_aula": "so_professor", "qr_da_aula": "so_professor", "excluir_aula": "so_professor",
     "excluir_todas_as_aulas": "so_professor", "minhas_aulas": "so_professor", "conferir_comprovante": "so_professor",
     "presencas_da_aula": "so_professor", "tentativas_da_aula": "so_professor", "ausentes_da_aula": "so_professor",
     "exportar_chamada": "so_professor", "aulas_ativas": "so_aluno", "registrar_presenca": "so_aluno",

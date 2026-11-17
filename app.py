@@ -1886,6 +1886,63 @@ def encerrar_aula(aula_id: int, u: dict = Depends(so_professor), db: Session = D
     return aula_dict(a)
 
 
+# ---------------- QR code da chamada ----------------
+# O professor projeta (ou mostra) o QR da chamada aberta; o aluno lê com a câmera e o app abre direto naquela chamada
+# (`/?aula=<id>`). O QR NÃO registra presença sozinho: o aluno ainda precisa estar logado e dentro do raio, e toda a checagem
+# antifraude de registrar_presenca continua valendo. Por isso o QR pode ser fixo (só leva o número da chamada) e repassá-lo
+# a quem está ausente não adianta nada. O desenho é gerado aqui, em SVG, com o reportlab (já usado nos PDFs): o CSP continua sem
+# endereço externo e nenhuma biblioteca nova entra no projeto.
+PUBLIC_URL = os.getenv("PUBLIC_URL", "").strip().rstrip("/")  # endereço público do site; vazio = deduzido da requisição
+_HOST_OK = re.compile(r"^[A-Za-z0-9.\-]{1,253}(:\d{1,5})?$|^\[[0-9A-Fa-f:.]{2,45}\](:\d{1,5})?$")
+
+
+def url_base(request: Request) -> str:
+    """Endereço do site que vai dentro do QR: PUBLIC_URL, ou o que o próprio professor está usando agora."""
+    if PUBLIC_URL.startswith(("http://", "https://")):
+        return PUBLIC_URL
+    esquema = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip().lower()
+    if esquema not in ("http", "https"):
+        esquema = "https"
+    host = (request.headers.get("host") or request.url.netloc or "").strip()
+    if not _HOST_OK.match(host):
+        raise HTTPException(500, "Não foi possível descobrir o endereço do site. Defina PUBLIC_URL.")
+    return f"{esquema}://{host}"
+
+
+def qr_svg(texto: str, borda: int = 4) -> str:
+    """Desenha `texto` como QR code (correção de erro M) e devolve um <svg> pronto para incluir na página."""
+    from reportlab.graphics.barcode import qrencoder
+    qr = qrencoder.QRCode(None, qrencoder.QRErrorCorrectLevel.M)
+    qr.addData(texto)
+    qr.make()
+    n = qr.getModuleCount()
+    tam = n + 2 * borda  # a "zona silenciosa" de 4 módulos em volta é exigida pelo padrão; sem ela alguns leitores falham
+    tracos = []
+    for r in range(n):  # uma linha = uma sequência de quadradinhos escuros colados, para o SVG ficar pequeno
+        c = 0
+        while c < n:
+            if qr.isDark(r, c):
+                ini = c
+                while c < n and qr.isDark(r, c):
+                    c += 1
+                tracos.append(f"M{ini + borda} {r + borda}h{c - ini}v1h-{c - ini}z")
+            else:
+                c += 1
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {tam} {tam}" role="img" '
+            f'aria-label="QR code para registrar presença" shape-rendering="crispEdges">'
+            f'<rect width="{tam}" height="{tam}" fill="#fff"/><path d="{"".join(tracos)}" fill="#000"/></svg>')
+
+
+@app.get("/api/aulas/{aula_id}/qr")
+def qr_da_aula(aula_id: int, request: Request, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
+    """QR code da chamada aberta do próprio professor: devolve o link (`url`) e o desenho (`svg`)."""
+    a = _aula_do_professor(db, aula_id, u["id"])
+    if not aula_aberta(a):
+        raise HTTPException(409, "Esta chamada já foi encerrada.")
+    url = f"{url_base(request)}/?aula={a.id}"
+    return {"url": url, "svg": qr_svg(url)}
+
+
 @app.delete("/api/aulas/{aula_id}")
 def excluir_aula(aula_id: int, request: Request, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
     """Exclui a aula e, em cascata, todas as presenças dela (na mesma transação)."""

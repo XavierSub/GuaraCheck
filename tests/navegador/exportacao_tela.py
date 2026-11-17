@@ -47,6 +47,8 @@ def handler(route):
     # ---- professor ----
     if p == "/api/professor/aulas":
         return js([EVENTO] if "pagina=1" in u or "pagina" not in u else [])
+    if p == "/api/aulas/11/qr":
+        return js({"url": "http://localhost:8765/?aula=11", "svg": '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 9 9"><rect width="9" height="9" fill="#fff"/><path d="M1 1h3v3h-3z" fill="#000"/></svg>'})
     if p == "/api/aulas/11/presencas":
         return js({"ativa": True, "total": 0, "limite": 2000, "presencas": []})
     if p == "/api/aulas/11/tentativas":

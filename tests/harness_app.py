@@ -95,6 +95,8 @@ NOMES = {
     # --- Funcionalidade 10: busca de lugar pelo nome (mapa da sala) ---
     "NOMINATIM_URL", "NOMINATIM_UA", "LUGAR_MIN", "LUGAR_MAX", "LUGAR_POR_MINUTO", "LUGAR_INTERVALO_S", "LUGAR_CACHE_S",
     "LUGAR_CACHE_MAX", "_lugar_cache", "_lugar_lock", "_lugar_ultima", "_lugar_float", "_lugar_buscar", "buscar_lugares",
+    # --- Funcionalidade 11: QR code da chamada (professor mostra, aluno lê) ---
+    "PUBLIC_URL", "_HOST_OK", "url_base", "qr_svg", "qr_da_aula",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
@@ -104,7 +106,7 @@ ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MAS
               "CADASTRO_ALUNO_JANELA_S", "ADMIN_FALHAS_IP", "ADMIN_FALHAS_CONTA", "ADMIN_FALHAS_GERAL_HORA",
               "EMAIL_PROVEDOR", "EMAIL_API_KEY", "EMAIL_REMETENTE", "EMAIL_REMETENTE_NOME", "SMTP_HOST", "SMTP_PORT",
               "SMTP_USUARIO", "SMTP_SENHA", "VERIFICAR_EMAIL", "CODIGO_EMAIL_MIN", "CODIGO_MAX_TENTATIVAS",
-              "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP", "AULA_MAX_HORAS", "NOMINATIM_UA"]
+              "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP", "AULA_MAX_HORAS", "NOMINATIM_UA", "PUBLIC_URL"]
 
 
 def _compilar():
