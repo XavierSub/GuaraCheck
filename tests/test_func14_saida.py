@@ -298,7 +298,7 @@ def abrir(c, **over):
         b = c.ns["AulaIn"](**corpo_aula(**over))
     except ValidationError as e:
         return 422, e
-    return status_de(c.ns["abrir_aula"], b, c.eu(), c.db)
+    return status_de(c.ns["abrir_aula"], b, FakeReq(), FakeTarefas(), c.eu(), c.db)
 
 
 def test_ct1632_abre_com_saida_minimo_e_carga_horaria(sd):

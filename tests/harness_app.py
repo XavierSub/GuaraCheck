@@ -106,6 +106,8 @@ NOMES = {
     # --- Funcionalidade 16: estatísticas da coordenação ---
     "LIMITE_ESTATISTICAS", "ESTATISTICAS_DIAS_PADRAO", "ESTATISTICAS_DIAS_MAX", "_periodo_estatisticas", "_dados_estatisticas",
     "adm_estatisticas", "XLSX_MIME", "adm_estatisticas_xlsx",
+    # --- Funcionalidade 17: aviso por e-mail quando a chamada abre ---
+    "_condicoes_do_aviso", "_planejar_aviso", "_limpo", "_texto_do_aviso", "_enviar_aviso", "AvisosIn", "meus_avisos",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
@@ -115,7 +117,8 @@ ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MAS
               "CADASTRO_ALUNO_JANELA_S", "ADMIN_FALHAS_IP", "ADMIN_FALHAS_CONTA", "ADMIN_FALHAS_GERAL_HORA",
               "EMAIL_PROVEDOR", "EMAIL_API_KEY", "EMAIL_REMETENTE", "EMAIL_REMETENTE_NOME", "SMTP_HOST", "SMTP_PORT",
               "SMTP_USUARIO", "SMTP_SENHA", "VERIFICAR_EMAIL", "CODIGO_EMAIL_MIN", "CODIGO_MAX_TENTATIVAS",
-              "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP", "AULA_MAX_HORAS", "NOMINATIM_UA", "PUBLIC_URL", "QR_JANELA_S", "QR_JANELAS_ACEITAS"]
+              "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP", "AULA_MAX_HORAS", "NOMINATIM_UA", "PUBLIC_URL", "QR_JANELA_S", "QR_JANELAS_ACEITAS",
+              "AVISO_EMAIL_MAX", "AVISO_EMAIL_HORA", "AVISO_EMAIL_PAUSA_S"]
 
 
 def _compilar():
@@ -160,6 +163,21 @@ class HTTPException(Exception):
 
 class IntegrityError(Exception):
     pass
+
+
+class FakeTarefas:
+    """BackgroundTasks de mentira: guarda as tarefas e só roda quando o teste manda (o FastAPI roda DEPOIS da resposta)."""
+
+    def __init__(self):
+        self.fila = []
+
+    def add_task(self, fn, *a, **k):
+        self.fila.append((fn, a, k))
+
+    def rodar(self):
+        fila, self.fila = self.fila, []
+        for fn, a, k in fila:
+            fn(*a, **k)
 
 
 class FakeReq:
@@ -338,8 +356,8 @@ class Modelo:
 
 
 class Aluno(Modelo):
-    id, nome, email, matricula, curso_id, periodo, status, senha_hash = (Col() for _ in range(8))
-    _padroes, _unicos = {"status": "ativo"}, ("email", "matricula")      # UNIQUE(matricula): NULL pode repetir
+    id, nome, email, matricula, curso_id, periodo, status, senha_hash, avisos_email = (Col() for _ in range(9))
+    _padroes, _unicos = {"status": "ativo", "avisos_email": True}, ("email", "matricula")      # UNIQUE(matricula): NULL pode repetir
 
 
 class Professor(Modelo):
@@ -738,7 +756,7 @@ def novo_ns(**env):
             datetime=datetime, timedelta=timedelta, timezone=timezone, Path=Path, Dict=Dict, List=List,
             Literal=Literal, Optional=Optional, BaseModel=BaseModel, Field=Field,
             load_dotenv=lambda *a, **k: None, print=lambda *a, **k: None, HTTPException=HTTPException,
-            IntegrityError=IntegrityError, Request=FakeReq, Session=object, Header=lambda *a, **k: None,
+            IntegrityError=IntegrityError, Request=FakeReq, BackgroundTasks=FakeTarefas, Session=object, Header=lambda *a, **k: None,
             Depends=lambda *a, **k: None, get_db=lambda: None, select=lambda *a: Select(*a), func=_FuncNS(),
             update=lambda m: UpdateStmt(m), delete=lambda m: DeleteStmt(m), or_=lambda *c: Or(c),
             Response=lambda content=None, media_type=None, headers=None, status_code=200: types.SimpleNamespace(

@@ -59,7 +59,7 @@ class CtxEv(Ctx):
         b = self.corpo(**over)
         if isinstance(b, ValidationError):
             return 422, b
-        return status_de(self.ns["abrir_aula"], b, self.eu(p), self.db)
+        return status_de(self.ns["abrir_aula"], b, FakeReq(), FakeTarefas(), self.eu(p), self.db)
 
     def encerrar(self, aula_id, p=None):
         return status_de(self.ns["encerrar_aula"], aula_id, self.eu(p), self.db)
@@ -264,7 +264,7 @@ def test_ct316_tipo_e_local_tipo(ev):
         assert erro_em(ev.abrir(tipo=t), "tipo"), t
     for lt in ("campus", "", "DENTRO", None):
         assert erro_em(ev.abrir(local_tipo=lt), "local_tipo"), lt
-    r = status_de(ev.ns["abrir_aula"], ev.ns["AulaIn"](titulo="Padrão", latitude=LAT, longitude=LON, raio_metros=50), ev.eu(), ev.db)
+    r = status_de(ev.ns["abrir_aula"], ev.ns["AulaIn"](titulo="Padrão", latitude=LAT, longitude=LON, raio_metros=50), FakeReq(), FakeTarefas(), ev.eu(), ev.db)
     assert (r[1]["tipo"], r[1]["local_tipo"]) == ("aula", "dentro")
 
 
@@ -315,7 +315,7 @@ def test_ct320_curso_inexistente_ou_inativo_e_recusado_sem_fechar_a_chamada(ev):
 def test_ct321_corpo_com_campos_a_mais_nao_muda_dono_nem_estado(ev):
     b = ev.ns["AulaIn"](**dict(titulo="Algoritmos", latitude=LAT, longitude=LON, raio_metros=50, professor_id=ev.ana.id,
                                ativa=False, id=77, encerrada_em="2020-01-01"))
-    r = status_de(ev.ns["abrir_aula"], b, ev.eu(ev.prof), ev.db)
+    r = status_de(ev.ns["abrir_aula"], b, FakeReq(), FakeTarefas(), ev.eu(ev.prof), ev.db)
     assert cod(r) == 200 and r[1]["ativa"] is True and r[1]["id"] != 77
     a = ev.aulas_do_banco()[0]
     assert a.professor_id == ev.prof.id and a.ativa is True and a.encerrada_em is None
@@ -349,7 +349,7 @@ def test_ct333_duplo_envio_simultaneo_nao_pode_deixar_duas_chamadas_ativas(ev):
     resposta = {}
 
     def outra():
-        resposta["r"] = status_de(ev.ns["abrir_aula"], ev.corpo(titulo="Toque duplo"), ev.eu(), segunda_requisicao)
+        resposta["r"] = status_de(ev.ns["abrir_aula"], ev.corpo(titulo="Toque duplo"), FakeReq(), FakeTarefas(), ev.eu(), segunda_requisicao)
     ev.db.antes_do_commit = outra                            # ela comita no meio da primeira
     r1 = ev.abrir(titulo="Toque duplo")
     r2 = resposta["r"]

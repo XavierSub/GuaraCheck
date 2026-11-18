@@ -29,7 +29,7 @@ from typing import Dict, List, Literal, Optional
 
 import jwt
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import (Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text,
@@ -141,6 +141,15 @@ CODIGO_INTERVALO_S = int(os.getenv("CODIGO_INTERVALO_S", "30"))           # espe
 CODIGO_ENVIOS_HORA = int(os.getenv("CODIGO_ENVIOS_HORA", "5"))            # envios por e-mail por hora
 CONFIRMA_FALHAS_IP = int(os.getenv("CONFIRMA_FALHAS_IP", "40"))           # códigos errados por IP em 10 min
 
+# Aviso por e-mail quando o professor abre a chamada (opcional, marcado em cada evento). Usa a MESMA cota do provedor do código de
+# confirmação (Brevo grátis: 300 e-mails/dia), então tem teto: público maior que AVISO_EMAIL_MAX não recebe aviso nenhum (a chamada abre
+# normalmente e o professor é avisado do motivo), em vez de mandar só para uma parte escolhida ao acaso.
+AVISO_EMAIL_MAX = int(os.getenv("AVISO_EMAIL_MAX", "200"))                # destinatários por aviso
+AVISO_EMAIL_HORA = int(os.getenv("AVISO_EMAIL_HORA", "3"))                # avisos por professor por hora
+AVISO_EMAIL_PAUSA_S = float(os.getenv("AVISO_EMAIL_PAUSA_S", "0.1"))      # pausa entre dois envios (não estoura o limite de taxa do provedor)
+AVISO_EMAIL_FALHAS_SEGUIDAS = 5                                           # falhas em sequência: o provedor caiu ou a cota acabou; para
+AVISO_EMAIL_CONFERE_A_CADA = 10                                           # de quantos em quantos envios confere se a chamada ainda está aberta
+
 CURSOS_PADRAO = ["Administração", "Ciências Contábeis", "Direito", "Educação Física", "Enfermagem",
                  "Engenharia Civil", "Engenharia de Software", "Fisioterapia", "Gestão da TI",
                  "Medicina", "Pedagogia", "Psicologia"]  # ajuste com CURSOS_EXTRAS="Curso A,Curso B"
@@ -206,6 +215,7 @@ class Aluno(Base):
     curso_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cursos.id"), nullable=True, index=True)
     periodo: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)                 # 1 a 10
     status: Mapped[Optional[str]] = mapped_column(String(10), default="ativo")             # ativo | inativo (interno)
+    avisos_email: Mapped[Optional[bool]] = mapped_column(Boolean, default=True)            # recebe o aviso quando abre chamada do seu curso/período
     senha_hash: Mapped[str] = mapped_column(String(200))
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     # uma matrícula, uma conta: a trava é do banco (à prova de dois cadastros ao mesmo tempo); NULL das contas da V1 pode repetir
@@ -392,7 +402,7 @@ def migrar_esquema():
     novas = {
         "cursos": [("departamento", "VARCHAR(100)")],
         "alunos": [("curso_id", "INTEGER REFERENCES cursos (id)"), ("periodo", "INTEGER"),
-                   ("status", "VARCHAR(10) DEFAULT 'ativo'")],
+                   ("status", "VARCHAR(10) DEFAULT 'ativo'"), ("avisos_email", "BOOLEAN DEFAULT TRUE")],
         "professores": [("ativo", "BOOLEAN DEFAULT TRUE"), ("coordenacao", "BOOLEAN DEFAULT FALSE"),
                         ("aprovado", "BOOLEAN DEFAULT TRUE"),  # professores que já existem continuam autorizados
                         ("registro_funcional", "VARCHAR(30)"),
@@ -920,6 +930,11 @@ class AulaIn(BaseModel):
     exige_saida: bool = False                                     # o aluno registra entrada e saída
     permanencia_min: Optional[int] = Field(None, ge=1, le=1440)   # minutos mínimos entre a entrada e a saída (precisa de exige_saida)
     carga_horas: Optional[float] = Field(None, gt=0, le=200, allow_inf_nan=False)  # carga horária do certificado (horas)
+    avisar_email: bool = False                                    # avisa por e-mail os alunos do curso/período (só se aceitaram receber)
+
+
+class AvisosIn(BaseModel):
+    receber: bool
 
 
 class PresencaIn(BaseModel):
@@ -1974,8 +1989,102 @@ def buscar_lugares(q: str = "", u: dict = Depends(so_professor)):
     return {"resultados": resultados}
 
 
+# ---------------- Aviso por e-mail ao abrir a chamada ----------------
+# Opcional (o professor marca em cada evento) e NUNCA atrapalha a abertura: a chamada abre primeiro; o aviso é planejado em seguida e,
+# se não puder sair (e-mail sem configuração, público grande demais, limite por hora), a resposta diz o motivo. O envio roda DEPOIS da
+# resposta (BackgroundTasks), com sessão própria, um e-mail por aluno (ninguém vê o endereço dos outros) e para sozinho se a chamada
+# for encerrada no meio ou se o provedor passar a recusar os envios. Só recebe quem é do curso e do período do evento e não desligou
+# os avisos na própria tela. Nada do conteúdo dos e-mails (endereços, nomes) vai para o log: só as contagens.
+def _condicoes_do_aviso(curso_id: Optional[int], periodo: Optional[int]) -> list:
+    cond = [or_(Aluno.status.is_(None), Aluno.status != "inativo"),
+            or_(Aluno.avisos_email.is_(None), Aluno.avisos_email.is_(True))]
+    if curso_id is not None:
+        cond.append(Aluno.curso_id == curso_id)
+    if periodo is not None:
+        cond.append(Aluno.periodo == periodo)
+    return cond
+
+
+def _planejar_aviso(db: Session, prof_id: int, a: Aula, request: Request) -> tuple:
+    """(resultado, link): `resultado` vai na resposta de abrir_aula; `link` só existe quando o aviso vai sair."""
+    def nao(motivo: str, n: int = 0):
+        return {"enviado": False, "destinatarios": n, "motivo": motivo}, None
+    if not email_configurado():
+        return nao("O envio de e-mail ainda não foi configurado no servidor, então a chamada abriu sem aviso. Procure a coordenação.")
+    n = _contar(db, Aluno, *_condicoes_do_aviso(a.curso_id, a.periodo))
+    if n == 0:
+        return nao("Nenhum aluno deste curso e período recebe avisos por e-mail, então a chamada abriu sem aviso.")
+    if n > AVISO_EMAIL_MAX:
+        return nao(f"Este público tem {n} alunos e o limite é de {AVISO_EMAIL_MAX} avisos por evento, então a chamada abriu sem aviso. "
+                   f"Escolha um curso ou um período para reduzir o público.", n)
+    try:
+        link = f"{url_base(request)}/?aula={a.id}"
+    except HTTPException:
+        return nao("Não foi possível descobrir o endereço do site para o link do aviso (defina PUBLIC_URL). A chamada abriu sem aviso.", n)
+    try:
+        limitar_tentativas(f"aviso:{prof_id}", AVISO_EMAIL_HORA, 3600)
+    except HTTPException:
+        return nao(f"Você já pediu {AVISO_EMAIL_HORA} avisos na última hora, então a chamada abriu sem aviso. Tente de novo mais tarde.", n)
+    return {"enviado": True, "destinatarios": n, "motivo": None}, link
+
+
+def _limpo(texto: Optional[str], limite: int = 140) -> str:
+    """Uma linha só, sem quebras nem controles: vale para assunto e corpo (nada que o professor digitou vira cabeçalho de e-mail)."""
+    return "".join(c for c in " ".join(str(texto or "").split()) if c.isprintable())[:limite]
+
+
+def _texto_do_aviso(aluno_nome: str, prof: str, titulo: str, disciplina: str, local: str, link: str) -> str:
+    primeiro = _limpo(aluno_nome, 60).split(" ")[0] or "aluno"
+    nome_evento = titulo + (f" ({disciplina})" if disciplina and disciplina.casefold() != titulo.casefold() else "")
+    return (f"Olá, {primeiro}!\n\n{prof} abriu a chamada de presença: {nome_evento}.\n"
+            + (f"Local: {local}\n" if local else "")
+            + f"\nPara registrar, abra o Guará Check no seu celular, no local do evento:\n{link}\n\n"
+            f"A presença só é registrada dentro da área do evento e enquanto a chamada estiver aberta.\n\n"
+            f"Você recebe este aviso porque tem conta no Guará Check e é do curso e do período deste evento. Para não receber mais, "
+            f"desmarque \"Avisos por e-mail\" na sua tela de aluno.\n\nGuará Check · UniCerrado")
+
+
+def _enviar_aviso(aula_id: int, link: str) -> None:
+    """Roda depois da resposta, em outra thread. Qualquer erro é contido aqui: não existe requisição para recebê-lo."""
+    enviados = falhas = seguidas = 0
+    parou = ""
+    try:
+        with SessionLocal() as db:
+            a = db.get(Aula, aula_id)
+            if not a or not a.ativa:
+                return
+            prof = db.get(Professor, a.professor_id)
+            quem = _limpo(prof.nome if prof else "", 80) or "Seu professor"
+            titulo, disc, local = _limpo(a.titulo), _limpo(a.disciplina), _limpo(a.local_descricao, 160)
+            assunto = f"Chamada aberta: {titulo}"[:150]
+            alunos = db.execute(select(Aluno.nome, Aluno.email).where(*_condicoes_do_aviso(a.curso_id, a.periodo))
+                                .order_by(Aluno.id).limit(AVISO_EMAIL_MAX + 1)).all()
+            if len(alunos) > AVISO_EMAIL_MAX:  # o público cresceu entre o pedido e o envio: não manda para parte dele
+                alunos, parou = [], "público acima do limite"
+            for i, al in enumerate(alunos):
+                if i and i % AVISO_EMAIL_CONFERE_A_CADA == 0 and not db.scalar(select(Aula.ativa).where(Aula.id == aula_id)):
+                    parou = "chamada encerrada"
+                    break
+                try:
+                    enviar_email(al.email, assunto, _texto_do_aviso(al.nome, quem, titulo, disc, local, link))
+                    enviados, seguidas = enviados + 1, 0
+                except Exception as exc:  # não imprime o endereço
+                    falhas, seguidas = falhas + 1, seguidas + 1
+                    print("Falha ao enviar o aviso de chamada:", type(exc).__name__)
+                    if seguidas >= AVISO_EMAIL_FALHAS_SEGUIDAS:
+                        parou = "provedor recusando os envios"
+                        break
+                if AVISO_EMAIL_PAUSA_S:
+                    time.sleep(AVISO_EMAIL_PAUSA_S)
+            log_seg(db, a.professor_id, "aviso_email",
+                    f"aula={aula_id}; enviados={enviados}; falhas={falhas}" + (f"; parou={parou}" if parou else ""), commit=True)
+    except Exception as exc:
+        print("Falha no aviso por e-mail:", type(exc).__name__)
+
+
 @app.post("/api/aulas")
-def abrir_aula(b: AulaIn, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
+def abrir_aula(b: AulaIn, request: Request, tarefas: BackgroundTasks, u: dict = Depends(so_professor),
+               db: Session = Depends(get_db)):
     titulo = re.sub(r"\s+", " ", b.titulo).strip()  # o Pydantic conta os espaços: '   ' passava e abria evento sem nome
     if len(titulo) < 2:
         raise HTTPException(422, "Informe o nome do evento (mínimo 2 letras ou números).")
@@ -2006,7 +2115,17 @@ def abrir_aula(b: AulaIn, u: dict = Depends(so_professor), db: Session = Depends
         _cache_ativas["t"] = 0
         raise HTTPException(409, "A chamada já foi aberta por outro envio. Atualize a tela e confira o histórico.")
     _cache_ativas["t"] = 0
-    return aula_dict(a, 0, curso.nome if curso else None, com_codigo=True)
+    resposta = aula_dict(a, 0, curso.nome if curso else None, com_codigo=True)
+    if b.avisar_email:
+        try:  # a chamada já abriu: um erro ao preparar o aviso não pode virar erro na tela do professor
+            resposta["aviso"], link = _planejar_aviso(db, u["id"], a, request)
+        except Exception as exc:
+            print("Falha ao preparar o aviso por e-mail:", type(exc).__name__)
+            resposta["aviso"], link = {"enviado": False, "destinatarios": 0,
+                                       "motivo": "Não foi possível preparar o aviso agora, então a chamada abriu sem aviso."}, None
+        if link:
+            tarefas.add_task(_enviar_aviso, a.id, link)
+    return resposta
 
 
 @app.post("/api/aulas/{aula_id}/encerrar")
@@ -2442,11 +2561,23 @@ def registrar_tentativa(db: Session, aula_id: int, aluno_id: int, motivo: str, d
 @app.get("/api/me")
 def meu_perfil(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
     """Dados do aluno para o comprovante (sem CPF: o sistema não coleta esse dado)."""
-    r = db.execute(select(Aluno.nome, Aluno.matricula, Aluno.email, Aluno.periodo, Curso.nome.label("curso"))
+    r = db.execute(select(Aluno.nome, Aluno.matricula, Aluno.email, Aluno.periodo, Aluno.avisos_email, Curso.nome.label("curso"))
                    .outerjoin(Curso, Curso.id == Aluno.curso_id).where(Aluno.id == u["id"])).first()
     if not r:
         raise HTTPException(404, "Aluno não encontrado.")
-    return {"nome": r.nome, "matricula": r.matricula, "email": r.email, "curso": r.curso, "periodo": r.periodo}
+    return {"nome": r.nome, "matricula": r.matricula, "email": r.email, "curso": r.curso, "periodo": r.periodo,
+            "avisos_email": r.avisos_email is not False}
+
+
+@app.put("/api/me/avisos")
+def meus_avisos(b: AvisosIn, u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """O aluno liga ou desliga o aviso por e-mail de chamada aberta (vale para todos os eventos; o aviso é opcional por evento)."""
+    al = db.get(Aluno, u["id"])
+    if not al:
+        raise HTTPException(404, "Aluno não encontrado.")
+    al.avisos_email = b.receber
+    db.commit()
+    return {"avisos_email": b.receber}
 
 
 @app.get("/api/aluno/presencas")

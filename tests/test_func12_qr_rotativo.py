@@ -191,12 +191,12 @@ def corpo_aula(**over):
 def test_ct1421_professor_abre_o_evento_com_qr_rotativo(rt):
     rt.aula.ativa = False
     eu = {"id": rt.prof.id, "role": "professor"}
-    st, r = status_de(rt.ns["abrir_aula"], rt.ns["AulaIn"](**corpo_aula(qr_rotativo=True)), eu, rt.db)
+    st, r = status_de(rt.ns["abrir_aula"], rt.ns["AulaIn"](**corpo_aula(qr_rotativo=True)), FakeReq(), FakeTarefas(), eu, rt.db)
     assert st == 200 and r["qr_rotativo"] is True and r["exige_saida"] is False
     assert rt.db.get(Aula, r["id"]).qr_rotativo is True
 
 
 def test_ct1422_por_padrao_o_evento_nao_e_rotativo(rt):
     rt.aula.ativa = False
-    st, r = status_de(rt.ns["abrir_aula"], rt.ns["AulaIn"](**corpo_aula()), {"id": rt.prof.id, "role": "professor"}, rt.db)
+    st, r = status_de(rt.ns["abrir_aula"], rt.ns["AulaIn"](**corpo_aula()), FakeReq(), FakeTarefas(), {"id": rt.prof.id, "role": "professor"}, rt.db)
     assert st == 200 and r["qr_rotativo"] is False and r["permanencia_min"] is None and r["carga_horas"] is None
