@@ -144,6 +144,13 @@ CODIGO_INTERVALO_S = int(os.getenv("CODIGO_INTERVALO_S", "30"))           # espe
 CODIGO_ENVIOS_HORA = int(os.getenv("CODIGO_ENVIOS_HORA", "5"))            # envios por e-mail por hora
 CONFIRMA_FALHAS_IP = int(os.getenv("CONFIRMA_FALHAS_IP", "40"))           # códigos errados por IP em 10 min
 
+# Certificado de participação (PDF e conferência pública do código). Fica BLOQUEADO até a faculdade liberar o modelo oficial: com
+# CERTIFICADO_ATIVO desligado (padrão) o aluno vê "Certificado: em breve", o PDF não sai e a conferência pública diz que ainda não está
+# liberada. Nada é apagado: a carga horária dos eventos continua guardada. Para liberar depois, defina CERTIFICADO_ATIVO=1 na Render
+# (ou no ambiente do Docker) e reinicie.
+CERTIFICADO_ATIVO = os.getenv("CERTIFICADO_ATIVO", "0").strip().lower() in ("1", "true", "sim", "on")
+MSG_CERTIFICADO_BLOQUEADO = "O certificado de participação ainda não está liberado. Em breve ele ficará disponível aqui no Guará Check."
+
 # Aviso por e-mail quando o professor abre a chamada (opcional, marcado em cada evento). Usa a MESMA cota do provedor do código de
 # confirmação (Brevo grátis: 300 e-mails/dia), então tem teto: público maior que AVISO_EMAIL_MAX não recebe aviso nenhum (a chamada abre
 # normalmente e o professor é avisado do motivo), em vez de mandar só para uma parte escolhida ao acaso.
@@ -1652,7 +1659,7 @@ def config(db: Session = Depends(get_db)):
     sem_coordenacao = not ADMIN_EMAILS and not _contar(db, Professor, Professor.coordenacao.is_(True))
     return {"dominio_aluno": DOMINIO_ALUNOS, "dominios_professor": DOMINIOS_PROFESSORES,
             "matricula_regex": MATRICULA_RE.pattern, "coordenacao_aberta": bool(sem_coordenacao),
-            "verificacao_email": verificacao_email_ativa()}
+            "verificacao_email": verificacao_email_ativa(), "certificado_ativo": CERTIFICADO_ATIVO}
 
 
 @app.get("/api/cursos")
@@ -3224,7 +3231,9 @@ def comprovante_pdf(presenca_id: int, u: dict = Depends(so_aluno), db: Session =
 @app.get("/api/aluno/presencas/{presenca_id}/certificado")
 def certificado_pdf(presenca_id: int, u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
     """Certificado de participação do próprio aluno. Só sai se o professor informou a carga horária e, quando o evento
-    exige saída, se a saída foi registrada com a permanência mínima."""
+    exige saída, se a saída foi registrada com a permanência mínima. Bloqueado enquanto CERTIFICADO_ATIVO estiver desligado."""
+    if not CERTIFICADO_ATIVO:
+        raise HTTPException(403, MSG_CERTIFICADO_BLOQUEADO)
     limitar_tentativas("cert:" + str(u["id"]), 30, 600)
     row = db.execute(
         select(Presenca, Aula, Professor.nome, Aluno.nome, Aluno.matricula, Curso.nome)
@@ -3256,7 +3265,9 @@ def certificado_pdf(presenca_id: int, u: dict = Depends(so_aluno), db: Session =
 def validar_certificado(codigo: str, request: Request, db: Session = Depends(get_db)):
     """Conferência PÚBLICA do certificado (sem login, para quem recebeu o PDF). Só diz se o código é verdadeiro e devolve o
     mínimo para conferir o documento: nome, evento, data e carga horária. Sem matrícula, e-mail ou outro dado pessoal.
-    O código tem 48 bits e as consultas são limitadas por IP, o que inviabiliza adivinhar."""
+    O código tem 48 bits e as consultas são limitadas por IP, o que inviabiliza adivinhar. Bloqueada com o certificado."""
+    if not CERTIFICADO_ATIVO:
+        raise HTTPException(403, MSG_CERTIFICADO_BLOQUEADO)
     limitar_tentativas("certv:" + ip_cliente(request), 30, 600)
     m = re.fullmatch(r"\s*C(\d{1,12})-([0-9A-Fa-f]{12})\s*", codigo or "")
     if not m:
@@ -3763,7 +3774,7 @@ def adm_resumo(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
             "matriculas_autorizadas": _contar(db, MatriculasAutorizadas),
             "matriculas_utilizadas": _contar(db, MatriculasAutorizadas, MatriculasAutorizadas.utilizada.is_(True)),
             "matricula_obrigatoria": MATRICULA_OBRIGATORIA,
-            "verificacao_email": verificacao_email_ativa(), "email_configurado": email_configurado(),
+            "verificacao_email": verificacao_email_ativa(), "email_configurado": email_configurado(), "certificado_ativo": CERTIFICADO_ATIVO,
             "pedidos_senha_pendentes": sum(1 for p in _pedidos_senha(db) if not p["atendido"]),
             "por_curso": [{"curso": n, "alunos": c} for n, c in por_curso]}
 

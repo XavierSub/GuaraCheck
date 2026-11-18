@@ -488,6 +488,7 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
     <details class="cola" id="cert-box">
       <summary>Validar um certificado</summary>
       <p class="mut">Recebeu um certificado do Guará Check? Digite o código que aparece no PDF (ex.: C1042-9F3A7C21B4AA). Não precisa de login.</p>
+      <p class="msg" id="cert-bloq" hidden><b>Em breve:</b> a conferência de certificados ainda não está liberada.</p>
       <div class="row"><input id="cert-cod" maxlength="40" autocomplete="off" placeholder="Código do certificado" aria-label="Código do certificado"><button class="btn alt" id="cert-ok" type="button">Validar</button></div>
       <div class="msg" id="cert-res" hidden></div>
     </details>
@@ -597,6 +598,7 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
         <label class="ck"><input type="checkbox" id="avisar-email"><span>Avisar os alunos por e-mail: manda um aviso aos alunos ativos do curso e do período escolhidos acima (sem curso/período, a todos). Quem desligou os avisos não recebe. Só vale se o servidor tiver e-mail configurado e o público couber no limite.</span></label>
         <div class="grid2">
           <label>Carga horária do certificado (horas)<input id="carga-h" inputmode="decimal" placeholder="Ex.: 2 ou 1,5 (vazio = o evento não emite certificado)"></label>
+          <p class="mut" id="carga-bloq" hidden>O certificado está bloqueado por enquanto. A carga horária fica guardada e vale quando ele for liberado.</p>
         </div>
       </fieldset>
       <div class="grid">
@@ -1015,6 +1017,12 @@ function sair(aviso){
 $('#btn-sair').onclick = () => sair();
 /* Validar certificado: conferência pública (sem login) do código que está no PDF. O servidor só devolve nome, evento, data e carga horária. */
 const horasTxt = h => `${String(h).replace('.', ',')} ${h <= 1 ? 'hora' : 'horas'}`;
+/* Certificado bloqueado até a coordenação liberar (CERTIFICADO_ATIVO no servidor, vem em /api/config). Sem resposta do /config, fica bloqueado. */
+const certAtivo = () => !!(S.cfg && S.cfg.certificado_ativo === true);
+function certBloqueioAplicar(){
+  const ok = certAtivo();
+  $('#cert-bloq').hidden = ok; $('#cert-ok').disabled = !ok; $('#cert-cod').disabled = !ok; $('#carga-bloq').hidden = ok;
+}
 $('#cert-ok').onclick = async () => {
   const r = $('#cert-res'), v = $('#cert-cod').value.trim(), b = $('#cert-ok'); msg(r, '');
   if (!v) return msg(r, 'Digite o código que aparece no certificado.', 'err');
@@ -1249,7 +1257,7 @@ function renderComprovantes(destacar){
       <h3>✓ ${p.manual ? 'Presença lançada pelo professor' : 'Presença registrada'} · Protocolo nº ${p.id}</h3>
       <p>${p.manual ? `A presença do aluno ${quem(p)}, em ${evento(p)}, foi lançada pelo(a) prof. ${esc(p.professor)} em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.`
         : `O aluno ${quem(p)}, registrou presença em ${evento(p)}, com o(a) prof. ${esc(p.professor)}, em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.`}</p>${saidaComp(p)}${p.carga_horas && p.situacao !== 'Presente' ? '<p class="mut">O certificado deste evento só é liberado com a saída registrada e a permanência mínima.</p>' : ''}
-      <div class="acoes"><button class="btn" type="button" data-m="${i}">Mostrar ao professor</button><button class="btn alt" type="button" data-pdf="${p.id}">Baixar PDF</button>${p.carga_horas && p.situacao === 'Presente' ? `<button class="btn alt" type="button" data-cert="${p.id}">Certificado (PDF)</button>` : ''}<button class="btn alt" type="button" data-nota="${p.id}">Anotar</button></div>
+      <div class="acoes"><button class="btn" type="button" data-m="${i}">Mostrar ao professor</button><button class="btn alt" type="button" data-pdf="${p.id}">Baixar PDF</button>${p.carga_horas && p.situacao === 'Presente' ? (certAtivo() ? `<button class="btn alt" type="button" data-cert="${p.id}">Certificado (PDF)</button>` : '<span class="chip cinza" data-cert-breve>Certificado: em breve</span>') : ''}<button class="btn alt" type="button" data-nota="${p.id}">Anotar</button></div>
     </article>`).join('') : '<div class="card vazio mut">Você ainda não registrou nenhuma presença.</div>')
     + (S.compMais ? '<button class="btn alt" type="button" id="comp-mais">Ver comprovantes mais antigos</button>' : '');
   montarSelectNotas();
@@ -1953,9 +1961,10 @@ const ADM_ABAS = {
     const pend = r.pedidos_senha_pendentes ? `<div class="msg err">${r.pedidos_senha_pendentes} pedido(s) de nova senha aguardando. Abra a aba Pedidos de senha.</div>` : '';
     const aut = r.professores_pendentes ? `<div class="msg err">${r.professores_pendentes} cadastro(s) de professor aguardando a sua autorização. Abra a aba Professores.</div>` : '';
     const ver = !r.verificacao_email ? '<div class="msg">A confirmação do e-mail por código está DESLIGADA: hoje qualquer pessoa pode se cadastrar com o e-mail de outra. Para ligar, crie uma conta gratuita no Brevo, verifique um remetente e defina na Render: EMAIL_PROVEDOR=brevo, EMAIL_API_KEY e EMAIL_REMETENTE.</div>' : '';
+    const cert = r.certificado_ativo ? '' : '<div class="msg">O certificado de participação está BLOQUEADO por enquanto: o aluno vê "Certificado: em breve" e o PDF não é emitido. Para liberar quando o modelo da faculdade estiver pronto, defina CERTIFICADO_ATIVO=1 na Render e reinicie.</div>';
     const prov = r.senha_provisoria ? '<div class="msg err">Você entrou com a senha PROVISÓRIA. Troque agora, logo abaixo: enquanto ela não for trocada, qualquer pessoa que a conheça entra como coordenação.</div>' : '';
     const cardSenha = `<h3 style="margin-top:16px">Trocar minha senha</h3><div class="row"><input id="ms-atual" type="password" autocomplete="current-password" placeholder="Senha atual"><input id="ms-nova" type="password" autocomplete="new-password" placeholder="Nova senha (mín. 8)"><input id="ms-nova2" type="password" autocomplete="new-password" placeholder="Repita a nova senha"><button class="btn" data-act="minha-senha">Trocar senha</button></div>`;
-    return prov + (r.senha_provisoria ? cardSenha : '') + ver + aviso + aut + pend + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aguardando autorização',r.professores_pendentes || 0],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
+    return prov + (r.senha_provisoria ? cardSenha : '') + ver + cert + aviso + aut + pend + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aguardando autorização',r.professores_pendentes || 0],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
       <h3 style="margin-top:16px">Alunos por curso</h3>` + tb(['Curso','Alunos'], r.por_curso.map(c => `<tr><td>${esc(c.curso)}</td><td>${c.alunos}</td></tr>`)) +
       `<h3 style="margin-top:16px">Envio de e-mail</h3><p class="mut">Manda um e-mail de teste para conferir se o código de confirmação e o aviso de chamada saem. Se falhar, a mensagem diz o motivo (chave, remetente, IP bloqueado no Brevo...).</p><div class="row"><input id="em-teste" type="email" autocomplete="email" aria-label="E-mail que vai receber o teste" placeholder="E-mail que vai receber o teste" value="${esc((S.user && S.user.email) || '')}"><button class="btn alt" data-act="email-teste">Enviar e-mail de teste</button></div>` +
       `<h3 style="margin-top:16px">Proteção contra VPN</h3><p class="mut">Confere se o servidor enxerga o seu IP corretamente e se a verificação de VPN está ativa.</p><button class="btn alt" data-act="vpn-test">Testar proteção contra VPN</button>` + (r.senha_provisoria ? '' : cardSenha);
@@ -2220,6 +2229,7 @@ $('#adm-corpo').onchange = async e => {
 /* ---------------- Início ---------------- */
 (async () => {
   try { S.cfg = await (await fetch('/api/config')).json(); } catch {}
+  certBloqueioAplicar();
   try {
     S.cursos = await (await fetch('/api/cursos')).json();
     const opcoes = S.cursos.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('');

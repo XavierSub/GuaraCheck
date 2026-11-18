@@ -40,3 +40,6 @@ services:
         sync: false
       - key: PUBLIC_URL
         sync: false
+      # Certificado de participação: bloqueado enquanto esta variável não for 1. Libere quando o modelo da faculdade estiver pronto.
+      - key: CERTIFICADO_ATIVO
+        sync: false

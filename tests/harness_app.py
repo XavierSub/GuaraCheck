@@ -104,7 +104,7 @@ NOMES = {
     "_permanencia_min", "PresencaManualIn", "lancar_presenca_manual", "desfazer_presenca_manual",
     "_fmt_duracao", "_status_presenca", "registrar_saida",
     # --- Funcionalidade 15: certificado de participação ---
-    "PDF_VERSAO", "_pdf_arquivo_imagem", "_pdf_imagem_altura", "assinatura_certificado", "_horas_texto", "_certificado_liberado", "gerar_pdf_certificado", "certificado_pdf", "validar_certificado",
+    "config", "PDF_VERSAO", "_pdf_arquivo_imagem", "_pdf_imagem_altura", "assinatura_certificado", "_horas_texto", "_certificado_liberado", "gerar_pdf_certificado", "certificado_pdf", "validar_certificado",
     # --- Funcionalidade 16: estatísticas da coordenação ---
     "LIMITE_ESTATISTICAS", "ESTATISTICAS_DIAS_PADRAO", "ESTATISTICAS_DIAS_MAX", "_periodo_estatisticas", "_dados_estatisticas",
     "adm_estatisticas", "XLSX_MIME", "adm_estatisticas_xlsx",
@@ -121,7 +121,7 @@ NOMES = {
     "_apagar_aluno", "aplicar_retencao", "_retencao_agendada", "_ciclo_retencao", "TIPOS_PEDIDO",
     "adm_lgpd", "adm_lgpd_retencao", "adm_lgpd_pedido", "pagina_privacidade", "privacidade",
 }
-ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
+ENV_DO_APP = ["CERTIFICADO_ATIVO", "SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
               "MATRICULA_OBRIGATORIA", "RESET_BANCO", "ADMIN_EMAILS", "ADMIN_PATH", "ADMIN_TOKEN_HORAS",
               "COORD_PROVISORIA", "COORD_EMAIL", "COORD_SENHA", "PROXYCHECK_KEY", "VPN_MODO", "PROXY_HOPS",

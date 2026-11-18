@@ -3,6 +3,8 @@ Aluno: o botão "Certificado (PDF)" só aparece quando o evento tem carga horár
 de /certificado com o nome certo; quando não libera, explica por quê; erro do servidor aparece sem quebrar a tela.
 Tela de entrada (sem login): "Validar um certificado" mostra AUTÊNTICO / NÃO confere / erros do servidor, com nome malicioso como texto.
 A API é simulada (imita o FastAPI); o servidor real não roda aqui.
+Certificado BLOQUEADO (padrão do servidor, /api/config com certificado_ativo=false): a parte do certificado continua na tela, mas travada
+("Certificado: em breve", conferência desabilitada com aviso, nota na carga horária do professor); sem botão que baixe o PDF.
 Uso:  pip install playwright && playwright install chromium && python tests/navegador/certificado_tela.py
 (GC_HTML=caminho.html testa outra cópia do index.html; sai com código 1 se algo falhar)."""
 import json, os, re, sys
@@ -12,7 +14,7 @@ from playwright.sync_api import sync_playwright
 WEB = str(Path(__file__).resolve().parents[2]) + "/"
 html = open(os.environ.get("GC_HTML", WEB + "index.html"), encoding="utf-8").read()
 CFG = {"dominio_aluno": "alunos.unicerrado.edu.br", "dominios_professor": ["unicerrado.edu.br"],
-       "matricula_regex": r"^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$", "coordenacao_aberta": False}
+       "matricula_regex": r"^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$", "coordenacao_aberta": False, "certificado_ativo": True}
 X1 = '<img src=x onerror="window.__xss=(window.__xss||0)+1">'
 ALUNO = {"id": 1, "nome": "Ana Souza", "email": "ana@alunos.unicerrado.edu.br", "perfil": "aluno", "curso": "Gestão da TI", "periodo": 3, "matricula": "GTI00001"}
 PDF_MINIMO = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF"
@@ -159,6 +161,40 @@ with sync_playwright() as pw:
     espera_msg(pg, "#msg-aluno", "não registrou a saída")
     conf("err" in (pg.get_attribute("#msg-aluno", "class") or "") and pg.is_enabled('#comprov button[data-cert="31"]'), "409 do servidor: mensagem em vermelho e o botão volta ao normal")
     conf(not erros, "aluno: nenhum erro de JavaScript: %s" % erros)
+    b.close()
+
+    # =========================== certificado BLOQUEADO (certificado_ativo=false) ===========================
+    CFG["certificado_ativo"] = False
+    reiniciar()
+    estado["comp"] = [comp(41), comp(40, carga_horas=None)]
+    b, pg, erros = abrir(pw, largura=390)
+    conf(pg.is_visible("#cert-box summary"), "bloqueado: 'Validar um certificado' continua na tela de entrada")
+    pg.click("#cert-box summary")
+    conf(pg.is_visible("#cert-bloq") and "ainda não está liberada" in pg.inner_text("#cert-bloq"), "bloqueado: aviso 'Em breve' aparece na conferência")
+    conf(pg.is_disabled("#cert-ok") and pg.is_disabled("#cert-cod"), "bloqueado: campo do código e botão 'Validar' desabilitados")
+    pg.evaluate("document.querySelector('#cert-ok').click()")
+    pg.wait_for_timeout(300)
+    conf(not estado["pedidos"], "bloqueado: nenhuma consulta de código chega ao servidor")
+    conf(pg.locator("#carga-bloq").evaluate("e => !e.hidden") and "bloqueado" in pg.locator("#carga-bloq").inner_text(),
+         "bloqueado: a carga horária do professor mostra a nota 'bloqueado por enquanto'")
+    pg.click('.tab[data-p="aluno"]')
+    pg.fill("#email", ALUNO["email"])
+    pg.fill("#senha", "senha12345")
+    pg.click("#btn-auth")
+    pg.wait_for_function("document.querySelectorAll('#comprov .comp').length === 2")
+    c41, c40 = (pg.inner_text(f"#comprov .comp:nth-child({i})") for i in (1, 2))
+    conf("Certificado: em breve" in c41 and pg.locator("#comprov [data-cert]").count() == 0, "bloqueado: evento com carga horária mostra 'Certificado: em breve' e nenhum botão de baixar")
+    conf("Certificado" not in c40, "bloqueado: evento sem carga horária continua sem nada de certificado")
+    conf(pg.locator('#comprov button[data-pdf="41"]').count() == 1, "bloqueado: o comprovante de presença continua com 'Baixar PDF'")
+    conf(not any("/certificado" in x for x in estado["pedidos"]), "bloqueado: nenhum pedido de certificado ao servidor")
+    conf(not erros, "bloqueado: nenhum erro de JavaScript: %s" % erros)
+    b.close()
+    # config antiga/sem a chave (servidor antigo) = bloqueado, nunca liberado por engano
+    del CFG["certificado_ativo"]
+    reiniciar()
+    b, pg, erros = abrir(pw)
+    pg.click("#cert-box summary")
+    conf(pg.is_disabled("#cert-ok") and pg.is_visible("#cert-bloq"), "config sem a chave certificado_ativo: continua bloqueado")
     b.close()
 
 print()

@@ -14,7 +14,7 @@ from test_func6_exportacao_auditoria import CtxEx
 
 @pytest.fixture
 def ce():
-    c = CtxEx()
+    c = CtxEx(CERTIFICADO_ATIVO="1")          # os testes desta função são do certificado LIBERADO; o bloqueio tem a sua função (22)
     c.aula.carga_horas = 2.5
     c.aula.titulo = "Semana de Tecnologia"
     c.aula.tipo = "palestra"

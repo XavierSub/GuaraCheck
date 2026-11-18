@@ -251,6 +251,8 @@ with sync_playwright() as pw:
     pg.wait_for_selector("#v-admin:not([hidden])")
     pg.wait_for_selector("#em-teste")
     conf(pg.input_value("#em-teste") == ADMIN_EMAIL, "Resumo: o campo do teste já vem com o e-mail de quem está logado")
+    conf("BLOQUEADO" in pg.inner_text("#v-admin") and "CERTIFICADO_ATIVO=1" in pg.inner_text("#v-admin"),
+         "Resumo: sem certificado_ativo, a coordenação vê o aviso de certificado BLOQUEADO e como liberar")
     pg.fill("#em-teste", "")
     pg.click('button[data-act="email-teste"]')
     pg.wait_for_function("document.querySelector('#msg-adm').textContent.includes('Digite o e-mail')")
@@ -289,6 +291,25 @@ with sync_playwright() as pw:
          "servidor recusou: a caixa volta ao estado anterior (marcada), mensagem em vermelho e o aluno pode tentar de novo")
     conf(not erros, "aluno: nenhum erro de JavaScript: %s" % erros)
     b.close()
+
+    RESUMO_ADM["certificado_ativo"] = True
+    reiniciar()
+    b = pw.chromium.launch()
+    c = b.new_context(viewport={"width": 1366, "height": 900})
+    c.route("**/*", handler)
+    pg = c.new_page(); erros = []
+    pg.on("pageerror", lambda e: erros.append(str(e)))
+    pg.goto("http://localhost:8765/")
+    pg.wait_for_selector("#v-auth:not([hidden])")
+    pg.click('.tab[data-p="admin"]')
+    pg.fill("#email", ADMIN_EMAIL)
+    pg.fill("#senha", "senha12345")
+    pg.click("#btn-auth")
+    pg.wait_for_selector("#em-teste")
+    conf("BLOQUEADO" not in pg.inner_text("#v-admin"), "Resumo: com o certificado liberado, o aviso de bloqueio some")
+    conf(not erros, "resumo liberado: nenhum erro de JavaScript: %s" % erros)
+    b.close()
+    del RESUMO_ADM["certificado_ativo"]
 
     reiniciar(me_avisos=False)
     b, pg, erros = entrar(pw, "aluno", "#v-aluno", largura=390)

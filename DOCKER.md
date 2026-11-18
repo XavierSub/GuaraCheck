@@ -32,6 +32,7 @@ Edite o `.env` e preencha **no mínimo**:
 | `POSTGRES_PASSWORD` | Só letras e números (`openssl rand -hex 24`), porque entra numa URL. |
 | `CHAVE_MASTER` | Chave do primeiro acesso da coordenação (sem ela ninguém cria conta de professor). |
 | `PUBLIC_URL` | Endereço público com `https://`, ex.: `https://presenca.unicerrado.edu.br`. Vai dentro do QR code da chamada. |
+| `CERTIFICADO_ATIVO` | `1` libera o certificado de participação (PDF e conferência do código). Sem a variável (ou com `0`) ele fica **bloqueado**: o aluno vê "Certificado: em breve". |
 
 Depois:
 
