@@ -104,7 +104,7 @@ with sync_playwright() as pw:
     iv = intervalos(pg)
     esp = [round(x / 1000) for x in iv]
     faixas = [(8000, 12000), (16000, 24000), (32000, 48000), (48000, 72000), (48000, 72000)]
-    ok = len(iv) >= 5 and all(lo <= x <= hi for x, (lo, hi) in zip(iv, faixas))
+    ok = len(iv) >= 5 and all(lo - 600 <= x <= hi + 600 for x, (lo, hi) in zip(iv, faixas))     # folga de 0,6 s do passo do relógio, como no CT-1041
     conf(ok, f"CT-1045 | com o servidor errando a espera cresce 10, 20, 40 e para em 60 s: {esp}")
     conf(all(x <= 72100 for x in iv), "CT-1046 | e nunca passa de 60 s (+20%)")
     conf(len(tempos(pg)) <= 10, f"CT-1047 | a tela não insiste: {len(tempos(pg))} consultas em 6 min (sem backoff seriam ~36)")

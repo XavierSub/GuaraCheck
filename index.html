@@ -8,6 +8,10 @@
 <meta name="color-scheme" content="only light">
 <link rel="icon" type="image/png" href="assets/favicon.png">
 <link rel="apple-touch-icon" href="assets/icone-192.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Guará Check">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
@@ -109,6 +113,8 @@ textarea{min-height:110px;resize:vertical}
 .card.destaque{outline:3px solid var(--pri);outline-offset:3px}
 .opcoes{border:1.5px solid var(--line);border-radius:14px;padding:4px 16px 14px;margin:18px 0 0;min-width:0}.opcoes legend{font-weight:700;font-size:14px;padding:0 6px}
 label.ck{display:flex;gap:10px;align-items:flex-start;font-weight:400;font-size:14.5px;margin:12px 0 0}label.ck input{width:auto;min-width:0;flex:none;margin-top:3px}
+/* Dica para instalar o app no celular (só aparece quando dá para instalar). */
+.inst{display:flex;gap:10px 12px;align-items:center;flex-wrap:wrap;background:var(--azulbg);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin:12px 0 0}.inst p{margin:0;flex:1 1 220px;font-size:14.5px}.inst .btn{padding:8px 18px;font-size:14px}
 .qr-contagem{font-weight:700;color:var(--ok);margin:0 0 8px}.qr-contagem.erro{color:var(--err)}
 .overlay{position:fixed;inset:0;z-index:50;background:var(--bg);overflow:auto;padding:16px;display:flex;justify-content:center;align-items:flex-start}
 .overlay-box:focus{outline:none}.overlay-box{width:100%;max-width:560px;background:var(--card);border:2px solid var(--pri);border-radius:20px;padding:22px}
@@ -498,6 +504,11 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
   <h2>Aulas com chamada aberta</h2>
   <p class="mut" id="aluno-info">O navegador vai pedir permissão para usar sua localização. O botão Registrar Presença só libera quando você está dentro da área da aula. Use o seu próprio celular.</p>
   <div class="msg" id="msg-aluno" hidden></div>
+  <div class="inst" id="instalar" role="region" aria-label="Instalar o aplicativo" hidden>
+    <p id="instalar-txt"></p>
+    <button class="btn" id="instalar-btn" type="button">Instalar o app</button>
+    <button class="btn alt" id="instalar-fecha" type="button">Agora não</button>
+  </div>
   <label class="ck" id="avisos-box"><input type="checkbox" id="avisos-email" disabled><span>Avisos por e-mail: receber um e-mail quando um professor abrir chamada do meu curso e período.</span></label>
   <div id="aulas"></div>
   <h2 style="margin-top:22px">Meus comprovantes</h2>
@@ -926,12 +937,36 @@ function faixaPreencher(){  // nome e etiquetas da faixa de boas-vindas (textCon
   box.querySelectorAll('span:not(.vivo)').forEach(e => e.remove());
   (et[perfil] || []).filter(Boolean).forEach(t => { const e = document.createElement('span'); e.textContent = t; box.insertBefore(e, box.querySelector('.vivo')); });
 }
+/* App instalável (PWA). No Android/Chrome o navegador avisa que dá para instalar (beforeinstallprompt): guardamos o aviso e
+   mostramos o botão. No iPhone/iPad não existe botão: mostramos o passo a passo. Some depois de "Agora não" (lembrado neste
+   aparelho), de instalar ou quando a página já roda dentro do app instalado. */
+const INST = {evento: null, feito: false, ios: /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)};
+const rodandoComoApp = () => { try { return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; } catch { return false; } };
+function instalarMostrar(){
+  const box = $('#instalar'); if (!box) return;
+  box.hidden = INST.feito || rodandoComoApp() || store.get('gc_instalar_nao') === '1' || !(INST.evento || INST.ios);
+  if (box.hidden) return;
+  $('#instalar-btn').hidden = !INST.evento;
+  $('#instalar-txt').innerHTML = INST.evento
+    ? '<b>Instale o Guará Check</b> no celular para abrir a chamada com um toque, sem digitar o endereço.'
+    : '<b>Instale o Guará Check</b> no iPhone: toque em <b>Compartilhar</b> e escolha <b>Adicionar à Tela de Início</b>.';
+}
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); INST.evento = e; instalarMostrar(); });
+addEventListener('appinstalled', () => { INST.evento = null; INST.feito = true; instalarMostrar(); });
+$('#instalar-btn').onclick = async () => {
+  const e = INST.evento; if (!e) return;
+  INST.evento = null; instalarMostrar();          // o convite só vale uma vez
+  try { await e.prompt(); await e.userChoice; } catch {}
+};
+$('#instalar-fecha').onclick = () => { store.set('gc_instalar_nao', '1'); instalarMostrar(); };
+if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));   // sem isso o navegador não oferece instalar
+
 function iniciar(){
   $('#user-nome').textContent = S.user.nome.split(' ')[0]; faixaPreencher();
   if (S.user.perfil !== 'aluno') limparLinkAula();   // o link do QR code é para aluno
   if (S.user.perfil === 'admin'){ Object.assign(ADM, {aba:'resumo', pag:1, q:'', curso:0}); show('admin'); admRender(); } // sempre abre no Resumo (onde fica o aviso da senha provisória)
   else if (S.user.perfil === 'aluno'){
-    show('aluno'); carregarAulas(); carregarComprovantes(); carregarNotas();
+    show('aluno'); instalarMostrar(); carregarAulas(); carregarComprovantes(); carregarNotas();
     $('#aluno-info').textContent = (S.user.curso ? S.user.curso + ' · ' : '') + (S.user.periodo ? S.user.periodo + 'º período · ' : '') + 'Use o seu próprio celular e fique dentro da sala. O navegador vai pedir permissão para usar a localização.';
     agendarAtualizacao(true);
   } else { show('prof'); initMapa(); recarregarHist(true); }

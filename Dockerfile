@@ -30,7 +30,7 @@ RUN pip install -r requirements.txt
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin guara \
     && mkdir /data && chown guara /data
 
-COPY app.py index.html ./
+COPY app.py index.html sw.js ./
 COPY assets ./assets
 COPY ferramentas ./ferramentas
 

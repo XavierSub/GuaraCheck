@@ -44,7 +44,7 @@ def origens_do_copy():
 
 def test_dt01_tudo_que_o_dockerfile_copia_existe():
     origens = origens_do_copy()
-    assert {"requirements.txt", "app.py", "index.html", "assets", "ferramentas"} <= set(origens)
+    assert {"requirements.txt", "app.py", "index.html", "sw.js", "assets", "ferramentas"} <= set(origens)
     for o in origens:
         assert (RAIZ / o).exists(), f"COPY de algo que não existe: {o}"
 

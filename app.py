@@ -1484,6 +1484,37 @@ def asset(nome: str):
     raise HTTPException(404, "Arquivo não encontrado")
 
 
+# ---------------- App instalável (PWA) ----------------
+# Manifesto + service worker (sw.js, na raiz para valer para o site inteiro). O celular oferece "Instalar app"/"Adicionar à tela
+# inicial" e o Guará Check abre em tela cheia, com ícone próprio. O service worker só guarda a casca do site (nunca /api/): ver sw.js.
+MANIFESTO = {
+    "id": "/", "name": "Guará Check", "short_name": "Guará Check", "lang": "pt-BR",
+    "description": "Registre sua presença em aulas e eventos do UniCerrado pela localização.",
+    "start_url": "/", "scope": "/", "display": "standalone",
+    "background_color": "#f5f7ed", "theme_color": "#2f7d40",
+    "icons": [
+        {"src": "/assets/icone-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/assets/icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": "/assets/icone-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    ],
+}
+
+
+@app.get("/manifest.webmanifest")
+def manifesto():
+    return JSONResponse(MANIFESTO, media_type="application/manifest+json", headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/sw.js")
+def service_worker():
+    """no-cache: o navegador confere a cada visita se o service worker mudou (é assim que uma versão nova chega aos celulares)."""
+    for pasta in (BASE_DIR / "web", BASE_DIR):
+        arq = pasta / "sw.js"
+        if arq.is_file():
+            return FileResponse(arq, media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+    raise HTTPException(404, "sw.js não encontrado")
+
+
 @app.get("/api/health")
 def health(db: Session = Depends(get_db)):
     db.execute(text("SELECT 1"))

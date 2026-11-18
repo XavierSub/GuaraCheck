@@ -108,6 +108,8 @@ NOMES = {
     "adm_estatisticas", "XLSX_MIME", "adm_estatisticas_xlsx",
     # --- Funcionalidade 17: aviso por e-mail quando a chamada abre ---
     "_condicoes_do_aviso", "_planejar_aviso", "_limpo", "_texto_do_aviso", "_enviar_aviso", "AvisosIn", "meus_avisos",
+    # --- Funcionalidade 18: app instalável (PWA) ---
+    "MANIFESTO", "ASSET_RE", "CSP_PAGINA",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
