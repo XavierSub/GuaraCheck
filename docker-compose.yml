@@ -1,0 +1,41 @@
+# Guará Check + PostgreSQL. Passo a passo em DOCKER.md.
+#   cp .env.example .env     (preencha SECRET_KEY, POSTGRES_PASSWORD, CHAVE_MASTER... veja DOCKER.md)
+#   docker compose up -d --build
+name: guaracheck
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: guara
+      POSTGRES_DB: guaracheck
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guara -d guaracheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  app:
+    build: .
+    image: guaracheck:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # A senha vai na URL: use só letras e números em POSTGRES_PASSWORD (ex.: openssl rand -hex 24).
+      DATABASE_URL: postgresql://guara:${POSTGRES_PASSWORD}@db:5432/guaracheck
+      SECRET_KEY: ${SECRET_KEY:?Defina SECRET_KEY no arquivo .env}
+    ports:
+      # Por padrão só a própria máquina alcança o app (o proxy reverso com HTTPS fica na frente). Se o proxy está em OUTRA
+      # máquina, defina APP_BIND=0.0.0.0 no .env e libere a porta só para ele.
+      - "${APP_BIND:-127.0.0.1}:${APP_PORTA:-8000}:8000"
+
+volumes:
+  pgdata:

@@ -1,0 +1,20 @@
+# Fora da imagem: segredos, dados e tudo que não roda em produção.
+.git
+.github
+.gitignore
+.env
+.env.*
+.venv
+.pytest_cache
+**/__pycache__
+**/*.pyc
+*.db
+*.db-*
+tests
+run.bat
+run.ps1
+render.yaml
+Dockerfile
+docker-compose*.yml
+.dockerignore
+*.md
