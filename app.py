@@ -1056,6 +1056,39 @@ def _pdf_marca(c, W, H, M) -> None:
         pass
 
 
+PDF_VERSAO = "V1"   # a mesma de SITE.versao no index.html (o teste confere)
+
+
+def _pdf_arquivo_imagem(nome: str):
+    """Imagem da pasta assets/ pronta para o reportlab, ou None se o arquivo não existir (o PDF sai sem ela, nunca falha por isso)."""
+    try:
+        from reportlab.lib.utils import ImageReader
+
+        for pasta in (BASE_DIR / "web" / "assets", BASE_DIR / "assets"):
+            arq = pasta / nome
+            if arq.is_file():
+                img = ImageReader(str(arq))
+                img.getSize()   # arquivo corrompido falha aqui e a imagem é só pulada
+                return img
+    except Exception:
+        pass
+    return None
+
+
+def _pdf_imagem_altura(c, img, x: float, y_centro: float, h: float) -> float:
+    """Desenha `img` com altura `h`, começando em `x` e centralizada na vertical em `y_centro`; devolve a largura usada.
+    Imagem ausente (None) ou arquivo ruim: não desenha nada e devolve 0 (o certificado sai igual, sem a imagem)."""
+    if img is None:
+        return 0.0
+    try:
+        iw, ih = img.getSize()
+        w = h * iw / ih
+        c.drawImage(img, x, y_centro - h / 2, width=w, height=h, mask="auto")
+        return w
+    except Exception:
+        return 0.0
+
+
 def gerar_pdf_comprovante(d: dict) -> bytes:
     """Comprovante de presença em PDF, uma página A4. O reportlab é importado aqui para o app subir mesmo sem ele."""
     from reportlab.lib import colors
@@ -1218,37 +1251,93 @@ def _quebrar_texto(texto: str, fonte: str, tam: float, largura: float) -> list:
 
 
 def gerar_pdf_certificado(d: dict) -> bytes:
-    """Certificado de participação em PDF (A4 paisagem, uma página), com o código para conferir a autenticidade."""
+    """Certificado de participação em PDF (A4 paisagem, uma página), com o código para conferir a autenticidade.
+    Visual igual ao da página inicial do site: topo branco com as logos (curso, UniCerrado, FESG), o nome Guará Check com a versão e o
+    lema na pílula azul, fio verde-lima, fundo claro, título em azul e verde do site."""
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.pdfbase.pdfmetrics import stringWidth
     from reportlab.pdfgen import canvas
 
     W, H = landscape(A4)
     M = 56
-    verde, cinza, escuro = colors.HexColor("#1d6b47"), colors.HexColor("#5b6670"), colors.HexColor("#14202b")
+    cor = colors.HexColor
+    fundo, linha, lima = cor("#f5f7ed"), cor("#dfe5d3"), cor("#a7c758")      # paleta do site (:root do index.html)
+    azul, azul_escuro, verde, verde_fundo = cor("#23589a"), cor("#0b2a6b"), cor("#2f7d40"), cor("#e7f2df")
+    escuro, cinza = cor("#182830"), cor("#5b6b64")
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=landscape(A4))
     c.setTitle(_l1(f"Certificado de participação - {d['nome']}"))
     c.setAuthor("Guará Check - UniCerrado")
     c.setSubject("Certificado de participação")
 
-    c.setStrokeColor(verde)
-    c.setLineWidth(3)
-    c.rect(18, 18, W - 36, H - 36, stroke=1, fill=0)
-    c.setLineWidth(0.8)
-    c.rect(26, 26, W - 52, H - 52, stroke=1, fill=0)
-    c.setFillColor(verde)
-    c.rect(26, H - 112, W - 52, 86, stroke=0, fill=1)
-    _pdf_marca(c, W, H - 26, M)      # a faixa verde começa 26 pt abaixo do topo (moldura)
-    c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 22)
-    c.drawString(M, H - 70, _l1("Guará Check"))
-    c.setFont("Helvetica", 12)
-    c.drawString(M, H - 90, _l1("Centro Universitário de Goiatuba (UniCerrado)"))
+    c.setFillColor(fundo)
+    c.rect(0, 0, W, H, stroke=0, fill=1)
 
-    c.setFillColor(verde)
+    # topo branco com fio verde-lima, como o cabeçalho do site
+    topo_h = 92
+    yc = H - topo_h / 2
+    c.setFillColor(colors.white)
+    c.rect(0, H - topo_h, W, topo_h, stroke=0, fill=1)
+    c.setFillColor(lima)
+    c.rect(0, H - topo_h - 3, W, 3, stroke=0, fill=1)
+
+    def separador(x):
+        c.setStrokeColor(cor("#d9dfcd"))
+        c.setLineWidth(0.8)
+        c.line(x, yc - 15, x, yc + 15)
+
+    x = 40
+    x += _pdf_imagem_altura(c, _pdf_arquivo_imagem("logo-curso.png"), x, yc, 56) + 13
+    separador(x)
+    x += 13
+    x += _pdf_imagem_altura(c, _pdf_arquivo_imagem("logo-unicerrado.png"), x, yc, 40) + 13
+    separador(x)
+    x += 13
+    x += _pdf_imagem_altura(c, _pdf_arquivo_imagem("logo-fesg.png"), x, yc, 40) + 26
+    x += _pdf_imagem_altura(c, _pdf_arquivo_imagem("guara-icone.png"), x, yc, 44) + 9
+    x += _pdf_imagem_altura(c, _pdf_arquivo_imagem("guara-nome.png"), x, yc, 25) + 9
+    c.setFont("Helvetica-Bold", 9)
+    vw = stringWidth(PDF_VERSAO, "Helvetica-Bold", 9)
+    c.setStrokeColor(cor("#cfd8c2"))
+    c.setLineWidth(0.8)
+    c.roundRect(x, yc - 8.5, vw + 14, 17, 8.5, stroke=1, fill=0)
+    c.setFillColor(cor("#4d5f56"))
+    c.drawString(x + 7, yc - 3, PDF_VERSAO)
+
+    lema = "Sua presença, no lugar certo."
+    c.setFont("Helvetica-BoldOblique", 11)
+    lw = stringWidth(lema, "Helvetica-BoldOblique", 11)
+    pino = _pdf_arquivo_imagem("guara-pino.png")
+    pw, ph = (pino.getSize() if pino is not None else (0, 1))
+    pino_h = 26 if pino is not None else 0
+    pino_w = pino_h * pw / ph if pino is not None else 0
+    pilula_w = 14 + (pino_w + 8 if pino is not None else 0) + lw + 14
+    px = W - 40 - pilula_w
+    c.setFillColor(azul_escuro)
+    c.roundRect(px, yc - 17, pilula_w, 34, 17, stroke=0, fill=1)
+    ix = px + 14
+    if pino is not None:
+        ix += _pdf_imagem_altura(c, pino, ix, yc, pino_h) + 8
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-BoldOblique", 11)
+    c.drawString(ix, yc - 4, _l1(lema))
+
+    # cartão branco do certificado
+    cartao_topo = H - topo_h - 3 - 24
+    c.setFillColor(colors.white)
+    c.setStrokeColor(linha)
+    c.setLineWidth(1)
+    c.roundRect(40, 36, W - 80, cartao_topo - 36, 18, stroke=1, fill=1)
+
+    c.setFillColor(azul)
     c.setFont("Helvetica-Bold", 30)
-    c.drawCentredString(W / 2, H - 172, _l1("CERTIFICADO DE PARTICIPAÇÃO"))
+    c.drawCentredString(W / 2, cartao_topo - 60, _l1("CERTIFICADO DE PARTICIPAÇÃO"))
+    c.setFillColor(lima)
+    c.roundRect(W / 2 - 30, cartao_topo - 76, 60, 3, 1.5, stroke=0, fill=1)
+    c.setFillColor(cinza)
+    c.setFont("Helvetica", 11)
+    c.drawCentredString(W / 2, cartao_topo - 96, _l1("Guará Check · Centro Universitário de Goiatuba (UniCerrado)"))
 
     tipo = "da palestra" if d["tipo"] == "palestra" else "da aula"
     quando = d["evento_em"].astimezone(BRT)
@@ -1262,7 +1351,7 @@ def gerar_pdf_certificado(d: dict) -> bytes:
              + f", com carga horária de {_horas_texto(d['carga_horas'])}.")
     if d.get("permanencia_min") is not None:
         frase += f" Permanência registrada: {_fmt_duracao(d['permanencia_min'])}."
-    y = H - 228
+    y = cartao_topo - 138
     c.setFillColor(escuro)
     c.setFont("Helvetica", 15)
     for lin in _quebrar_texto(frase, "Helvetica", 15, W - 2 * M - 40):
@@ -1272,30 +1361,35 @@ def gerar_pdf_certificado(d: dict) -> bytes:
     # assinatura do professor (à esquerda) e código de verificação (à direita)
     c.setStrokeColor(escuro)
     c.setLineWidth(0.8)
-    c.line(M, 112, M + 250, 112)
+    c.line(M, 124, M + 250, 124)
+    c.setFillColor(escuro)
     c.setFont("Helvetica-Bold", 11)
-    c.drawString(M, 96, _l1(f"Prof(a). {d['professor']}"))
+    c.drawString(M, 108, _l1(f"Prof(a). {d['professor']}"))
     c.setFillColor(cinza)
     c.setFont("Helvetica", 9)
-    c.drawString(M, 82, _l1("Professor(a) responsável pelo evento"))
+    c.drawString(M, 94, _l1("Professor(a) responsável pelo evento"))
 
-    x = W - M - 300
-    c.setFillColor(colors.HexColor("#eef7f1"))
+    bx = W - M - 300
+    c.setFillColor(verde_fundo)
     c.setStrokeColor(verde)
-    c.setLineWidth(1.4)
-    c.roundRect(x, 70, 300, 62, 8, stroke=1, fill=1)
+    c.setLineWidth(1.2)
+    c.roundRect(bx, 82, 300, 62, 12, stroke=1, fill=1)
     c.setFillColor(cinza)
     c.setFont("Helvetica-Bold", 8.5)
-    c.drawString(x + 12, 118, _l1("CÓDIGO DE VERIFICAÇÃO"))
+    c.drawString(bx + 14, 130, _l1("CÓDIGO DE VERIFICAÇÃO"))
     c.setFillColor(verde)
     c.setFont("Courier-Bold", 20)
-    c.drawString(x + 12, 94, _l1(d["codigo"]))
+    c.drawString(bx + 14, 106, _l1(d["codigo"]))
     c.setFillColor(cinza)
     c.setFont("Helvetica", 8)
-    c.drawString(x + 12, 78, _l1("Confira em: " + (d.get("site") or "o site do Guará Check") + "  (Validar certificado)"))
+    c.drawString(bx + 14, 90, _l1("Confira em: " + (d.get("site") or "o site do Guará Check") + "  (Validar certificado)"))
 
+    c.setStrokeColor(linha)
+    c.setLineWidth(0.8)
+    c.line(M, 70, W - M, 70)
+    c.setFillColor(cinza)
     c.setFont("Helvetica", 8)
-    c.drawCentredString(W / 2, 44, _l1(f"Documento gerado em {d['emitido_em'].astimezone(BRT).strftime('%d/%m/%Y %H:%M')} (horário de Brasília). "
+    c.drawCentredString(W / 2, 52, _l1(f"Documento gerado em {d['emitido_em'].astimezone(BRT).strftime('%d/%m/%Y %H:%M')} (horário de Brasília). "
                                        "Este certificado não contém CPF nem coordenadas de localização."))
     c.showPage()
     c.save()

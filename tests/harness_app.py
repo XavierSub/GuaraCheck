@@ -104,7 +104,7 @@ NOMES = {
     "_permanencia_min", "PresencaManualIn", "lancar_presenca_manual", "desfazer_presenca_manual",
     "_fmt_duracao", "_status_presenca", "registrar_saida",
     # --- Funcionalidade 15: certificado de participação ---
-    "assinatura_certificado", "_horas_texto", "_certificado_liberado", "gerar_pdf_certificado", "certificado_pdf", "validar_certificado",
+    "PDF_VERSAO", "_pdf_arquivo_imagem", "_pdf_imagem_altura", "assinatura_certificado", "_horas_texto", "_certificado_liberado", "gerar_pdf_certificado", "certificado_pdf", "validar_certificado",
     # --- Funcionalidade 16: estatísticas da coordenação ---
     "LIMITE_ESTATISTICAS", "ESTATISTICAS_DIAS_PADRAO", "ESTATISTICAS_DIAS_MAX", "_periodo_estatisticas", "_dados_estatisticas",
     "adm_estatisticas", "XLSX_MIME", "adm_estatisticas_xlsx",
