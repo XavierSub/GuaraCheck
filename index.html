@@ -473,6 +473,12 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
     <p id="p-esqueci" style="text-align:center;margin:14px 0 0"><button class="link" id="btn-esqueci" type="button">Esqueci minha senha</button></p>
     <p id="p-reenviar" style="text-align:center;margin:14px 0 0" hidden><button class="link" id="btn-reenviar" type="button">Reenviar código</button></p>
     <p style="text-align:center;margin:10px 0 0"><button class="link" id="toggle" type="button"></button></p>
+    <details class="cola" id="cert-box">
+      <summary>Validar um certificado</summary>
+      <p class="mut">Recebeu um certificado do Guará Check? Digite o código que aparece no PDF (ex.: C1042-9F3A7C21B4AA). Não precisa de login.</p>
+      <div class="row"><input id="cert-cod" maxlength="40" autocomplete="off" placeholder="Código do certificado" aria-label="Código do certificado"><button class="btn alt" id="cert-ok" type="button">Validar</button></div>
+      <div class="msg" id="cert-res" hidden></div>
+    </details>
   </div>
   <div class="cx cx-m" aria-hidden="true"><svg viewBox="0 0 360 90"><use href="#circ-m"/></svg><div class="lig-wrap"><img class="lig" src="assets/guara-pino.png" alt=""></div></div>
 </section>
@@ -541,7 +547,7 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
           <label>Permanência mínima (minutos)<input id="perm-min" type="number" min="1" max="1440" inputmode="numeric" placeholder="Ex.: 90 (vazio = só registrar a saída)"></label>
         </div>
         <div class="grid2">
-          <label>Carga horária do certificado (horas, opcional)<input id="carga-h" inputmode="decimal" placeholder="Ex.: 2 ou 1,5"></label>
+          <label>Carga horária do certificado (horas)<input id="carga-h" inputmode="decimal" placeholder="Ex.: 2 ou 1,5 (vazio = o evento não emite certificado)"></label>
         </div>
       </fieldset>
       <div class="grid">
@@ -933,6 +939,19 @@ function sair(aviso){
   fecharMostrar(); renderAuth(); show('auth'); if (aviso) msg($('#msg-auth'), aviso, 'err');
 }
 $('#btn-sair').onclick = () => sair();
+/* Validar certificado: conferência pública (sem login) do código que está no PDF. O servidor só devolve nome, evento, data e carga horária. */
+const horasTxt = h => `${String(h).replace('.', ',')} ${h <= 1 ? 'hora' : 'horas'}`;
+$('#cert-ok').onclick = async () => {
+  const r = $('#cert-res'), v = $('#cert-cod').value.trim(), b = $('#cert-ok'); msg(r, '');
+  if (!v) return msg(r, 'Digite o código que aparece no certificado.', 'err');
+  b.disabled = true;
+  try {
+    const d = await api('/certificados/validar/' + encodeURIComponent(v));
+    if (d.valido) msg(r, `✓ Certificado AUTÊNTICO: ${d.nome} participou de "${d.evento}"${d.data ? ' em ' + new Date(d.data).toLocaleDateString('pt-BR') : ''}, com carga horária de ${horasTxt(d.carga_horas)}.`, 'ok');
+    else msg(r, 'Este código NÃO confere: ele é falso, foi alterado ou o certificado deixou de valer.', 'err');
+  } catch (x) { msg(r, x.message, 'err'); } finally { b.disabled = false; }
+};
+$('#cert-cod').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); $('#cert-ok').click(); } });
 
 /* ---------------- Aluno ---------------- */
 /* Atualização automática da lista de chamadas. Duas regras para o servidor aguentar a turma inteira:
@@ -1092,8 +1111,8 @@ function renderComprovantes(destacar){
   box.innerHTML = (l.length ? l.map((p, i) => `<article class="card comp${destacar && i === 0 ? ' novo' : ''}">
       <h3>✓ ${p.manual ? 'Presença lançada pelo professor' : 'Presença registrada'} · Protocolo nº ${p.id}</h3>
       <p>${p.manual ? `A presença do aluno ${quem(p)}, em ${evento(p)}, foi lançada pelo(a) prof. ${esc(p.professor)} em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.`
-        : `O aluno ${quem(p)}, registrou presença em ${evento(p)}, com o(a) prof. ${esc(p.professor)}, em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.`}</p>${saidaComp(p)}
-      <div class="acoes"><button class="btn" type="button" data-m="${i}">Mostrar ao professor</button><button class="btn alt" type="button" data-pdf="${p.id}">Baixar PDF</button><button class="btn alt" type="button" data-nota="${p.id}">Anotar</button></div>
+        : `O aluno ${quem(p)}, registrou presença em ${evento(p)}, com o(a) prof. ${esc(p.professor)}, em <b>${new Date(p.registrado_em).toLocaleString('pt-BR')}</b>.`}</p>${saidaComp(p)}${p.carga_horas && p.situacao !== 'Presente' ? '<p class="mut">O certificado deste evento só é liberado com a saída registrada e a permanência mínima.</p>' : ''}
+      <div class="acoes"><button class="btn" type="button" data-m="${i}">Mostrar ao professor</button><button class="btn alt" type="button" data-pdf="${p.id}">Baixar PDF</button>${p.carga_horas && p.situacao === 'Presente' ? `<button class="btn alt" type="button" data-cert="${p.id}">Certificado (PDF)</button>` : ''}<button class="btn alt" type="button" data-nota="${p.id}">Anotar</button></div>
     </article>`).join('') : '<div class="card vazio mut">Você ainda não registrou nenhuma presença.</div>')
     + (S.compMais ? '<button class="btn alt" type="button" id="comp-mais">Ver comprovantes mais antigos</button>' : '');
   montarSelectNotas();
@@ -1158,6 +1177,7 @@ $('#comprov').addEventListener('click', e => {
   const mais = e.target.closest('#comp-mais'); if (mais) carregarMaisComprovantes(mais);
   const b = e.target.closest('button[data-m]'); if (b) mostrarAoProfessor(+b.dataset.m);
   const p = e.target.closest('button[data-pdf]'); if (p) baixarPDF(+p.dataset.pdf, p, $('#msg-aluno'));
+  const ce = e.target.closest('button[data-cert]'); if (ce) baixarPdfDe(`/api/aluno/presencas/${ce.dataset.cert}/certificado`, `certificado-${ce.dataset.cert}.pdf`, ce, $('#msg-aluno'));
   const n = e.target.closest('button[data-nota]'); if (n) abrirNota(+n.dataset.nota);
 });
 $('#m-pdf').onclick = () => baixarPDF(+$('#m-pdf').dataset.id, $('#m-pdf'), $('#m-msg'));

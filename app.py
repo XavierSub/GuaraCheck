@@ -980,6 +980,13 @@ def assinatura_presenca(p: "Presenca", a: "Aula") -> str:
     return hmac.new(SECRET_KEY.encode(), base.encode(), hashlib.sha256).hexdigest()[:10].upper()
 
 
+def assinatura_certificado(p: "Presenca", a: "Aula") -> str:
+    """Código de verificação do certificado (HMAC com a chave do servidor). Não depende do código de validação do evento, que
+    pode ser gerado depois, e é diferente do código do comprovante: um não serve de prova do outro."""
+    base = f"CERT|{p.id}|{p.aluno_id}|{a.id}|{int(aware(p.registrado_em).timestamp())}|{a.carga_horas or ''}"
+    return hmac.new(SECRET_KEY.encode(), base.encode(), hashlib.sha256).hexdigest()[:12].upper()
+
+
 def _l1(s) -> str:
     """Texto seguro para as fontes padrão do PDF (cp1252): o que não couber vira '?'."""
     return str("" if s is None else s).encode("cp1252", "replace").decode("cp1252")
@@ -1167,6 +1174,91 @@ def _quebrar_texto(texto: str, fonte: str, tam: float, largura: float) -> list:
                 lin = lin[corte:]
             saida.append(lin)
     return saida
+
+
+def gerar_pdf_certificado(d: dict) -> bytes:
+    """Certificado de participação em PDF (A4 paisagem, uma página), com o código para conferir a autenticidade."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.pdfgen import canvas
+
+    W, H = landscape(A4)
+    M = 56
+    verde, cinza, escuro = colors.HexColor("#1d6b47"), colors.HexColor("#5b6670"), colors.HexColor("#14202b")
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=landscape(A4))
+    c.setTitle(_l1(f"Certificado de participação - {d['nome']}"))
+    c.setAuthor("Guará Check - UniCerrado")
+    c.setSubject("Certificado de participação")
+
+    c.setStrokeColor(verde)
+    c.setLineWidth(3)
+    c.rect(18, 18, W - 36, H - 36, stroke=1, fill=0)
+    c.setLineWidth(0.8)
+    c.rect(26, 26, W - 52, H - 52, stroke=1, fill=0)
+    c.setFillColor(verde)
+    c.rect(26, H - 112, W - 52, 86, stroke=0, fill=1)
+    _pdf_marca(c, W, H - 26, M)      # a faixa verde começa 26 pt abaixo do topo (moldura)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 22)
+    c.drawString(M, H - 70, _l1("Guará Check"))
+    c.setFont("Helvetica", 12)
+    c.drawString(M, H - 90, _l1("Centro Universitário de Goiatuba (UniCerrado)"))
+
+    c.setFillColor(verde)
+    c.setFont("Helvetica-Bold", 30)
+    c.drawCentredString(W / 2, H - 172, _l1("CERTIFICADO DE PARTICIPAÇÃO"))
+
+    tipo = "da palestra" if d["tipo"] == "palestra" else "da aula"
+    quando = d["evento_em"].astimezone(BRT)
+    frase = (f"Certificamos que {d['nome']}, matrícula {d['matricula'] or '—'}"
+             + (f", do curso de {d['curso']}" if d.get("curso") else "")
+             + f", participou {tipo} \"{d['titulo']}\""
+             + (f" (disciplina {d['disciplina']})" if d.get("disciplina") else "")
+             + f", realizada em {quando.strftime('%d/%m/%Y')}"
+             + (f", em {d['local_descricao']}" if d.get("local_descricao") else "")
+             + f", sob responsabilidade do(a) professor(a) {d['professor']}"
+             + f", com carga horária de {_horas_texto(d['carga_horas'])}.")
+    if d.get("permanencia_min") is not None:
+        frase += f" Permanência registrada: {_fmt_duracao(d['permanencia_min'])}."
+    y = H - 228
+    c.setFillColor(escuro)
+    c.setFont("Helvetica", 15)
+    for lin in _quebrar_texto(frase, "Helvetica", 15, W - 2 * M - 40):
+        c.drawCentredString(W / 2, y, lin)
+        y -= 23
+
+    # assinatura do professor (à esquerda) e código de verificação (à direita)
+    c.setStrokeColor(escuro)
+    c.setLineWidth(0.8)
+    c.line(M, 112, M + 250, 112)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(M, 96, _l1(f"Prof(a). {d['professor']}"))
+    c.setFillColor(cinza)
+    c.setFont("Helvetica", 9)
+    c.drawString(M, 82, _l1("Professor(a) responsável pelo evento"))
+
+    x = W - M - 300
+    c.setFillColor(colors.HexColor("#eef7f1"))
+    c.setStrokeColor(verde)
+    c.setLineWidth(1.4)
+    c.roundRect(x, 70, 300, 62, 8, stroke=1, fill=1)
+    c.setFillColor(cinza)
+    c.setFont("Helvetica-Bold", 8.5)
+    c.drawString(x + 12, 118, _l1("CÓDIGO DE VERIFICAÇÃO"))
+    c.setFillColor(verde)
+    c.setFont("Courier-Bold", 20)
+    c.drawString(x + 12, 94, _l1(d["codigo"]))
+    c.setFillColor(cinza)
+    c.setFont("Helvetica", 8)
+    c.drawString(x + 12, 78, _l1("Confira em: " + (d.get("site") or "o site do Guará Check") + "  (Validar certificado)"))
+
+    c.setFont("Helvetica", 8)
+    c.drawCentredString(W / 2, 44, _l1(f"Documento gerado em {d['emitido_em'].astimezone(BRT).strftime('%d/%m/%Y %H:%M')} (horário de Brasília). "
+                                       "Este certificado não contém CPF nem coordenadas de localização."))
+    c.showPage()
+    c.save()
+    return buf.getvalue()
 
 
 def gerar_pdf_anotacoes(d: dict) -> bytes:
@@ -2364,7 +2456,8 @@ def minhas_presencas(u: dict = Depends(so_aluno), db: Session = Depends(get_db),
     pagina = min(max(pagina, 1), 10_000)
     rows = db.execute(
         select(Presenca.id, Presenca.registrado_em, Aula.titulo, Aula.tipo, Aula.local_tipo, Aula.disciplina,
-               Aula.periodo, Professor.nome.label("professor"), Presenca.manual, Presenca.saida_em, Aula.exige_saida, Aula.permanencia_min.label("minimo"))
+               Aula.periodo, Professor.nome.label("professor"), Presenca.manual, Presenca.saida_em, Aula.exige_saida, Aula.permanencia_min.label("minimo"),
+               Aula.carga_horas)
         .select_from(Presenca).join(Aula, Aula.id == Presenca.aula_id)
         .join(Professor, Professor.id == Aula.professor_id)
         .where(Presenca.aluno_id == u["id"]).order_by(Presenca.id.desc())
@@ -2373,9 +2466,29 @@ def minhas_presencas(u: dict = Depends(so_aluno), db: Session = Depends(get_db),
              "local_tipo": r.local_tipo or "dentro", "disciplina": r.disciplina, "periodo": r.periodo,
              "professor": r.professor, "manual": bool(r.manual), "saida_em": iso(r.saida_em),
              "exige_saida": bool(r.exige_saida), "permanencia_min": _permanencia_min(r.registrado_em, r.saida_em),
-             "permanencia_exigida": r.minimo,
+             "permanencia_exigida": r.minimo, "carga_horas": r.carga_horas,
              "situacao": _status_presenca(bool(r.exige_saida), r.minimo, r.saida_em, _permanencia_min(r.registrado_em, r.saida_em))}
             for r in rows]
+
+
+def _horas_texto(h: float) -> str:
+    """2 -> '2 horas', 1 -> '1 hora', 1.5 -> '1,5 hora' (a carga horária vai por extenso no certificado)."""
+    n = f"{h:g}".replace(".", ",")
+    return f"{n} hora" if h <= 1 else f"{n} horas"
+
+
+def _certificado_liberado(a: "Aula", p: "Presenca") -> Optional[str]:
+    """None se o certificado pode ser emitido; senão, o motivo (em português, para mostrar ao aluno)."""
+    if a.carga_horas is None:
+        return "O professor não informou a carga horária deste evento, então ele não emite certificado."
+    perm = _permanencia_min(p.registrado_em, p.saida_em)
+    situacao = _status_presenca(bool(a.exige_saida), a.permanencia_min, p.saida_em, perm)
+    if situacao == "Presente (sem saída)":
+        return "Você não registrou a saída deste evento, por isso o certificado não pode ser emitido. Procure o professor."
+    if situacao == "Permanência insuficiente":
+        return (f"Sua permanência ({_fmt_duracao(perm or 0)}) ficou abaixo do mínimo do evento "
+                f"({_fmt_duracao(a.permanencia_min or 0)}), por isso o certificado não pode ser emitido.")
+    return None
 
 
 @app.get("/api/aluno/presencas/{presenca_id}/pdf")
@@ -2410,6 +2523,56 @@ def comprovante_pdf(presenca_id: int, u: dict = Depends(so_aluno), db: Session =
         raise HTTPException(503, "A geração de PDF não está disponível no servidor. Avise a coordenação.")
     return Response(pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="comprovante-presenca-{p.id}.pdf"', "Cache-Control": "no-store"})
+
+
+@app.get("/api/aluno/presencas/{presenca_id}/certificado")
+def certificado_pdf(presenca_id: int, u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """Certificado de participação do próprio aluno. Só sai se o professor informou a carga horária e, quando o evento
+    exige saída, se a saída foi registrada com a permanência mínima."""
+    limitar_tentativas("cert:" + str(u["id"]), 30, 600)
+    row = db.execute(
+        select(Presenca, Aula, Professor.nome, Aluno.nome, Aluno.matricula, Curso.nome)
+        .select_from(Presenca).join(Aula, Aula.id == Presenca.aula_id)
+        .join(Professor, Professor.id == Aula.professor_id).join(Aluno, Aluno.id == Presenca.aluno_id)
+        .outerjoin(Curso, Curso.id == Aluno.curso_id)
+        .where(Presenca.id == presenca_id, Presenca.aluno_id == u["id"])).first()   # só a PRÓPRIA presença
+    if not row:
+        raise HTTPException(404, "Comprovante não encontrado.")
+    p, a, prof, nome, matricula, curso = row
+    motivo = _certificado_liberado(a, p)
+    if motivo:
+        raise HTTPException(409, motivo)
+    try:
+        pdf = gerar_pdf_certificado({
+            "nome": nome, "matricula": matricula, "curso": curso, "titulo": a.titulo, "tipo": a.tipo or "aula",
+            "disciplina": a.disciplina, "local_descricao": a.local_descricao, "professor": prof,
+            "evento_em": aware(a.aberta_em or p.registrado_em), "carga_horas": a.carga_horas,
+            "permanencia_min": _permanencia_min(p.registrado_em, p.saida_em) if a.exige_saida else None,
+            "codigo": f"C{p.id}-{assinatura_certificado(p, a)}", "emitido_em": utcnow(),
+            "site": PUBLIC_URL.split("://", 1)[-1] if PUBLIC_URL else None})
+    except ImportError:
+        raise HTTPException(503, "A geração de PDF não está disponível no servidor. Avise a coordenação.")
+    return Response(pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="certificado-{p.id}.pdf"', "Cache-Control": "no-store"})
+
+
+@app.get("/api/certificados/validar/{codigo}")
+def validar_certificado(codigo: str, request: Request, db: Session = Depends(get_db)):
+    """Conferência PÚBLICA do certificado (sem login, para quem recebeu o PDF). Só diz se o código é verdadeiro e devolve o
+    mínimo para conferir o documento: nome, evento, data e carga horária. Sem matrícula, e-mail ou outro dado pessoal.
+    O código tem 48 bits e as consultas são limitadas por IP, o que inviabiliza adivinhar."""
+    limitar_tentativas("certv:" + ip_cliente(request), 30, 600)
+    m = re.fullmatch(r"\s*C(\d{1,12})-([0-9A-Fa-f]{12})\s*", codigo or "")
+    if not m:
+        raise HTTPException(422, "Formato inválido. Digite o código do certificado, como C1042-9F3A7C21B4AA.")
+    row = db.execute(select(Presenca, Aula, Aluno.nome)
+                     .select_from(Presenca).join(Aula, Aula.id == Presenca.aula_id).join(Aluno, Aluno.id == Presenca.aluno_id)
+                     .where(Presenca.id == int(m.group(1)))).first()
+    if (not row or not hmac.compare_digest(assinatura_certificado(row[0], row[1]), m.group(2).upper())
+            or _certificado_liberado(row[1], row[0])):
+        return {"valido": False}
+    return {"valido": True, "nome": row[2], "evento": row[1].titulo, "data": iso(row[1].aberta_em or row[0].registrado_em),
+            "carga_horas": row[1].carga_horas}
 
 
 # ----------------- Anotações PRIVADAS do aluno (só ele vê) -----------------

@@ -101,6 +101,8 @@ NOMES = {
     # --- Funcionalidade 13: presença manual (lançada pelo professor) ---
     "_permanencia_min", "PresencaManualIn", "lancar_presenca_manual", "desfazer_presenca_manual",
     "_fmt_duracao", "_status_presenca", "registrar_saida",
+    # --- Funcionalidade 15: certificado de participação ---
+    "assinatura_certificado", "_horas_texto", "_certificado_liberado", "gerar_pdf_certificado", "certificado_pdf", "validar_certificado",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
