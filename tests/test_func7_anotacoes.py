@@ -127,13 +127,20 @@ def test_ct805_so_o_aluno_le_a_tabela_de_anotacoes():
     usam = sorted(f.name for f in arvore.body if isinstance(f, _ast.FunctionDef)
                   and any(isinstance(n, _ast.Name) and n.id == "NotaAluno" for n in _ast.walk(f)))
     permitidas = {"_nota_dict", "minhas_notas", "salvar_nota", "excluir_nota", "notas_pdf_todas", "nota_pdf", "_pdf_notas",
-                  "adm_aluno_excluir", "resetar_dados_de_teste"}      # esta só roda com RESET_BANCO ligado (apaga tudo)
+                  "adm_aluno_excluir", "resetar_dados_de_teste",     # esta só roda com RESET_BANCO ligado (apaga tudo)
+                  "_apagar_aluno",    # só apaga (usada pela coordenação ao excluir a conta)
+                  "meus_dados"}       # "baixar meus dados" (LGPD): rota do ALUNO, só as anotações dele (conferido abaixo)
     fora = [n for n in usam if n not in permitidas]
     assert fora == [], f"funções que tocam NotaAluno fora da lista aprovada: {fora}"
-    adm = next(f for f in arvore.body if isinstance(f, _ast.FunctionDef) and f.name == "adm_aluno_excluir")
-    leituras = [n for n in _ast.walk(adm) if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name) and n.func.id in ("select", "scalar")
-                and any(isinstance(m, _ast.Name) and m.id == "NotaAluno" for m in _ast.walk(n))]
-    assert leituras == [], "a coordenação só pode APAGAR anotações, nunca lê-las"
+    for nome in ("adm_aluno_excluir", "_apagar_aluno", "adm_lgpd", "adm_lgpd_pedido"):
+        adm = next(f for f in arvore.body if isinstance(f, _ast.FunctionDef) and f.name == nome)
+        leituras = [n for n in _ast.walk(adm) if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name) and n.func.id in ("select", "scalar", "scalars")
+                    and any(isinstance(m, _ast.Name) and m.id == "NotaAluno" for m in _ast.walk(n))]
+        assert leituras == [], f"{nome}: a coordenação só pode APAGAR anotações, nunca lê-las"
+    meus = next(f for f in arvore.body if isinstance(f, _ast.FunctionDef) and f.name == "meus_dados")
+    fonte = _ast.get_source_segment(APP.read_text(encoding="utf-8"), meus)
+    assert "Depends(so_aluno)" in fonte and "NotaAluno.aluno_id == al.id" in fonte and "al = db.get(Aluno, u[\"id\"])" in fonte, \
+        "meus_dados tem que ser só do aluno logado e ler só as anotações dele"
 
 
 # =====================================================================================================

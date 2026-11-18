@@ -8,10 +8,12 @@ Assim dá para rodar mesmo sem FastAPI/SQLAlchemy instalados. Limite conhecido: 
 painel) NÃO são executadas aqui; para elas o ideal é complementar com TestClient + SQLite quando as dependências existirem.
 """
 import ast
+import asyncio
 import base64
 import csv
 import hashlib
 import hmac
+import html
 import io
 import ipaddress
 import json
@@ -110,6 +112,13 @@ NOMES = {
     "_condicoes_do_aviso", "_planejar_aviso", "_limpo", "_texto_do_aviso", "_enviar_aviso", "AvisosIn", "meus_avisos",
     # --- Funcionalidade 18: app instalável (PWA) ---
     "MANIFESTO", "ASSET_RE", "CSP_PAGINA",
+    # --- Funcionalidade 19: LGPD (aceite, meus dados, pedidos do titular, retenção, /privacidade) ---
+    "LGPD_VERSAO", "LGPD_CONTROLADOR", "LGPD_ENCARREGADO_NOME", "LGPD_ENCARREGADO_EMAIL", "LGPD_EXIGIR_ACEITE",
+    "LGPD_RETENCAO_DIAS", "LGPD_RETENCAO_LOGS_DIAS", "LGPD_PRAZO_PEDIDO_DIAS", "LGPD_LOTE", "LGPD_CICLO_S",
+    "AceiteIn", "PedidoIn", "PedidoRespostaIn", "RetencaoIn", "LGPD_EXPORT_MAX",
+    "_aceite_vigente", "_exigir_aceite", "meu_aceite", "meus_dados", "_pedido_json", "meus_pedidos", "novo_pedido",
+    "_apagar_aluno", "aplicar_retencao", "_retencao_agendada", "_ciclo_retencao", "TIPOS_PEDIDO",
+    "adm_lgpd", "adm_lgpd_retencao", "adm_lgpd_pedido", "pagina_privacidade", "privacidade",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
@@ -120,7 +129,9 @@ ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MAS
               "EMAIL_PROVEDOR", "EMAIL_API_KEY", "EMAIL_REMETENTE", "EMAIL_REMETENTE_NOME", "SMTP_HOST", "SMTP_PORT",
               "SMTP_USUARIO", "SMTP_SENHA", "VERIFICAR_EMAIL", "CODIGO_EMAIL_MIN", "CODIGO_MAX_TENTATIVAS",
               "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP", "AULA_MAX_HORAS", "NOMINATIM_UA", "PUBLIC_URL", "QR_JANELA_S", "QR_JANELAS_ACEITAS",
-              "AVISO_EMAIL_MAX", "AVISO_EMAIL_HORA", "AVISO_EMAIL_PAUSA_S"]
+              "AVISO_EMAIL_MAX", "AVISO_EMAIL_HORA", "AVISO_EMAIL_PAUSA_S",
+              "LGPD_CONTROLADOR", "LGPD_ENCARREGADO_NOME", "LGPD_ENCARREGADO_EMAIL", "LGPD_EXIGIR_ACEITE", "LGPD_RETENCAO_DIAS",
+              "LGPD_RETENCAO_LOGS_DIAS"]
 
 
 def _compilar():
@@ -136,14 +147,14 @@ def _compilar():
                 corpo.append(n)
                 continue
         nomes = set()
-        if isinstance(n, (ast.FunctionDef, ast.ClassDef)):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             nomes = {n.name}
         elif isinstance(n, ast.Assign):
             nomes = {t.id for t in n.targets if isinstance(t, ast.Name)}
         elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
             nomes = {n.target.id}
         if nomes & NOMES:
-            if isinstance(n, ast.FunctionDef):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 n.decorator_list = []   # tira @app.post(...)
             corpo.append(n)
     mod = ast.Module(body=corpo, type_ignores=[])
@@ -358,7 +369,8 @@ class Modelo:
 
 
 class Aluno(Modelo):
-    id, nome, email, matricula, curso_id, periodo, status, senha_hash, avisos_email = (Col() for _ in range(9))
+    (id, nome, email, matricula, curso_id, periodo, status, senha_hash, avisos_email, aceite_privacidade_em,
+     aceite_privacidade_versao) = (Col() for _ in range(11))
     _padroes, _unicos = {"status": "ativo", "avisos_email": True}, ("email", "matricula")      # UNIQUE(matricula): NULL pode repetir
 
 
@@ -399,7 +411,7 @@ class Aula(Modelo):
 
 class Presenca(Modelo):
     (id, aula_id, aluno_id, latitude, longitude, distancia_m, precisao_m, device_id, fp_hash, ip, alertas,
-     registrado_em, manual, lancada_por, justificativa, saida_em, saida_distancia_m) = (Col() for _ in range(17))
+     registrado_em, manual, lancada_por, justificativa, saida_em, saida_distancia_m, anonimizada_em) = (Col() for _ in range(18))
     _padroes = {"manual": False}
     _unicos = (("aula_id", "aluno_id"), ("aula_id", "device_id"))        # uq_presenca_aula_aluno / uq_presenca_aula_device
     _carimbos = ("registrado_em",)
@@ -420,6 +432,12 @@ class NotaAluno(Modelo):
      atualizado_em) = (Col() for _ in range(10))
     _unicos = (("aluno_id", "presenca_id"),)                              # uq_nota_aluno_presenca
     _carimbos = ("criado_em", "atualizado_em")                            # default=utcnow no modelo real
+
+
+class PedidoTitular(Modelo):
+    id, aluno_id, tipo, mensagem, status, criado_em, resolvido_em, resolvido_por, resposta = (Col() for _ in range(9))
+    _padroes = {"status": "aberto"}
+    _carimbos = ("criado_em",)
 
 
 class Func:
@@ -531,7 +549,7 @@ class FakeDB:
     def __init__(self, tables=None):
         self.tables = tables if tables is not None else {Aluno: [], Professor: [], Curso: [], LogSeguranca: [],
                                                          MatriculasAutorizadas: [], CadastroPendente: [], Aula: [], Presenca: [],
-                                                         Tentativa: [], NotaAluno: []}
+                                                         Tentativa: [], NotaAluno: [], PedidoTitular: []}
         self.pending, self.antes_do_commit, self.apagar = [], None, []
         self.relogio = None
         self.fechada = False
@@ -747,8 +765,9 @@ EMAIL_PROF = "carlos.lima@unicerrado.edu.br"
 
 
 def novo_ns(**env):
-    base = {"SECRET_KEY": SEGREDO, "CHAVE_MASTER": CHAVE}
+    base = {"SECRET_KEY": SEGREDO, "CHAVE_MASTER": CHAVE, "LGPD_EXIGIR_ACEITE": "0"}     # os testes antigos não passam pelo aceite
     base.update(env)
+    base = {k: v for k, v in base.items() if v is not None}                          # env=None: deixa a variável sem valor (padrão do app)
     guardado = {k: os.environ.pop(k, None) for k in ENV_DO_APP}
     os.environ.update({k: str(v) for k, v in base.items()})
     try:
@@ -768,7 +787,7 @@ def novo_ns(**env):
             CadastroPendente=CadastroPendente,
             base64=base64, csv=csv, io=io, zipfile=zipfile, Aula=Aula, Presenca=Presenca, Tentativa=Tentativa,
             NotaAluno=NotaAluno, Aluno=Aluno, Professor=Professor, Curso=Curso, LogSeguranca=LogSeguranca,
-            MatriculasAutorizadas=MatriculasAutorizadas)
+            MatriculasAutorizadas=MatriculasAutorizadas, PedidoTitular=PedidoTitular, asyncio=asyncio, html=html)
         exec(CODIGO, ns)
     finally:
         for k in ENV_DO_APP:

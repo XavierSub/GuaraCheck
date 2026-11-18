@@ -654,10 +654,12 @@ def test_ct555_sem_reportlab_503(ch):
 
 
 def test_ct556_perfil_do_aluno(ch):
-    """CT-556 | /me devolve nome, matrícula, e-mail, curso, período e se recebe o aviso de chamada (sem senha nem CPF); conta removida | 404."""
+    """CT-556 | /me devolve nome, matrícula, e-mail, curso, período, se recebe o aviso de chamada e o estado do aceite de privacidade (sem senha nem CPF); conta removida | 404."""
     r = ch.perfil()
     assert r[0] == 200 and r[1] == {"nome": "Aluno 1", "matricula": ch.aluno.matricula, "email": ch.aluno.email,
-                                    "curso": "Gestão da TI", "periodo": 2, "avisos_email": True}
+                                    "curso": "Gestão da TI", "periodo": 2, "avisos_email": True,
+                                    "aceite_privacidade": False, "privacidade_exigida": False,      # a base de testes não exige o aceite
+                                    "privacidade_versao": ch.ns["LGPD_VERSAO"]}
     sem_curso = ch.novo_aluno(2, curso_id=None, periodo=None)
     assert ch.perfil(sem_curso)[1]["curso"] is None
     sess = ch.sessao()

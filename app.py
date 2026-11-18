@@ -5,10 +5,12 @@ Presença acadêmica por geolocalização (geofencing) - FastAPI + SQLAlchemy.
 Local:     python app.py            -> http://localhost:8000
 Produção:  uvicorn app:app --host 0.0.0.0 --port $PORT --workers 2
 """
+import asyncio
 import base64
 import csv
 import hashlib
 import hmac
+import html
 import io
 import ipaddress
 import json
@@ -216,6 +218,9 @@ class Aluno(Base):
     periodo: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)                 # 1 a 10
     status: Mapped[Optional[str]] = mapped_column(String(10), default="ativo")             # ativo | inativo (interno)
     avisos_email: Mapped[Optional[bool]] = mapped_column(Boolean, default=True)            # recebe o aviso quando abre chamada do seu curso/período
+    # LGPD: o aluno aceitou o aviso de privacidade (uso da localização) nesta versão do texto, neste momento; NULL = não aceitou
+    aceite_privacidade_em: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    aceite_privacidade_versao: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
     senha_hash: Mapped[str] = mapped_column(String(200))
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     # uma matrícula, uma conta: a trava é do banco (à prova de dois cadastros ao mesmo tempo); NULL das contas da V1 pode repetir
@@ -290,6 +295,8 @@ class Presenca(Base):
     justificativa: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     saida_em: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     saida_distancia_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # LGPD: quando a posição exata, o aparelho e o IP foram retirados (regra de retenção). A presença em si continua valendo.
+    anonimizada_em: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     __table_args__ = (
         UniqueConstraint("aula_id", "aluno_id", name="uq_presenca_aula_aluno"),
         UniqueConstraint("aula_id", "device_id", name="uq_presenca_aula_device"),
@@ -367,6 +374,22 @@ class LogSeguranca(Base):
     ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
 
+class PedidoTitular(Base):
+    """Pedido do aluno sobre os próprios dados (LGPD, art. 18): excluir a conta, corrigir ou pedir informação. A coordenação atende
+    ou recusa com uma resposta. aluno_id NÃO é chave estrangeira, de propósito: depois de atendido um pedido de exclusão, o
+    registro do pedido (sem texto, sem nome) fica como prova de que a solicitação foi atendida, e a conta já não existe mais."""
+    __tablename__ = "pedidos_titular"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    aluno_id: Mapped[int] = mapped_column(Integer, index=True)
+    tipo: Mapped[str] = mapped_column(String(12))                                 # exclusao | correcao | informacao
+    mensagem: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(10), default="aberto", index=True)  # aberto | atendido | recusado
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    resolvido_em: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolvido_por: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    resposta: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+
+
 class CadastroPendente(Base):
     """Cadastro que ainda espera o código enviado por e-mail. Nada é reservado (e-mail, matrícula) até o código ser
     confirmado: por isso ninguém consegue 'tomar' o e-mail ou a matrícula de outra pessoa só digitando."""
@@ -402,7 +425,8 @@ def migrar_esquema():
     novas = {
         "cursos": [("departamento", "VARCHAR(100)")],
         "alunos": [("curso_id", "INTEGER REFERENCES cursos (id)"), ("periodo", "INTEGER"),
-                   ("status", "VARCHAR(10) DEFAULT 'ativo'"), ("avisos_email", "BOOLEAN DEFAULT TRUE")],
+                   ("status", "VARCHAR(10) DEFAULT 'ativo'"), ("avisos_email", "BOOLEAN DEFAULT TRUE"),
+                   ("aceite_privacidade_em", "TIMESTAMP WITH TIME ZONE"), ("aceite_privacidade_versao", "VARCHAR(12)")],
         "professores": [("ativo", "BOOLEAN DEFAULT TRUE"), ("coordenacao", "BOOLEAN DEFAULT FALSE"),
                         ("aprovado", "BOOLEAN DEFAULT TRUE"),  # professores que já existem continuam autorizados
                         ("registro_funcional", "VARCHAR(30)"),
@@ -416,7 +440,8 @@ def migrar_esquema():
         "presencas": [("device_id", "VARCHAR(64)"), ("fp_hash", "VARCHAR(64)"),
                       ("ip", "VARCHAR(64)"), ("alertas", "VARCHAR(200)"),
                       ("manual", "BOOLEAN DEFAULT FALSE"), ("lancada_por", "INTEGER"), ("justificativa", "VARCHAR(200)"),
-                      ("saida_em", "TIMESTAMP WITH TIME ZONE"), ("saida_distancia_m", "FLOAT")],
+                      ("saida_em", "TIMESTAMP WITH TIME ZONE"), ("saida_distancia_m", "FLOAT"),
+                      ("anonimizada_em", "TIMESTAMP WITH TIME ZONE")],
     }
     insp = inspect(engine)
     for tabela, colunas in novas.items():
@@ -1416,7 +1441,13 @@ async def lifespan(_: FastAPI):
         semear_coordenacao_provisoria()  # depois da limpeza, para a conta nova não ser apagada
     except Exception as exc:
         print("Coordenação provisória não foi criada:", exc)
+    if not LGPD_ENCARREGADO_EMAIL:
+        print("AVISO: LGPD_ENCARREGADO_EMAIL não definido: a página /privacidade avisa que o contato do encarregado ainda não foi informado.")
+    # LGPD: apaga sozinho, uma vez por dia, a posição exata/aparelho/IP dos registros antigos (se algum prazo estiver ligado)
+    ciclo = asyncio.create_task(_ciclo_retencao()) if (LGPD_RETENCAO_DIAS or LGPD_RETENCAO_LOGS_DIAS) else None
     yield
+    if ciclo is not None:
+        ciclo.cancel()
 
 
 # /docs e /openapi.json desligados: não expõem o mapa da API (nem das rotas da coordenação)
@@ -2230,6 +2261,20 @@ def _int_env(nome: str, padrao: int, minimo: int, maximo: int) -> int:
 QR_JANELA_S = _int_env("QR_JANELA_S", 30, 10, 300)
 QR_JANELAS_ACEITAS = _int_env("QR_JANELAS_ACEITAS", 4, 1, 20)
 
+# LGPD (privacidade). Quem responde pelos dados, por quanto tempo a posição exata/aparelho/IP ficam guardados e se o aluno precisa
+# aceitar o aviso de privacidade antes de registrar presença. O texto de /privacidade é um modelo: a instituição deve revisá-lo com o
+# encarregado (DPO) e o jurídico antes do uso oficial (ver LGPD.md).
+LGPD_VERSAO = "2026-11"                    # mude quando o texto de /privacidade mudar de forma relevante: todos aceitam de novo
+LGPD_CONTROLADOR = os.getenv("LGPD_CONTROLADOR", "UniCerrado - Centro Universitário de Goiatuba").strip()[:160]
+LGPD_ENCARREGADO_NOME = os.getenv("LGPD_ENCARREGADO_NOME", "").strip()[:120]
+LGPD_ENCARREGADO_EMAIL = os.getenv("LGPD_ENCARREGADO_EMAIL", "").strip()[:160]
+LGPD_EXIGIR_ACEITE = os.getenv("LGPD_EXIGIR_ACEITE", "1").strip().lower() not in ("0", "false", "nao", "não", "off", "no")
+LGPD_RETENCAO_DIAS = _int_env("LGPD_RETENCAO_DIAS", 180, 0, 3650)            # posição exata, aparelho e IP das presenças; 0 = não apaga
+LGPD_RETENCAO_LOGS_DIAS = _int_env("LGPD_RETENCAO_LOGS_DIAS", 180, 0, 3650)  # IP nos registros de segurança; 0 = não apaga
+LGPD_PRAZO_PEDIDO_DIAS = 15                # prazo para responder um pedido do titular (LGPD, art. 19, II)
+LGPD_LOTE = 500                            # linhas por lote na limpeza (uma transação por lote: nunca trava o banco por muito tempo)
+LGPD_CICLO_S = 24 * 3600                   # a limpeza roda sozinha uma vez por dia (e 1 min depois de o servidor subir)
+
 
 def qr_token(aula_id: int, janela: int) -> str:
     base = f"qr|{aula_id}|{janela}"
@@ -2592,12 +2637,15 @@ def registrar_tentativa(db: Session, aula_id: int, aluno_id: int, motivo: str, d
 @app.get("/api/me")
 def meu_perfil(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
     """Dados do aluno para o comprovante (sem CPF: o sistema não coleta esse dado)."""
-    r = db.execute(select(Aluno.nome, Aluno.matricula, Aluno.email, Aluno.periodo, Aluno.avisos_email, Curso.nome.label("curso"))
+    r = db.execute(select(Aluno.nome, Aluno.matricula, Aluno.email, Aluno.periodo, Aluno.avisos_email,
+                          Aluno.aceite_privacidade_versao, Curso.nome.label("curso"))
                    .outerjoin(Curso, Curso.id == Aluno.curso_id).where(Aluno.id == u["id"])).first()
     if not r:
         raise HTTPException(404, "Aluno não encontrado.")
     return {"nome": r.nome, "matricula": r.matricula, "email": r.email, "curso": r.curso, "periodo": r.periodo,
-            "avisos_email": r.avisos_email is not False}
+            "avisos_email": r.avisos_email is not False,
+            "aceite_privacidade": _aceite_vigente(r.aceite_privacidade_versao),
+            "privacidade_exigida": LGPD_EXIGIR_ACEITE, "privacidade_versao": LGPD_VERSAO}
 
 
 @app.put("/api/me/avisos")
@@ -2609,6 +2657,339 @@ def meus_avisos(b: AvisosIn, u: dict = Depends(so_aluno), db: Session = Depends(
     al.avisos_email = b.receber
     db.commit()
     return {"avisos_email": b.receber}
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# LGPD: aceite do aviso de privacidade, "meus dados", pedidos do titular, retenção e a página /privacidade
+# ---------------------------------------------------------------------------------------------------------------------
+class AceiteIn(BaseModel):
+    aceitar: bool
+
+
+class PedidoIn(BaseModel):
+    tipo: Literal["exclusao", "correcao", "informacao"]
+    mensagem: Optional[str] = Field(None, max_length=500)
+
+
+class PedidoRespostaIn(BaseModel):
+    acao: Literal["atender", "recusar"]
+    resposta: Optional[str] = Field(None, max_length=300)
+
+
+class RetencaoIn(BaseModel):
+    simular: bool = True            # True = só conta o que seria apagado
+
+
+LGPD_EXPORT_MAX = 20_000            # linhas de cada tipo no "baixar meus dados"
+
+
+def _aceite_vigente(versao: Optional[str]) -> bool:
+    return versao == LGPD_VERSAO
+
+
+def _exigir_aceite(versao: Optional[str]):
+    """Registrar presença/saída usa a localização: sem o aceite do aviso de privacidade (versão atual) o servidor recusa.
+    Quem não quer aceitar pode pedir ao professor o lançamento manual da presença (que não usa a localização do aluno)."""
+    if LGPD_EXIGIR_ACEITE and not _aceite_vigente(versao):
+        raise HTTPException(403, "Antes de registrar presença, leia e aceite o aviso de privacidade (uso da sua localização). "
+                                 "Se preferir não aceitar, peça ao professor para lançar a sua presença manualmente.")
+
+
+@app.put("/api/me/privacidade")
+def meu_aceite(b: AceiteIn, request: Request, u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """O aluno aceita (ou revoga) o aviso de privacidade. A revogação vale daqui para a frente: bloqueia novos registros pelo app."""
+    al = db.get(Aluno, u["id"])
+    if not al:
+        raise HTTPException(404, "Aluno não encontrado.")
+    if b.aceitar:
+        al.aceite_privacidade_em, al.aceite_privacidade_versao = utcnow(), LGPD_VERSAO
+    else:
+        al.aceite_privacidade_em, al.aceite_privacidade_versao = None, None
+    log_seg(db, u["id"], "aceite_lgpd" if b.aceitar else "revogou_lgpd", f"versao={LGPD_VERSAO}", ip_cliente(request))
+    db.commit()
+    return {"aceite_privacidade": b.aceitar, "versao": LGPD_VERSAO}
+
+
+@app.get("/api/me/dados")
+def meus_dados(request: Request, u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """Direito de acesso e portabilidade (LGPD, art. 18): TUDO o que o sistema guarda sobre o aluno, em um arquivo JSON."""
+    al = db.get(Aluno, u["id"])
+    if not al:
+        raise HTTPException(404, "Aluno não encontrado.")
+    curso = db.scalar(select(Curso.nome).where(Curso.id == al.curso_id)) if al.curso_id else None
+    pres = db.scalars(select(Presenca).where(Presenca.aluno_id == al.id).order_by(Presenca.id).limit(LGPD_EXPORT_MAX)).all()
+    tent = db.scalars(select(Tentativa).where(Tentativa.aluno_id == al.id).order_by(Tentativa.id).limit(LGPD_EXPORT_MAX)).all()
+    notas = db.scalars(select(NotaAluno).where(NotaAluno.aluno_id == al.id).order_by(NotaAluno.id).limit(LGPD_EXPORT_MAX)).all()
+    pedidos = db.scalars(select(PedidoTitular).where(PedidoTitular.aluno_id == al.id).order_by(PedidoTitular.id)).all()
+    ids_aulas = list({p.aula_id for p in pres} | {t.aula_id for t in tent})
+    aulas = {a.id: a for a in db.scalars(select(Aula).where(Aula.id.in_(ids_aulas))).all()} if ids_aulas else {}
+    titulo = lambda i: aulas[i].titulo if i in aulas else None            # noqa: E731
+    dados = {
+        "gerado_em": iso(utcnow()),
+        "controlador": LGPD_CONTROLADOR,
+        "titular": {"nome": al.nome, "email": al.email, "matricula": al.matricula, "curso": curso, "periodo": al.periodo,
+                    "situacao": al.status or "ativo", "avisos_por_email": al.avisos_email is not False,
+                    "aceite_privacidade_em": iso(al.aceite_privacidade_em), "aceite_privacidade_versao": al.aceite_privacidade_versao},
+        "presencas": [{"evento": titulo(p.aula_id), "entrada_em": iso(p.registrado_em), "saida_em": iso(p.saida_em),
+                       "latitude": p.latitude, "longitude": p.longitude, "distancia_ate_a_sala_m": p.distancia_m,
+                       "precisao_gps_m": p.precisao_m, "ip": p.ip, "identificador_do_aparelho": p.device_id,
+                       "impressao_digital_do_navegador": p.fp_hash, "alertas_antifraude": p.alertas,
+                       "lancada_pelo_professor": bool(p.manual), "justificativa": p.justificativa,
+                       "posicao_exata_retirada_em": iso(p.anonimizada_em)} for p in pres],
+        "tentativas_recusadas": [{"evento": titulo(t.aula_id), "motivo": t.motivo,
+                                  # "Aparelho já usado por <nome>" cita OUTRA pessoa: não sai no arquivo do titular
+                                  "detalhe": None if t.motivo == "aparelho_repetido" else t.detalhe,
+                                  "latitude": t.latitude, "longitude": t.longitude, "distancia_ate_a_sala_m": t.distancia_m,
+                                  "ip": t.ip, "vezes": t.quantidade, "ultima_em": iso(t.ultima_em)} for t in tent],
+        "anotacoes_privadas": [{"evento": n.evento_titulo, "evento_em": iso(n.evento_em), "texto": n.texto,
+                                "criada_em": iso(n.criado_em), "atualizada_em": iso(n.atualizado_em)} for n in notas],
+        "pedidos_lgpd": [_pedido_json(p) for p in pedidos],
+    }
+    log_seg(db, u["id"], "dados_titular", "baixou os próprios dados", ip_cliente(request))
+    db.commit()
+    return Response(content=json.dumps(dados, ensure_ascii=False, indent=2), media_type="application/json",
+                    headers={"Content-Disposition": 'attachment; filename="meus-dados-guaracheck.json"',
+                             "Cache-Control": "no-store"})
+
+
+def _pedido_json(p: "PedidoTitular", agora: Optional[datetime] = None) -> dict:
+    d = {"id": p.id, "tipo": p.tipo, "mensagem": p.mensagem, "status": p.status, "criado_em": iso(p.criado_em),
+         "resolvido_em": iso(p.resolvido_em), "resposta": p.resposta}
+    if p.status == "aberto" and agora is not None:
+        dias = max((agora - aware(p.criado_em)).days, 0)
+        d["dias_aberto"], d["atrasado"] = dias, dias > LGPD_PRAZO_PEDIDO_DIAS
+    return d
+
+
+@app.get("/api/me/pedidos")
+def meus_pedidos(u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    rows = db.scalars(select(PedidoTitular).where(PedidoTitular.aluno_id == u["id"])
+                      .order_by(PedidoTitular.id.desc()).limit(20)).all()
+    return {"prazo_dias": LGPD_PRAZO_PEDIDO_DIAS, "itens": [_pedido_json(p) for p in rows]}
+
+
+@app.post("/api/me/pedidos")
+def novo_pedido(b: PedidoIn, request: Request, u: dict = Depends(so_aluno), db: Session = Depends(get_db)):
+    """Pedido do titular (excluir a conta, corrigir dados, pedir informação). A coordenação responde em até 15 dias. Um pedido
+    em aberto por tipo: como são só três tipos, ninguém enche a fila da coordenação."""
+    abertos = db.scalars(select(PedidoTitular).where(PedidoTitular.aluno_id == u["id"], PedidoTitular.status == "aberto")).all()
+    if any(p.tipo == b.tipo for p in abertos):
+        raise HTTPException(409, "Você já tem um pedido desse tipo em andamento. Aguarde a resposta da coordenação.")
+    msg = (b.mensagem or "").strip()
+    db.add(PedidoTitular(aluno_id=u["id"], tipo=b.tipo, mensagem=msg or None, status="aberto"))
+    log_seg(db, u["id"], "pedido_lgpd", f"tipo={b.tipo}", ip_cliente(request))
+    db.commit()
+    return {"ok": True, "prazo_dias": LGPD_PRAZO_PEDIDO_DIAS}
+
+
+def _apagar_aluno(db: Session, a: "Aluno") -> str:
+    """Apaga a conta do aluno e tudo o que é dele (presenças, tentativas, anotações) e libera a matrícula. SEM commit: quem
+    chama decide (e registra o log). Devolve a matrícula, para o log."""
+    aluno_id, matricula = a.id, a.matricula
+    db.execute(delete(Tentativa).where(Tentativa.aluno_id == aluno_id))
+    db.execute(delete(Presenca).where(Presenca.aluno_id == aluno_id))
+    db.execute(delete(NotaAluno).where(NotaAluno.aluno_id == aluno_id))  # só apaga: a coordenação nunca lê as anotações
+    if matricula:  # libera a matrícula na lista autorizada para um novo cadastro
+        db.execute(update(MatriculasAutorizadas).where(MatriculasAutorizadas.matricula == matricula)
+                   .values(utilizada=False))
+    db.execute(delete(Aluno).where(Aluno.id == aluno_id))
+    return matricula
+
+
+def aplicar_retencao(db: Session, simular: bool = False, agora: Optional[datetime] = None) -> dict:
+    """Regra de retenção (LGPD, art. 15 e 16): depois de LGPD_RETENCAO_DIAS, as presenças perdem a posição exata do aluno (fica o
+    ponto da sala), o identificador e a impressão digital do aparelho e o IP; as tentativas recusadas perdem posição, IP e
+    detalhe; os registros de segurança perdem o IP depois de LGPD_RETENCAO_LOGS_DIAS. A PRESENÇA em si (quem, qual evento, quando,
+    quanto ficou, a distância até a sala) continua valendo para o comprovante e o certificado. Pode rodar quantas vezes quiser:
+    o que já foi retirado não volta a casar com a condição. Com simular=True só conta."""
+    agora = agora or utcnow()
+    res = {"simulado": simular, "presencas": 0, "tentativas": 0, "logs": 0, "corte_presencas": None, "corte_logs": None}
+
+    def passar(modelo, cond, ajustar) -> int:
+        if simular:
+            return _contar(db, modelo, *cond)
+        total, feitos = 0, set()
+        while True:
+            lote = db.scalars(select(modelo).where(*cond).order_by(modelo.id).limit(LGPD_LOTE)).all()
+            if not lote:
+                return total
+            if feitos & {r.id for r in lote}:             # uma linha que não saiu da condição: para, em vez de girar para sempre
+                return total
+            ajustar(lote)
+            db.commit()                                   # um lote por transação
+            total += len(lote)
+            feitos |= {r.id for r in lote}
+
+    if LGPD_RETENCAO_DIAS:
+        corte = agora - timedelta(days=LGPD_RETENCAO_DIAS)
+        res["corte_presencas"] = iso(corte)
+
+        def tirar_da_presenca(lote):
+            aulas = {a.id: a for a in db.scalars(select(Aula).where(Aula.id.in_(list({p.aula_id for p in lote})))).all()}
+            for p in lote:
+                sala = aulas.get(p.aula_id)
+                p.latitude, p.longitude = (sala.latitude, sala.longitude) if sala is not None else (0.0, 0.0)   # o ponto da sala, não o do aluno
+                p.precisao_m = p.device_id = p.fp_hash = p.ip = None
+                p.anonimizada_em = agora
+
+        def tirar_da_tentativa(lote):
+            for t in lote:
+                t.latitude = t.longitude = t.distancia_m = t.precisao_m = t.ip = t.detalhe = None
+
+        res["presencas"] = passar(Presenca, (Presenca.registrado_em < corte, Presenca.anonimizada_em.is_(None)), tirar_da_presenca)
+        res["tentativas"] = passar(Tentativa, (Tentativa.ultima_em < corte, or_(
+            Tentativa.latitude.is_not(None), Tentativa.longitude.is_not(None), Tentativa.ip.is_not(None),
+            Tentativa.detalhe.is_not(None))), tirar_da_tentativa)
+    if LGPD_RETENCAO_LOGS_DIAS:
+        corte_l = agora - timedelta(days=LGPD_RETENCAO_LOGS_DIAS)
+        res["corte_logs"] = iso(corte_l)
+
+        def tirar_do_log(lote):
+            for r in lote:
+                r.ip = None
+
+        res["logs"] = passar(LogSeguranca, (LogSeguranca.data_hora < corte_l, LogSeguranca.ip.is_not(None)), tirar_do_log)
+    if not simular and (res["presencas"] or res["tentativas"] or res["logs"]):
+        log_seg(db, None, "retencao_lgpd", f"presencas={res['presencas']}; tentativas={res['tentativas']}; logs={res['logs']}",
+                None, commit=True)
+    return res
+
+
+def _retencao_agendada() -> dict:
+    with SessionLocal() as db:
+        return aplicar_retencao(db)
+
+
+async def _ciclo_retencao():
+    """Roda a limpeza uma vez por dia, em segundo plano (o servidor sobe e atende primeiro: a 1ª rodada é 1 minuto depois).
+    Um erro nunca derruba o servidor nem para o ciclo."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await asyncio.to_thread(_retencao_agendada)
+        except Exception as exc:                                  # noqa: BLE001
+            print("Retenção LGPD falhou:", exc)
+        await asyncio.sleep(LGPD_CICLO_S)
+
+
+def pagina_privacidade() -> str:
+    """Aviso de privacidade público (sem login). É um MODELO que descreve o que o sistema faz de verdade; a instituição revisa
+    o texto com o encarregado e o jurídico. Os dados da instituição e os prazos vêm das variáveis LGPD_*."""
+    h = html.escape
+    email = LGPD_ENCARREGADO_EMAIL
+    if email and re.fullmatch(r"[^@\s<>\"'&]+@[^@\s<>\"'&]+", email):
+        contato = f'<a href="mailto:{h(email)}">{h(email)}</a>'
+    elif email:
+        contato = h(email)
+    else:
+        contato = "<b>(a instituição ainda não informou o contato do encarregado)</b>"
+    encarregado = (h(LGPD_ENCARREGADO_NOME) + ", " if LGPD_ENCARREGADO_NOME else "") + contato
+    if LGPD_RETENCAO_DIAS:
+        guarda = (f"Depois de <b>{LGPD_RETENCAO_DIAS} dias</b> o sistema apaga, de cada presença, a posição exata (passa a valer o ponto da "
+                  "sala), o identificador e a impressão digital do aparelho e o IP, e apaga a posição, o IP e os detalhes das tentativas "
+                  "recusadas. Ficam a presença (você, o evento, a data, a hora e a permanência) e a distância até a sala, que servem "
+                  "ao comprovante e ao certificado.")
+    else:
+        guarda = ("Hoje a instituição <b>não</b> apaga automaticamente a posição exata, o aparelho e o IP das presenças antigas. "
+                  "Você pode pedir a exclusão a qualquer momento (veja “Seus direitos”).")
+    guarda_logs = (f"O IP dos registros de segurança (ações da coordenação, entradas e exclusões) é apagado depois de {LGPD_RETENCAO_LOGS_DIAS} dias. "
+                   if LGPD_RETENCAO_LOGS_DIAS else "")
+    vpn = ("<li>Para detectar VPN e proxy, o seu IP é consultado no serviço proxycheck.io no momento do registro.</li>" if PROXYCHECK_KEY else "")
+    return f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacidade · Guará Check</title>
+<meta name="theme-color" content="#2f7d40">
+<link rel="icon" type="image/png" href="/assets/favicon.png">
+<style>
+:root{{color-scheme:light}}
+body{{margin:0;background:#f5f7ed;color:#182830;font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}}
+header{{background:#2f7d40;color:#fff;padding:18px 16px}}
+header a{{color:#fff}}
+main{{max-width:760px;margin:0 auto;padding:20px 16px 56px}}
+h1{{margin:0;font-size:1.5rem}}
+h2{{margin:2rem 0 .4rem;font-size:1.15rem;color:#23589a}}
+ul{{padding-left:1.2rem}} li{{margin:.3rem 0}}
+.nota{{background:#e3ecf8;border-radius:12px;padding:12px 16px}}
+a{{color:#23589a}} footer{{color:#5b6b64;font-size:.9rem;margin-top:2.5rem}}
+</style>
+</head>
+<body>
+<header><div style="max-width:760px;margin:0 auto"><h1>Aviso de privacidade do Guará Check</h1>
+<a href="/">← Voltar ao Guará Check</a></div></header>
+<main>
+<p class="nota">Versão <b>{h(LGPD_VERSAO)}</b>. Este texto explica, em linguagem simples, quais dados o Guará Check usa, para quê, por quanto
+tempo e como você pode controlar tudo isso, de acordo com a Lei Geral de Proteção de Dados (Lei 13.709/2018).</p>
+
+<h2>Quem é o responsável</h2>
+<p>O controlador dos dados é <b>{h(LGPD_CONTROLADOR)}</b>. Dúvidas e pedidos sobre seus dados: encarregado pelo tratamento de dados
+pessoais, {encarregado}.</p>
+
+<h2>Que dados usamos</h2>
+<ul>
+<li><b>Cadastro:</b> nome, e-mail institucional, matrícula, curso e período. A senha é guardada só como código embaralhado (hash), nunca
+em texto.</li>
+<li><b>Presença:</b> a data e a hora, <b>a sua localização no instante em que você toca em Registrar presença ou saída</b>, a distância até a
+sala, a precisão do GPS, o endereço IP, um identificador do aparelho (gerado pelo navegador) e uma impressão digital do navegador, usados só
+para detectar o mesmo celular em contas diferentes e outras fraudes, e os alertas do antifraude.</li>
+<li><b>Tentativas recusadas</b> (fora do raio, GPS suspeito, aparelho repetido): o motivo, a posição, o IP e a distância.</li>
+<li><b>Anotações privadas</b> que você escreve sobre os eventos: só você as vê.</li>
+<li><b>Registros de segurança:</b> ações da coordenação e acessos de administração, com data e IP.</li>
+<li><b>E-mail:</b> o código de confirmação do cadastro e, se você não desligar, o aviso de que uma chamada foi aberta no seu curso.</li>
+</ul>
+
+<h2>Sua localização</h2>
+<p>O navegador sempre pede a sua permissão. Enquanto a tela do aluno está aberta, a posição é lida <b>só no seu aparelho</b>, para liberar ou
+bloquear o botão de presença. Ela <b>só é enviada ao servidor quando você toca em Registrar presença ou saída</b>. O Guará Check não acompanha
+você em segundo plano nem fora da página.</p>
+
+<h2>Para que usamos e em que base legal</h2>
+<ul>
+<li>Registrar e comprovar a sua presença em aulas e eventos, e emitir comprovantes e certificados.</li>
+<li>Evitar fraudes (registrar presença por outra pessoa ou fora do local).</li>
+<li>Avisar sobre chamadas abertas, se você deixar ligado.</li>
+</ul>
+<p>Bases legais (art. 7º da LGPD): <b>consentimento</b> para usar a sua localização, que você dá ao aceitar este aviso e pode retirar quando quiser;
+e, para o registro de frequência e a prevenção a fraudes, as atividades acadêmicas da instituição e o seu legítimo interesse (incisos V e IX).</p>
+<p><b>Se você não aceitar</b>, não consegue registrar presença pelo aplicativo. Nesse caso, peça ao professor para lançar a sua presença
+manualmente, o que não usa a sua localização.</p>
+
+<h2>Quem vê os seus dados</h2>
+<ul>
+<li>O <b>professor</b> do evento vê nome, matrícula, e-mail, curso, horário, distância até a sala e alertas, <b>mas não as coordenadas nem o IP</b>.</li>
+<li>A <b>coordenação</b> vê os cadastros, as presenças e os registros de segurança. Ninguém, nem a coordenação, lê as suas anotações privadas.</li>
+<li>Serviços usados no funcionamento, na medida do necessário: hospedagem do sistema, envio de e-mail e os mapas do painel do professor.</li>
+{vpn}
+</ul>
+<p>Não vendemos nem usamos os seus dados para publicidade. O site não usa cookies de rastreamento. Ele guarda no seu navegador apenas a sessão
+de login, o identificador do aparelho e preferências simples (como esconder a dica de instalar o app).</p>
+
+<h2>Por quanto tempo guardamos</h2>
+<p>{guarda} {guarda_logs}As anotações ficam até você apagá-las. Quando uma conta é excluída, as presenças, as tentativas e as anotações dela
+são excluídas junto.</p>
+
+<h2>Seus direitos</h2>
+<p>Você pode, a qualquer momento: confirmar que tratamos seus dados; <b>acessar e baixar</b> uma cópia deles; pedir <b>correção</b>;
+pedir a <b>exclusão</b> da conta e dos dados; saber com quem eles são compartilhados; e <b>revogar o aceite</b> deste aviso.</p>
+<p>No aplicativo, entre como aluno e abra <b>Meus dados e privacidade</b>: lá você baixa seus dados, revoga o aceite e faz pedidos de exclusão,
+correção ou informação. A coordenação responde em até <b>{LGPD_PRAZO_PEDIDO_DIAS} dias</b>. Se preferir, fale com o encarregado: {encarregado}.</p>
+<p>A exclusão apaga também os seus comprovantes. Se for excluir depois de um evento com certificado, baixe antes os PDF de que precisar.</p>
+
+<h2>Segurança</h2>
+<p>O acesso é protegido por senha e por conexão segura (HTTPS), há limite de tentativas de login e as ações administrativas ficam registradas.
+Nenhum sistema é 100% imune, e qualquer incidente que ofereça risco será comunicado conforme a lei.</p>
+
+<footer>Se este aviso mudar de forma relevante, pediremos o seu aceite de novo. Versão {h(LGPD_VERSAO)}.</footer>
+</main>
+</body>
+</html>"""
+
+
+@app.get("/privacidade")
+def privacidade():
+    return Response(content=pagina_privacidade(), media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/aluno/presencas")
@@ -2864,7 +3245,8 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
         raise HTTPException(404, "Aula não encontrada.")
     if not aula_aberta(aula):  # encerrada pelo professor, pela coordenação ou por passar do prazo (AULA_MAX_HORAS)
         raise HTTPException(409, "Esta chamada já foi encerrada.")
-    al = db.execute(select(Aluno.curso_id, Aluno.periodo, Aluno.status).where(Aluno.id == u["id"])).first()
+    al = db.execute(select(Aluno.curso_id, Aluno.periodo, Aluno.status, Aluno.aceite_privacidade_versao)
+                    .where(Aluno.id == u["id"])).first()
     if not al:
         raise HTTPException(404, "Conta de aluno não encontrada. Entre novamente.")
     if al.status == "inativo":
@@ -2879,6 +3261,7 @@ def registrar_presenca(aula_id: int, b: PresencaIn, request: Request,
     ja = db.execute(select(Presenca.distancia_m).where(Presenca.aula_id == aula_id, Presenca.aluno_id == u["id"])).first()
     if ja is not None:
         return {"ok": True, "ja_registrado": True, "distancia_m": round(ja.distancia_m or 0, 1), "aula": aula.titulo}
+    _exigir_aceite(al.aceite_privacidade_versao)       # a partir daqui a localização do aluno vai ser usada
     if aula.qr_rotativo and not qr_token_valido(aula.id, b.qr):
         raise HTTPException(403, "Este evento exige ler o QR code do telão, que muda a cada poucos segundos. "
                                  "Leia o QR de novo e registre logo em seguida.")
@@ -2975,6 +3358,7 @@ def registrar_saida(aula_id: int, b: PresencaIn, request: Request,
         raise HTTPException(409, "Esta chamada já foi encerrada. Procure o professor para registrar a sua saída.")
     if p.manual:
         raise HTTPException(409, "Sua presença foi lançada pelo professor, então a saída também é lançada por ele. Procure o professor.")
+    _exigir_aceite(db.scalar(select(Aluno.aceite_privacidade_versao).where(Aluno.id == u["id"])))
     if p.device_id and b.device_id != p.device_id:
         raise HTTPException(403, "Registre a saída no mesmo celular em que registrou a entrada.")
     if b.precisao_m is not None and b.precisao_m > PRECISAO_MAX_M:
@@ -3433,17 +3817,78 @@ def adm_aluno_excluir(aluno_id: int, request: Request, u: dict = Depends(so_admi
     a = db.get(Aluno, aluno_id)
     if not a:
         raise HTTPException(404, "Aluno não encontrado.")
-    db.execute(delete(Tentativa).where(Tentativa.aluno_id == aluno_id))
-    db.execute(delete(Presenca).where(Presenca.aluno_id == aluno_id))
-    db.execute(delete(NotaAluno).where(NotaAluno.aluno_id == aluno_id))  # só apaga: a coordenação nunca lê as anotações
-    if a.matricula:  # libera a matrícula na lista autorizada para um novo cadastro
-        db.execute(update(MatriculasAutorizadas).where(MatriculasAutorizadas.matricula == a.matricula)
-                   .values(utilizada=False))
-    db.execute(delete(Aluno).where(Aluno.id == aluno_id))
-    log_seg(db, u["id"], "excluir_aluno", f"aluno={aluno_id}; matricula={a.matricula}", ip_cliente(request))
+    matricula = _apagar_aluno(db, a)
+    log_seg(db, u["id"], "excluir_aluno", f"aluno={aluno_id}; matricula={matricula}", ip_cliente(request))
     db.commit()
     esquecer_contas()
     return {"ok": True}
+
+
+# ---- LGPD, painel da coordenação (depois de so_admin: o Depends precisa dele já definido) ----
+TIPOS_PEDIDO = {"exclusao": "Excluir minha conta e meus dados", "correcao": "Corrigir meus dados", "informacao": "Receber informações sobre meus dados"}
+
+
+@app.get("/api/admin/lgpd")
+def adm_lgpd(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+    """Painel da coordenação: pedidos dos alunos, quantos aceitaram o aviso e o que a limpeza automática apagaria agora."""
+    agora = utcnow()
+    abertos = db.scalars(select(PedidoTitular).where(PedidoTitular.status == "aberto").order_by(PedidoTitular.id)).all()
+    antigos = db.scalars(select(PedidoTitular).where(PedidoTitular.status != "aberto")
+                         .order_by(PedidoTitular.id.desc()).limit(30)).all()
+    ids = list({p.aluno_id for p in abertos + antigos})
+    alunos = {a.id: a for a in db.scalars(select(Aluno).where(Aluno.id.in_(ids))).all()} if ids else {}
+
+    def com_aluno(p):
+        d = _pedido_json(p, agora)
+        a = alunos.get(p.aluno_id)
+        d["aluno"] = {"id": a.id, "nome": a.nome, "email": a.email, "matricula": a.matricula} if a else None
+        return d
+    return {
+        "config": {"versao": LGPD_VERSAO, "controlador": LGPD_CONTROLADOR, "encarregado_nome": LGPD_ENCARREGADO_NOME,
+                   "encarregado_email": LGPD_ENCARREGADO_EMAIL, "exigir_aceite": LGPD_EXIGIR_ACEITE,
+                   "retencao_dias": LGPD_RETENCAO_DIAS, "retencao_logs_dias": LGPD_RETENCAO_LOGS_DIAS,
+                   "prazo_dias": LGPD_PRAZO_PEDIDO_DIAS},
+        "aceites": {"alunos": _contar(db, Aluno), "aceitaram": _contar(db, Aluno, Aluno.aceite_privacidade_versao == LGPD_VERSAO)},
+        "retencao": aplicar_retencao(db, simular=True, agora=agora),
+        "pedidos": [com_aluno(p) for p in abertos], "respondidos": [com_aluno(p) for p in antigos],
+    }
+
+
+@app.post("/api/admin/lgpd/retencao")
+def adm_lgpd_retencao(b: RetencaoIn, request: Request, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+    """Roda a limpeza agora (ou só conta, com simular=true). A limpeza automática faz o mesmo uma vez por dia."""
+    r = aplicar_retencao(db, simular=b.simular)
+    if not b.simular:
+        log_seg(db, u["id"], "retencao_manual", f"presencas={r['presencas']}; tentativas={r['tentativas']}; logs={r['logs']}",
+                ip_cliente(request), commit=True)
+    return r
+
+
+@app.put("/api/admin/lgpd/pedidos/{pedido_id}")
+def adm_lgpd_pedido(pedido_id: int, b: PedidoRespostaIn, request: Request, u: dict = Depends(so_admin),
+                    db: Session = Depends(get_db)):
+    """Atende ou recusa um pedido do aluno. Atender um pedido de EXCLUSÃO apaga a conta e tudo o que é dela (o pedido fica
+    registrado, sem texto e sem nome, como prova de que foi atendido). Recusar exige uma explicação para o aluno."""
+    p = db.get(PedidoTitular, pedido_id)
+    if not p:
+        raise HTTPException(404, "Pedido não encontrado.")
+    if p.status != "aberto":
+        raise HTTPException(409, "Este pedido já foi respondido.")
+    resposta = (b.resposta or "").strip()
+    if b.acao == "recusar" and len(resposta) < 5:
+        raise HTTPException(422, "Explique ao aluno por que o pedido foi recusado.")
+    if b.acao == "atender" and p.tipo == "exclusao":
+        al = db.get(Aluno, p.aluno_id)
+        if al is not None:
+            _apagar_aluno(db, al)
+        p.mensagem = None
+        resposta = resposta or "Sua conta e os dados dela foram excluídos."
+    p.status = "atendido" if b.acao == "atender" else "recusado"
+    p.resolvido_em, p.resolvido_por, p.resposta = utcnow(), u["id"], resposta[:300] or None
+    log_seg(db, u["id"], "resp_pedido_lgpd", f"pedido={p.id}; tipo={p.tipo}; {p.status}", ip_cliente(request))
+    db.commit()
+    esquecer_contas()
+    return {"ok": True, "status": p.status}
 
 
 class MinhaSenhaIn(BaseModel):

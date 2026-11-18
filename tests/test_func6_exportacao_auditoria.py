@@ -679,9 +679,13 @@ def _apaga(fn, modelos):
 
 def test_ct690_toda_exclusao_de_cadastro_ou_evento_e_auditada():
     """CT-690 | Rotas que apagam Aula, Professor, Aluno ou Matrícula autorizada | todas chamam log_seg (trilha completa)."""
+    # _apagar_aluno é só o corte no banco, sem commit nem log, de propósito: quem a CHAMA é que audita (conferido logo abaixo)
     sem_log = [f.name for f in _funcoes_do_app()
-               if _apaga(f, {"Aula", "Professor", "Aluno", "MatriculasAutorizadas"}) and not _chama(f, "log_seg")]
+               if f.name != "_apagar_aluno" and (_apaga(f, {"Aula", "Professor", "Aluno", "MatriculasAutorizadas"}) or _chama(f, "_apagar_aluno"))
+               and not _chama(f, "log_seg")]
     assert sem_log == [], f"exclusões sem registro de auditoria: {sem_log}"
+    quem_chama = sorted(f.name for f in _funcoes_do_app() if _chama(f, "_apagar_aluno"))
+    assert quem_chama == ["adm_aluno_excluir", "adm_lgpd_pedido"], f"_apagar_aluno tem novos chamadores (revise a auditoria): {quem_chama}"
 
 
 def test_ct691_toda_exportacao_de_dados_e_auditada():
