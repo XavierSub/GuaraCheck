@@ -270,6 +270,10 @@ details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}#
 .filtros{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin:6px 0 14px}.filtros label{margin:0;font-size:13px}.filtros input,.filtros select{width:auto;min-width:150px}
 label.chk{display:flex;gap:8px;align-items:center;margin:8px 0;font-size:14px}label.chk input{width:auto}
 details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
+.lgpd-card{border:1px solid var(--line);border-left:5px solid var(--pri);border-radius:14px;background:var(--azulbg);padding:14px 16px;margin:12px 0 0}.lgpd-card h3{margin:0 0 6px;font-size:17px}.lgpd-card p{margin:6px 0;font-size:14.5px}.lgpd-card .acoes{margin-top:10px}
+.lgpd-ped{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0;background:var(--card)}.lgpd-ped p{margin:4px 0;font-size:14.5px}.lgpd-ped .acoes{align-items:flex-end}.lgpd-ped textarea{min-height:64px}
+.rodape-priv{max-width:var(--larg);margin:0 auto;padding:6px 20px 30px;text-align:center;font-size:13.5px;color:var(--mut)}.rodape-priv a{color:var(--azul);display:inline-flex;align-items:center;min-height:44px;padding:0 14px}
+.lnk-bloco{display:inline-flex;align-items:center;min-height:44px;color:var(--azul)}
 @media(max-width:860px){.entrada{grid-template-columns:1fr;gap:20px}.geo{display:none}.hero p{margin-bottom:6px}.fio-topo{display:none}}
 @media(max-width:560px){.row input,.row select{min-width:100%}.atabs button{padding:7px 13px}.grid,.grid2{grid-template-columns:1fr}.count{font-size:38px}main{padding:20px 16px 40px}.topo{padding:10px 16px}.marcas{gap:10px;padding:4px 0}.marcas img{height:34px}.marcas img.curso{height:46px}.produto{gap:8px;padding:4px 0}.produto .p-icone{height:36px}.produto .p-nome{height:20px}.lema{display:none}.card{padding:18px}.faixa{min-height:150px;padding:18px 16px;gap:8px;border-radius:18px;margin-bottom:18px}.faixa h1{font-size:24px}.faixa p{font-size:14px}.faixa-chips{margin-top:10px}.faixa-chips span{font-size:12px;padding:4px 10px}.faixa-art{top:50%;height:150px;transform:translateY(-50%)}.faixa-tec{-webkit-mask-image:linear-gradient(90deg,transparent 46%,#000 72%);mask-image:linear-gradient(90deg,transparent 46%,#000 72%)}.faixa-txt{max-width:58%}}
 </style>
@@ -504,6 +508,12 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
   <h2>Aulas com chamada aberta</h2>
   <p class="mut" id="aluno-info">O navegador vai pedir permissão para usar sua localização. O botão Registrar Presença só libera quando você está dentro da área da aula. Use o seu próprio celular.</p>
   <div class="msg" id="msg-aluno" hidden></div>
+  <div class="lgpd-card" id="lgpd-aceite" role="region" aria-labelledby="lgpd-aceite-t" hidden>
+    <h3 id="lgpd-aceite-t">Antes de registrar presença: aviso de privacidade</h3>
+    <p>Para conferir que você está no local do evento, o Guará Check usa a localização do seu celular. A posição é lida só no seu aparelho e <b>só é enviada ao servidor quando você toca em Registrar presença</b> (ou saída). Os dados detalhados (posição exata, aparelho e IP) são apagados depois de um tempo, e você pode baixar os seus dados ou pedir a exclusão quando quiser.</p>
+    <p><a class="lnk-bloco" href="/privacidade" target="_blank" rel="noopener">Ler o aviso de privacidade completo</a></p>
+    <div class="acoes"><button class="btn" id="lgpd-aceitar" type="button">Li e aceito</button></div>
+  </div>
   <div class="inst" id="instalar" role="region" aria-label="Instalar o aplicativo" hidden>
     <p id="instalar-txt"></p>
     <button class="btn" id="instalar-btn" type="button">Instalar o app</button>
@@ -528,6 +538,30 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
   </div>
   <div class="acoes"><button class="btn alt" id="notas-pdf-todas" type="button" hidden>Baixar todas as anotações (PDF)</button></div>
   <div id="notas"></div>
+
+  <details class="cola" id="lgpd-box">
+    <summary>Meus dados e privacidade</summary>
+    <p class="mut">Seus dados servem só para registrar a presença e emitir o comprovante e o certificado. Use os botões abaixo para exercer os seus direitos.</p>
+    <p><a class="lnk-bloco" href="/privacidade" target="_blank" rel="noopener">Ler o aviso de privacidade completo</a></p>
+    <div class="msg" id="msg-lgpd" hidden></div>
+    <p class="mut" id="lgpd-estado"></p>
+    <div class="acoes">
+      <button class="btn alt" id="lgpd-baixar" type="button">Baixar meus dados (JSON)</button>
+      <button class="btn alt" id="lgpd-troca" type="button" disabled>Retirar o aceite da localização</button>
+    </div>
+    <h3 style="margin-top:18px">Fazer um pedido sobre os meus dados</h3>
+    <p class="mut">A coordenação responde em até <span id="lgpd-prazo">15</span> dias. <b>Excluir a conta apaga também os seus comprovantes, anotações e presenças</b>, e não dá para desfazer.</p>
+    <label for="lgpd-tipo">O que você precisa?</label>
+    <select id="lgpd-tipo">
+      <option value="informacao">Saber mais sobre os meus dados</option>
+      <option value="correcao">Corrigir um dado meu</option>
+      <option value="exclusao">Excluir a minha conta e os meus dados</option>
+    </select>
+    <label for="lgpd-msg">Detalhes do pedido (opcional)</label>
+    <textarea id="lgpd-msg" maxlength="500" placeholder="Conte o que precisa. Não escreva senhas."></textarea>
+    <div class="acoes"><button class="btn" id="lgpd-enviar" type="button">Enviar pedido</button></div>
+    <div id="lgpd-pedidos"></div>
+  </details>
 </section>
 
 <!-- ============ PROFESSOR ============ -->
@@ -680,12 +714,13 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
   <div class="atabs" id="adm-tabs">
     <button data-t="resumo" class="on">Resumo</button><button data-t="estatisticas">Estatísticas</button><button data-t="cursos">Cursos</button>
     <button data-t="professores">Professores</button><button data-t="alunos">Alunos</button>
-    <button data-t="matriculas">Matrículas</button><button data-t="pedidos">Pedidos de senha</button><button data-t="aulas">Aulas</button><button data-t="alertas">Alertas</button><button data-t="auditoria">Auditoria</button>
+    <button data-t="matriculas">Matrículas</button><button data-t="pedidos">Pedidos de senha</button><button data-t="aulas">Aulas</button><button data-t="alertas">Alertas</button><button data-t="lgpd">LGPD</button><button data-t="auditoria">Auditoria</button>
   </div>
   <div class="msg" id="msg-adm" hidden></div>
   <div class="card" id="adm-corpo"></div>
 </section>
 </main>
+<p class="rodape-priv" id="rodape-priv"><a href="/privacidade" target="_blank" rel="noopener">Aviso de privacidade</a></p>
 
 <div id="mostrar" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="m-titulo">
   <div class="overlay-box" tabindex="-1">
@@ -729,7 +764,7 @@ const SITE = {
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const S = {token:null, user:null, perfil:'aluno', modo:'login', pend:null, aula:null, rows:[], ultimo:0, hist:[], poll:null, timer:null,
-           map:null, marker:null, circle:null, geo:{pos:null, erro:null, id:null}, cursos:[], cfg:{dominio_aluno:'alunos.unicerrado.edu.br', dominios_professor:['unicerrado.edu.br'], matricula_regex:'^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$', coordenacao_aberta:false}, tick:0, buscaN:0, lugares:null};
+           map:null, marker:null, circle:null, geo:{pos:null, erro:null, id:null}, lgpdPendente:null, cursos:[], cfg:{dominio_aluno:'alunos.unicerrado.edu.br', dominios_professor:['unicerrado.edu.br'], matricula_regex:'^[A-Za-z0-9][A-Za-z0-9._/-]{3,29}$', coordenacao_aberta:false}, tick:0, buscaN:0, lugares:null};
 const store = {get:k=>{try{return localStorage.getItem(k)}catch{return null}}, set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}, del:k=>{try{localStorage.removeItem(k)}catch{}}};
 
 const KT = 'gc_token', KU = 'gc_user';
@@ -966,14 +1001,14 @@ function iniciar(){
   if (S.user.perfil !== 'aluno') limparLinkAula();   // o link do QR code é para aluno
   if (S.user.perfil === 'admin'){ Object.assign(ADM, {aba:'resumo', pag:1, q:'', curso:0}); show('admin'); admRender(); } // sempre abre no Resumo (onde fica o aviso da senha provisória)
   else if (S.user.perfil === 'aluno'){
-    show('aluno'); instalarMostrar(); carregarAulas(); carregarComprovantes(); carregarNotas();
+    show('aluno'); limparLgpd(); instalarMostrar(); carregarAulas(); carregarComprovantes(); carregarNotas();
     $('#aluno-info').textContent = (S.user.curso ? S.user.curso + ' · ' : '') + (S.user.periodo ? S.user.periodo + 'º período · ' : '') + 'Use o seu próprio celular e fique dentro da sala. O navegador vai pedir permissão para usar a localização.';
     agendarAtualizacao(true);
   } else { show('prof'); initMapa(); recarregarHist(true); }
 }
 function sair(aviso){
   clearInterval(S.timer); clearInterval(S.poll); geoDesligar(); S.geo.pos = S.geo.erro = null;
-  S.token = S.user = S.aula = null; store.del(KT); store.del(KU); limparNotas(); limparBusca();
+  S.token = S.user = S.aula = null; store.del(KT); store.del(KU); limparNotas(); limparBusca(); limparLgpd();
   $('#painel').hidden = true; S.modo = 'login'; S.pend = null; qrLimpar();
   fecharMostrar(); renderAuth(); show('auth'); if (aviso) msg($('#msg-auth'), aviso, 'err');
 }
@@ -1057,7 +1092,7 @@ function aplicarLinkAula(l){
 /* Posição ao vivo + trava do botão: fora do raio da aula o botão fica cinza e desabilitado. O navegador só avisa;
    quem decide é o servidor, que recalcula a distância no check-in e responde 400 fora do raio. */
 function geoLigar(){
-  if (S.geo.id != null || document.hidden) return;
+  if (S.geo.id != null || document.hidden || S.lgpdPendente !== false) return;   // sem o aceite do aviso, nem pede a localização ao navegador
   if (!navigator.geolocation){ S.geo.erro = 'Seu navegador não suporta geolocalização.'; return atualizarZona(); }
   S.geo.id = navigator.geolocation.watchPosition(
     p => { S.geo.pos = {lat:p.coords.latitude, lon:p.coords.longitude, acc:p.coords.accuracy, ts:p.timestamp}; S.geo.erro = null; atualizarZona(); },
@@ -1076,7 +1111,8 @@ function atualizarZona(){
     const g = S.geo, z = b.parentElement.querySelector('.zona');
     const saida = b.dataset.modo === 'saida';
     let liberar = false, rot = saida ? 'Registrar saída' : 'Registrar Presença', txt = '', cls = '';
-    if (!saida && b.dataset.qr === '1' && !(S.qrCodigo && S.qrCodigo.aula === +b.dataset.id)){
+    if (S.lgpdPendente === true){ rot = 'Aceite o aviso de privacidade'; txt = 'Para registrar presença, leia e aceite o aviso de privacidade (cartão no alto da página).'; }
+    else if (!saida && b.dataset.qr === '1' && !(S.qrCodigo && S.qrCodigo.aula === +b.dataset.id)){
       rot = 'Leia o QR code do telão'; txt = 'Este evento exige ler o QR code que o professor mostra no telão (ele muda a cada poucos segundos). Aponte a câmera do celular para ele.';
     } else if (g.erro){ rot = 'Localização indisponível'; txt = g.erro; cls = 'longe'; }
     else if (!g.pos){ rot = 'Obtendo localização…'; txt = 'Permita o acesso à localização quando o navegador perguntar.'; }
@@ -1119,7 +1155,69 @@ $('#aulas').onclick = async e => {
   } catch (x) {
     if (/QR code/.test(x.message) && S.qrCodigo && S.qrCodigo.aula === +b.dataset.id) S.qrCodigo = null;   // venceu ou foi recusado: precisa ler o QR de novo
     msg(m, x.message, 'err'); delete b.dataset.ocupado; atualizarZona();
+    if (/aviso de privacidade/i.test(x.message)) carregarComprovantes();   // o aceite mudou em outro aparelho: mostra o cartão
   }
+};
+
+/* LGPD: o aluno lê e aceita o aviso de privacidade antes do primeiro registro (o servidor também exige). Enquanto não aceita, o app
+   nem pede a localização ao navegador. S.lgpdPendente: null = ainda não sei, true = falta aceitar, false = pode registrar. */
+function lgpdAtualizar(me){
+  const pend = !!(me && me.privacidade_exigida && !me.aceite_privacidade);
+  S.lgpdPendente = pend; $('#lgpd-aceite').hidden = !pend;
+  const est = $('#lgpd-estado'), tr = $('#lgpd-troca');
+  if (!me){ est.textContent = ''; tr.disabled = true; }
+  else if (!me.privacidade_exigida){ est.textContent = 'Neste momento a instituição não exige o aceite do aviso para registrar presença.'; tr.disabled = true; tr.textContent = 'Retirar o aceite da localização'; }
+  else if (me.aceite_privacidade){ est.textContent = `Você aceitou o aviso de privacidade (versão ${me.privacidade_versao || ''}). Se retirar o aceite, não consegue registrar presença pelo aplicativo até aceitar de novo; o professor ainda pode lançar a sua presença.`; tr.disabled = false; tr.dataset.aceitar = '0'; tr.textContent = 'Retirar o aceite da localização'; }
+  else { est.textContent = 'Você ainda não aceitou o aviso de privacidade, então não consegue registrar presença pelo aplicativo.'; tr.disabled = false; tr.dataset.aceitar = '1'; tr.textContent = 'Aceitar o aviso de privacidade'; }
+  if (pend) geoDesligar(); else if ($('#aulas button[data-id]')) geoLigar();
+  atualizarZona();
+}
+function limparLgpd(){   // ao entrar e ao sair: nada do aluno anterior fica na tela
+  S.lgpdPendente = null; $('#lgpd-aceite').hidden = true; $('#lgpd-estado').textContent = ''; $('#lgpd-troca').disabled = true;
+  $('#lgpd-pedidos').innerHTML = ''; $('#lgpd-msg').value = ''; $('#lgpd-tipo').value = 'informacao'; msg($('#msg-lgpd'), ''); $('#lgpd-box').open = false;
+}
+async function lgpdDefinir(aceitar, btn, el){
+  btn.disabled = true; msg(el, '');
+  try {
+    const r = await api('/me/privacidade', {method:'PUT', body:{aceitar}});
+    const me = Object.assign({privacidade_exigida:true}, S.me, {aceite_privacidade:r.aceite_privacidade, privacidade_versao:r.versao});
+    if (S.me) Object.assign(S.me, {aceite_privacidade:r.aceite_privacidade, privacidade_versao:r.versao});
+    lgpdAtualizar(me);
+    msg(el, aceitar ? 'Aviso aceito. Agora você já pode registrar presença.' : 'Aceite retirado. Você não consegue registrar presença pelo aplicativo até aceitar de novo; o professor ainda pode lançar a sua presença.', 'ok');
+  } catch (x) { msg(el, x.message, 'err'); }
+  finally { btn.disabled = false; }
+}
+$('#lgpd-aceitar').onclick = e => lgpdDefinir(true, e.currentTarget, $('#msg-aluno'));
+$('#lgpd-troca').onclick = e => {
+  const b = e.currentTarget, aceitar = b.dataset.aceitar === '1';
+  if (!aceitar && !confirm('Retirar o aceite? Você não vai conseguir registrar presença pelo aplicativo até aceitar de novo.')) return;
+  lgpdDefinir(aceitar, b, $('#msg-lgpd'));
+};
+$('#lgpd-baixar').onclick = e => baixarPdfDe('/api/me/dados', 'meus-dados-guaracheck.json', e.currentTarget, $('#msg-lgpd'), 'Preparando…');
+const PEDIDO_TIPO = {exclusao:'Excluir a minha conta e os meus dados', correcao:'Corrigir um dado meu', informacao:'Saber mais sobre os meus dados'};
+const PEDIDO_SIT = {aberto:'Em andamento', atendido:'Atendido', recusado:'Recusado'};
+async function lgpdPedidos(){
+  const box = $('#lgpd-pedidos');
+  try {
+    const r = await api('/me/pedidos');
+    $('#lgpd-prazo').textContent = r.prazo_dias;
+    box.innerHTML = r.itens.length ? '<h3 style="margin-top:18px">Meus pedidos</h3>' + r.itens.map(p => `<div class="lgpd-ped">
+      <p><b>${esc(PEDIDO_TIPO[p.tipo] || p.tipo)}</b> <span class="chip ${p.status === 'aberto' ? 'azul' : p.status === 'atendido' ? '' : 'cinza'}">${esc(PEDIDO_SIT[p.status] || p.status)}</span></p>
+      <p class="mut">Enviado em ${dh(p.criado_em)}${p.resolvido_em ? ' · respondido em ' + dh(p.resolvido_em) : ''}</p>
+      ${p.mensagem ? `<p>${esc(p.mensagem)}</p>` : ''}${p.resposta ? `<p><b>Resposta da coordenação:</b> ${esc(p.resposta)}</p>` : ''}</div>`).join('') : '';
+  } catch (x) { box.innerHTML = ''; msg($('#msg-lgpd'), x.message, 'err'); }
+}
+$('#lgpd-box').addEventListener('toggle', e => { if (e.target.open) lgpdPedidos(); });
+$('#lgpd-enviar').onclick = async e => {
+  const b = e.currentTarget, m = $('#msg-lgpd'), tipo = $('#lgpd-tipo').value, mensagem = $('#lgpd-msg').value.trim();
+  if (tipo === 'exclusao' && !confirm('Pedir a exclusão da sua conta? Quando a coordenação atender, a sua conta, os comprovantes, as anotações e as presenças serão apagados, e isso não pode ser desfeito.')) return;
+  b.disabled = true; msg(m, '');
+  try {
+    const r = await api('/me/pedidos', {method:'POST', body:{tipo, mensagem:mensagem || null}});
+    $('#lgpd-msg').value = ''; await lgpdPedidos();
+    msg(m, `Pedido enviado. A coordenação responde em até ${r.prazo_dias} dias.`, 'ok');
+  } catch (x) { msg(m, x.message, 'err'); }
+  finally { b.disabled = false; }
 };
 
 /* PDF do comprovante: o servidor gera (com o código de validação do evento e a autenticação) e o navegador baixa. */
@@ -1160,11 +1258,11 @@ async function carregarComprovantes(destacar){
   const box = $('#comprov');
   try {
     const [me, l] = await Promise.all([api('/me'), api('/aluno/presencas')]);
-    S.me = me; S.comp = l; S.compPag = 1; S.compMais = l.length >= COMP_PAG;
+    S.me = me; S.comp = l; S.compPag = 1; S.compMais = l.length >= COMP_PAG; lgpdAtualizar(me);
     $('#avisos-email').checked = me.avisos_email !== false; $('#avisos-email').disabled = false;
     renderComprovantes(destacar);
     if (destacar) box.scrollIntoView({behavior:'smooth', block:'start'});
-  } catch (x) { box.innerHTML = `<div class="msg err">${esc(x.message)}</div>`; }
+  } catch (x) { box.innerHTML = `<div class="msg err">${esc(x.message)}</div>`; if (S.lgpdPendente === null) lgpdAtualizar(null); }   // sem resposta do /me: o servidor continua exigindo o aceite
 }
 $('#avisos-email').onchange = async e => {
   const cx = e.target, quer = cx.checked, m = $('#msg-aluno'); cx.disabled = true; msg(m, '');
@@ -1821,7 +1919,10 @@ const ACAO = {exportar_chamada:'Exportou chamada (CSV)', excluir_aula:'Excluiu a
   pedido_senha:'Pediu nova senha', login_admin:'Login da coordenação', login_admin_falha:'Falha de login da coordenação', cadastro_professor:'Professor se cadastrou', criar_professor:'Coordenação criou professor',
   autorizar_professor:'Autorizou professor', recusar_professor:'Recusou cadastro de professor', excluir_professor:'Excluiu professor', criar_coordenacao:'Criou conta da coordenação', professor_coordenacao:'Mudou papel na coordenação', professor_ativo:'Ativou/desativou professor', criar_curso:'Criou curso', curso_ativo:'Ativou/desativou curso', editar_aluno:'Editou aluno',
   excluir_aluno:'Excluiu aluno', redefinir_senha:'Redefiniu senha', trocar_senha_admin:'Coordenação trocou a própria senha', importar_matriculas:'Importou matrículas', excluir_matricula:'Excluiu matrícula autorizada',
-  exportar_estatisticas:'Exportou estatísticas (XLSX)', presenca_manual:'Professor lançou presença manual', desfazer_presenca_manual:'Professor desfez presença manual'};
+  exportar_estatisticas:'Exportou estatísticas (XLSX)', presenca_manual:'Professor lançou presença manual', desfazer_presenca_manual:'Professor desfez presença manual',
+  aceite_lgpd:'Aluno aceitou o aviso de privacidade', revogou_lgpd:'Aluno retirou o aceite do aviso', dados_titular:'Aluno baixou os próprios dados', pedido_lgpd:'Aluno fez um pedido sobre os dados',
+  resp_pedido_lgpd:'Coordenação respondeu a um pedido (LGPD)', retencao_lgpd:'Limpeza automática de dados antigos', retencao_manual:'Coordenação rodou a limpeza de dados antigos'};
+const PEDIDO_TIPO_ADM = {exclusao:'Excluir conta e dados', correcao:'Corrigir dado', informacao:'Pedir informação'};
 const ADM_ABAS = {
   async resumo(){
     const r = await api('/admin/resumo');
@@ -1921,6 +2022,31 @@ const ADM_ABAS = {
     return `<p class="mut">Quem clicou em "Esqueci minha senha" (e acertou e-mail e matrícula/registro). Defina uma senha provisória e avise a pessoa; ela pode ser trocada depois.</p>` +
       tb(['Quando','Perfil','Quem','Situação',''], l.map(p => `<tr><td>${dh(p.data_hora)}</td><td>${p.perfil === 'aluno' ? 'Aluno' : 'Professor'}</td><td class="warn">${esc(p.info)}</td><td>${p.atendido ? 'Atendido' : 'Pendente'}</td>
         <td>${p.atendido || !p.usuario_id ? '' : `<button class="link" data-act="senha" data-perfil="${esc(p.perfil)}" data-id="${p.usuario_id}">Definir senha provisória</button>`}</td></tr>`));
+  },
+  async lgpd(){
+    const r = await api('/admin/lgpd'), c = r.config, ac = r.aceites, rt = r.retencao;
+    const semEnc = c.encarregado_email ? '' : '<div class="msg err">O e-mail do encarregado pelo tratamento de dados (variável LGPD_ENCARREGADO_EMAIL) ainda não foi informado. Sem ele, o aviso de privacidade não diz aos alunos a quem pedir os dados.</div>';
+    const semAceite = c.exigir_aceite ? '' : '<div class="msg">O aceite do aviso está DESLIGADO (LGPD_EXIGIR_ACEITE): os alunos registram presença sem aceitar o aviso.</div>';
+    const tiles = [['Alunos que aceitaram o aviso', `${ac.aceitaram} de ${ac.alunos}`], ['Pedidos em aberto', r.pedidos.length], ['Prazo para responder', c.prazo_dias + ' dias']];
+    const reten = c.retencao_dias || c.retencao_logs_dias
+      ? `<p class="mut">${c.retencao_dias ? `Presenças e tentativas com mais de <b>${c.retencao_dias} dias</b> perdem a posição exata, o aparelho e o IP.` : 'A limpeza das presenças e tentativas está DESLIGADA.'} ${c.retencao_logs_dias ? `Os registros de segurança perdem o IP depois de <b>${c.retencao_logs_dias} dias</b>.` : 'A limpeza do IP dos registros de segurança está DESLIGADA.'} A limpeza roda sozinha uma vez por dia.</p>
+         <p>Se a limpeza rodasse agora, ela alcançaria <b>${rt.presencas}</b> presença(s), <b>${rt.tentativas}</b> tentativa(s) e <b>${rt.logs}</b> registro(s) de segurança.</p>
+         <div class="acoes"><button class="btn alt" data-act="lgpd-sim">Atualizar a contagem</button><button class="btn alt" data-act="lgpd-ret"${rt.presencas + rt.tentativas + rt.logs ? '' : ' disabled'}>Rodar a limpeza agora</button></div>`
+      : '<p class="mut">A limpeza automática está DESLIGADA (LGPD_RETENCAO_DIAS e LGPD_RETENCAO_LOGS_DIAS valem 0): os dados detalhados ficam guardados até alguém excluí-los.</p>';
+    const aberto = p => `<div class="lgpd-ped"><p><b>${esc(PEDIDO_TIPO_ADM[p.tipo] || p.tipo)}</b> · ${p.aluno ? `${esc(p.aluno.nome)} (${esc(p.aluno.email)}${p.aluno.matricula ? ', matrícula ' + esc(p.aluno.matricula) : ''})` : '<span class="mut">conta já excluída</span>'}</p>
+      <p class="mut">Enviado em ${dh(p.criado_em)} · aberto há ${p.dias_aberto} dia(s)${p.atrasado ? ` · <b class="warn">fora do prazo de ${c.prazo_dias} dias</b>` : ''}</p>
+      ${p.mensagem ? `<p>${esc(p.mensagem)}</p>` : ''}
+      <label for="lg-r-${p.id}">Resposta ao aluno ${p.tipo === 'exclusao' ? '(opcional)' : '(obrigatória para recusar)'}</label>
+      <textarea id="lg-r-${p.id}" maxlength="300"></textarea>
+      <div class="acoes"><button class="btn" data-act="lgpd-ped" data-id="${p.id}" data-v="atender" data-tipo="${esc(p.tipo)}" data-t="${esc(p.aluno ? p.aluno.nome : '')}">Atender</button>
+        <button class="btn alt" data-act="lgpd-ped" data-id="${p.id}" data-v="recusar" data-tipo="${esc(p.tipo)}" data-t="${esc(p.aluno ? p.aluno.nome : '')}">Recusar</button></div></div>`;
+    return semEnc + semAceite + `<div class="stats">${tiles.map(([k, v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
+      <h3 style="margin-top:16px">Pedidos dos alunos</h3>
+      <p class="mut">Atender um pedido de exclusão apaga a conta do aluno, as presenças, os comprovantes e as anotações dele. Não pode ser desfeito.</p>`
+      + (r.pedidos.length ? r.pedidos.map(aberto).join('') : '<p class="mut">Nenhum pedido em aberto.</p>')
+      + `<h3 style="margin-top:16px">Pedidos já respondidos</h3>` + tb(['Pedido','Aluno','Situação','Respondido em','Resposta'], r.respondidos.map(p => `<tr><td>${esc(PEDIDO_TIPO_ADM[p.tipo] || p.tipo)}</td><td>${p.aluno ? esc(p.aluno.nome) : '—'}</td><td>${esc(PEDIDO_SIT[p.status] || p.status)}</td><td>${dh(p.resolvido_em)}</td><td>${esc(p.resposta || '')}</td></tr>`))
+      + `<h3 style="margin-top:16px">Limpeza de dados antigos</h3>` + reten
+      + `<p class="mut" style="margin-top:14px">Aviso de privacidade (versão ${esc(c.versao)}), controlador: ${esc(c.controlador)}${c.encarregado_nome ? ', encarregado(a): ' + esc(c.encarregado_nome) : ''}. <a href="/privacidade" target="_blank" rel="noopener">Abrir o aviso</a></p>`;
   },
   async auditoria(){
     const l = await api('/admin/auditoria');
@@ -2027,6 +2153,21 @@ $('#adm-corpo').onclick = async e => {
     else if (act === 'busca'){ ADM.q = $('#adm-q').value.trim(); ADM.curso = +$('#adm-curso').value; ADM.pag = 1; }
     else if (act === 'busca-mat'){ ADM.q = $('#adm-q').value.trim(); ADM.pag = 1; }
     else if (act === 'pag') ADM.pag = Math.max(1, ADM.pag + +v);
+    else if (act === 'lgpd-sim'){ /* só recarrega a aba */ }
+    else if (act === 'lgpd-ret'){
+      if (!confirm('Rodar a limpeza agora? A posição exata, o aparelho e o IP das presenças e tentativas antigas serão apagados, e isso não pode ser desfeito.')) return;
+      b.disabled = true;
+      const r = await api('/admin/lgpd/retencao', {method:'POST', body:{simular:false}});
+      await admRender(); return msg(m, `Limpeza feita: ${r.presencas} presença(s), ${r.tentativas} tentativa(s) e ${r.logs} registro(s) de segurança.`, 'ok');
+    }
+    else if (act === 'lgpd-ped'){
+      const atender = v === 'atender', resp = ($('#lg-r-' + id).value || '').trim();
+      if (!atender && resp.length < 5) return msg(m, 'Para recusar, explique ao aluno o motivo (pelo menos 5 letras).', 'err');
+      if (atender && b.dataset.tipo === 'exclusao' && !confirm(`Atender o pedido de exclusão${t ? ' de "' + t + '"' : ''}? A conta, as presenças, os comprovantes e as anotações serão apagados, e isso não pode ser desfeito.`)) return;
+      b.disabled = true;
+      await api(`/admin/lgpd/pedidos/${id}`, {method:'PUT', body:{acao:v, resposta:resp || null}});
+      await admRender(); return msg(m, atender ? 'Pedido atendido.' : 'Pedido recusado. O aluno vê a sua resposta.', 'ok');
+    }
     else if (act === 'est-ok') ADM.est = {de:$('#est-de').value, ate:$('#est-ate').value, curso:+$('#est-curso').value};
     else if (act === 'est-xlsx'){
       const qs = new URLSearchParams({de:b.dataset.de, ate:b.dataset.ate}); if (+b.dataset.curso) qs.set('curso_id', b.dataset.curso);
