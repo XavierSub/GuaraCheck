@@ -1554,12 +1554,34 @@ $('#form-aula').onsubmit = async e => {
 /* ---------------- Professor: painel em tempo real ---------------- */
 /* Resultado do aviso por e-mail pedido ao abrir a chamada (só vem na resposta de quem pediu; ao reabrir pelo histórico some). */
 function avisoEmail(av){
-  const el = $('#p-aviso');
+  const el = $('#p-aviso'); clearTimeout(S.avisoT);
   if (!av) { el.hidden = true; el.textContent = ''; el.classList.remove('warn'); return; }
   el.hidden = false; el.classList.toggle('warn', !av.enviado);
   el.textContent = av.enviado
     ? `Aviso por e-mail em envio para ${av.destinatarios} ${av.destinatarios === 1 ? 'aluno' : 'alunos'}. Leva alguns minutos e para sozinho se você encerrar a chamada.`
     : 'Aviso por e-mail NÃO enviado: ' + av.motivo;
+  if (av.enviado) avisoAcompanhar(S.aula && S.aula.id, 0);
+}
+/* O envio roda depois da resposta; quando termina, o servidor guarda o resultado. O painel pergunta de 6 em 6 s (até ~15 min) e troca
+   o "em envio" pelo que aconteceu de verdade: quantos receberam e, se algo falhou, o motivo (chave, remetente, IP bloqueado no provedor...). */
+function avisoResultadoTexto(d){
+  const quem = x => `${x} ${x === 1 ? 'aluno' : 'alunos'}`, n = d.enviados || 0, f = d.falhas || 0;
+  if (d.parou === 'público acima do limite') return {warn:true, t:'Aviso por e-mail NÃO enviado: o público passou do limite durante o envio.'};
+  if (!f && d.parou === 'chamada encerrada') return {warn:false, t:`Aviso por e-mail interrompido porque a chamada foi encerrada: ${quem(n)} receberam.`};
+  if (!f) return {warn:false, t:`Aviso por e-mail enviado para ${quem(n)}.`};
+  const cab = n ? `Aviso por e-mail: ${quem(n)} receberam, mas ${f} ${f === 1 ? 'envio falhou' : 'envios falharam'}` : 'Aviso por e-mail NÃO chegou a ninguém';
+  return {warn:true, t: cab + (d.erro ? `: ${d.erro}.` : '.') + (n ? '' : ' Avise a coordenação: no Resumo dela há o botão "Enviar e-mail de teste".')};
+}
+function avisoAcompanhar(id, tentativa){
+  clearTimeout(S.avisoT);
+  S.avisoT = setTimeout(async () => {
+    if (!S.aula || S.aula.id !== id) return;
+    let d = null; try { d = await api(`/aulas/${id}/aviso`); } catch {}
+    if (!S.aula || S.aula.id !== id) return;   // o professor abriu outra chamada enquanto isso
+    if (!d || !d.fim){ if (tentativa < 150) avisoAcompanhar(id, tentativa + 1); return; }
+    const r = avisoResultadoTexto(d), el = $('#p-aviso');
+    el.hidden = false; el.classList.toggle('warn', r.warn); el.textContent = r.t;
+  }, tentativa ? 6000 : 4000);
 }
 function abrirAula(a){
   S.aula = a; S.rows = []; S.ultimo = 0;
@@ -1935,6 +1957,7 @@ const ADM_ABAS = {
     const cardSenha = `<h3 style="margin-top:16px">Trocar minha senha</h3><div class="row"><input id="ms-atual" type="password" autocomplete="current-password" placeholder="Senha atual"><input id="ms-nova" type="password" autocomplete="new-password" placeholder="Nova senha (mín. 8)"><input id="ms-nova2" type="password" autocomplete="new-password" placeholder="Repita a nova senha"><button class="btn" data-act="minha-senha">Trocar senha</button></div>`;
     return prov + (r.senha_provisoria ? cardSenha : '') + ver + aviso + aut + pend + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aguardando autorização',r.professores_pendentes || 0],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
       <h3 style="margin-top:16px">Alunos por curso</h3>` + tb(['Curso','Alunos'], r.por_curso.map(c => `<tr><td>${esc(c.curso)}</td><td>${c.alunos}</td></tr>`)) +
+      `<h3 style="margin-top:16px">Envio de e-mail</h3><p class="mut">Manda um e-mail de teste para conferir se o código de confirmação e o aviso de chamada saem. Se falhar, a mensagem diz o motivo (chave, remetente, IP bloqueado no Brevo...).</p><div class="row"><input id="em-teste" type="email" autocomplete="email" aria-label="E-mail que vai receber o teste" placeholder="E-mail que vai receber o teste" value="${esc((S.user && S.user.email) || '')}"><button class="btn alt" data-act="email-teste">Enviar e-mail de teste</button></div>` +
       `<h3 style="margin-top:16px">Proteção contra VPN</h3><p class="mut">Confere se o servidor enxerga o seu IP corretamente e se a verificação de VPN está ativa.</p><button class="btn alt" data-act="vpn-test">Testar proteção contra VPN</button>` + (r.senha_provisoria ? '' : cardSenha);
   },
   async estatisticas(){
@@ -2084,6 +2107,13 @@ $('#adm-corpo').onclick = async e => {
       await admRender(); return msg(m, 'Conta criada. Informe a senha provisória ao professor.', 'ok');
     }
     else if (act === 'prof-del'){ if (!confirm(`Excluir o professor "${t}", as ${n} aula(s) dele e todas as presenças dessas aulas? Não pode ser desfeito.`)) return; await api(`/admin/professores/${id}`, {method:'DELETE'}); }
+    else if (act === 'email-teste'){
+      const para = $('#em-teste').value.trim();
+      if (!para) return msg(m, 'Digite o e-mail que vai receber o teste.', 'err');
+      b.disabled = true;
+      try { const r = await api('/admin/email-teste', {method:'POST', body:{para}}); return msg(m, r.mensagem, r.ok ? 'ok' : 'err'); }
+      finally { b.disabled = false; }
+    }
     else if (act === 'vpn-test'){
       const d = await api('/meu-ip');
       return msg(m, `IP detectado: ${d.ip_detectado || '—'} · modo: ${d.vpn_modo} · verificação ${d.verificacao_ativa ? 'ativa' : 'DESLIGADA (falta PROXYCHECK_KEY)'} · este IP ${d.ip_e_vpn === true ? 'é VPN/proxy' : d.ip_e_vpn === false ? 'não é VPN/proxy' : 'não pôde ser verificado'}.`, 'ok');

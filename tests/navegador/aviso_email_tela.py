@@ -1,7 +1,8 @@
 """Aviso por e-mail no navegador (CT-1971 a CT-1990).
 Professor: a caixa "Avisar os alunos por e-mail" vem desmarcada e vai no pedido de abrir a chamada (avisar_email true/false); o painel
 mostra quantos alunos recebem, ou o MOTIVO quando o aviso não saiu (a chamada abriu do mesmo jeito); o motivo malicioso aparece como
-texto; reabrir a chamada pelo histórico não mostra aviso nenhum.
+texto; reabrir a chamada pelo histórico não mostra aviso nenhum. Depois do envio o painel troca "em envio" pelo RESULTADO (quantos receberam e o
+motivo da falha, como texto) e para de perguntar ao trocar de chamada. Coordenação: botão "Enviar e-mail de teste" no Resumo.
 Aluno: a caixa "Avisos por e-mail" começa desabilitada, reflete /api/me, liga/desliga por PUT /api/me/avisos e volta ao estado anterior
 quando o servidor recusa. A API é simulada (imita o FastAPI); o servidor real não roda aqui.
 Uso:  pip install playwright && playwright install chromium && python tests/navegador/aviso_email_tela.py
@@ -21,12 +22,17 @@ EVENTO = {"id": 11, "titulo": "Algoritmos", "latitude": -18.4, "longitude": -49.
           "local_tipo": "dentro", "local_descricao": "Sala 12", "curso_id": 1, "curso": "Gestão da TI", "periodo": 3, "disciplina": "ED",
           "aberta_em": "2026-11-11T14:00:00+00:00", "encerrada_em": None, "total": 0, "codigo_validacao": "K7Q2",
           "qr_rotativo": False, "exige_saida": False, "permanencia_min": None, "carga_horas": None}
+ADMIN_EMAIL = "coord@unicerrado.edu.br"
+ADMIN = {"id": 9, "nome": "Coord Geral", "email": ADMIN_EMAIL, "perfil": "admin", "curso": None}
+RESUMO_ADM = {"senha_provisoria": False, "alunos": 300, "professores": 4, "aulas": 30, "presencas": 900, "aulas_ativas": 0, "alunos_sem_curso": 0, "alunos_inativos": 0,
+              "professores_pendentes": 0, "matriculas_autorizadas": 300, "matriculas_utilizadas": 280, "matricula_obrigatoria": True, "verificacao_email": True,
+              "email_configurado": True, "pedidos_senha_pendentes": 0, "por_curso": []}
 estado = {}
 
 
 def reiniciar(**extra):
     estado.clear()
-    estado.update(posts=[], aviso=None, avisos=[], me_avisos=True, erro_avisos=None, hist=[])
+    estado.update(posts=[], aviso=None, avisos=[], me_avisos=True, erro_avisos=None, hist=[], resultados=[], pedidos_resultado=0, testes=[], teste_resp=None)
     estado.update(extra)
 
 
@@ -46,6 +52,10 @@ def handler(route):
         return js(CFG)
     if p == "/api/cursos":
         return js([{"id": 1, "nome": "Gestão da TI"}])
+    if p == "/api/admin/login":
+        return js({"token": "t-adm", "usuario": ADMIN})
+    if p == "/api/admin/resumo":
+        return js(RESUMO_ADM)
     if p == "/api/auth/login":
         return js({"token": "t", "usuario": PROF if route.request.post_data and '"professor"' in route.request.post_data else ALUNO})
     if p == "/api/aulas" and met == "POST":
@@ -57,6 +67,13 @@ def handler(route):
         return js(r)
     if p == "/api/professor/aulas":
         return js(estado["hist"] if q.get("pagina", "1") == "1" else [])
+    if p == "/api/aulas/11/aviso":
+        estado["pedidos_resultado"] += 1
+        fila = estado["resultados"]
+        return js(fila.pop(0) if len(fila) > 1 else (fila[0] if fila else {"fim": False}))
+    if p == "/api/admin/email-teste" and met == "POST":
+        estado["testes"].append(json.loads(route.request.post_data))
+        return js(estado["teste_resp"] or {"ok": True, "mensagem": "E-mail de teste enviado."})
     if p == "/api/aulas/11/qr":
         return js({"url": "https://x/?aula=11", "svg": "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'></svg>", "rotativo": False, "renova_em_s": None})
     if p == "/api/aulas/11/presencas":
@@ -157,6 +174,99 @@ with sync_playwright() as pw:
     abrir_chamada(pg, "Servidor sem campo")
     conf(not pg.is_visible("#p-aviso"), "resposta sem o campo 'aviso': nenhuma linha de aviso, nenhum erro")
     conf(not erros, "professor: nenhum erro de JavaScript: %s" % erros)
+    b.close()
+
+
+    # ---- resultado do aviso: o painel troca "em envio" pelo que aconteceu de verdade ----
+    reiniciar(aviso={"enviado": True, "destinatarios": 40, "motivo": None},
+              resultados=[{"fim": False}, {"fim": True, "enviados": 0, "falhas": 5, "parou": "provedor recusando os envios",
+                                           "erro": "o remetente (EMAIL_REMETENTE) não está verificado no Brevo: cadastre e valide esse e-mail"}])
+    b, pg, erros = entrar(pw, "professor", "#v-prof")
+    pg.check("#avisar-email")
+    abrir_chamada(pg, "Falhou no provedor")
+    conf("em envio para 40 alunos" in pg.inner_text("#p-aviso"), "logo após abrir: 'em envio para 40 alunos'")
+    pg.wait_for_function("document.querySelector('#p-aviso').textContent.includes('NÃO chegou a ninguém')", timeout=20000)
+    t = pg.inner_text("#p-aviso")
+    conf("EMAIL_REMETENTE" in t and "Avise a coordenação" in t and "Enviar e-mail de teste" in t, f"falha total mostra o MOTIVO e o caminho do teste: {t!r}")
+    conf("warn" in (pg.get_attribute("#p-aviso", "class") or ""), "falha total em cor de alerta")
+    n = estado["pedidos_resultado"]
+    pg.wait_for_timeout(7000)
+    conf(estado["pedidos_resultado"] == n, "depois do resultado final o painel para de perguntar ao servidor")
+    conf(not erros, "resultado do aviso: nenhum erro de JavaScript: %s" % erros)
+    b.close()
+
+    reiniciar(aviso={"enviado": True, "destinatarios": 3, "motivo": None}, resultados=[{"fim": True, "enviados": 3, "falhas": 0, "parou": None, "erro": None}])
+    b, pg, erros = entrar(pw, "professor", "#v-prof")
+    pg.check("#avisar-email")
+    abrir_chamada(pg, "Tudo certo")
+    pg.wait_for_function("document.querySelector('#p-aviso').textContent.includes('enviado para 3 alunos')", timeout=15000)
+    conf("warn" not in (pg.get_attribute("#p-aviso", "class") or "") and "em envio" not in pg.inner_text("#p-aviso"), "tudo certo: 'enviado para 3 alunos', sem alerta")
+    b.close()
+
+    reiniciar(aviso={"enviado": True, "destinatarios": 10, "motivo": None}, resultados=[{"fim": True, "enviados": 7, "falhas": 3, "parou": None, "erro": X1}])
+    b, pg, erros = entrar(pw, "professor", "#v-prof")
+    pg.check("#avisar-email")
+    abrir_chamada(pg, "Parcial")
+    pg.wait_for_function("document.querySelector('#p-aviso').textContent.includes('7 alunos receberam')", timeout=15000)
+    t = pg.inner_text("#p-aviso")
+    conf("3 envios falharam" in t and "Avise a coordenação" not in t and pg.evaluate("window.__xss || 0") == 0 and pg.locator("#p-aviso img").count() == 0 and X1 in t,
+         f"falha parcial: contagens certas; motivo do servidor aparece como TEXTO e não executa: {t!r}")
+    b.close()
+
+    reiniciar(aviso={"enviado": True, "destinatarios": 5, "motivo": None}, resultados=[{"fim": True, "enviados": 2, "falhas": 0, "parou": "chamada encerrada", "erro": None}])
+    b, pg, erros = entrar(pw, "professor", "#v-prof")
+    pg.check("#avisar-email")
+    abrir_chamada(pg, "Encerrada no meio")
+    pg.wait_for_function("document.querySelector('#p-aviso').textContent.includes('interrompido')", timeout=15000)
+    conf("2 alunos receberam" in pg.inner_text("#p-aviso") and "warn" not in (pg.get_attribute("#p-aviso", "class") or ""), "chamada encerrada no meio: 'interrompido', 2 receberam, sem alerta")
+    b.close()
+
+    # abrir outra chamada (sem aviso) cancela o acompanhamento da anterior
+    reiniciar(aviso={"enviado": True, "destinatarios": 5, "motivo": None}, resultados=[{"fim": False}])
+    b, pg, erros = entrar(pw, "professor", "#v-prof")
+    pg.check("#avisar-email")
+    abrir_chamada(pg, "Primeira")
+    estado["aviso"] = None
+    pg.uncheck("#avisar-email")
+    abrir_chamada(pg, "Segunda")
+    n = estado["pedidos_resultado"]
+    pg.wait_for_timeout(11000)
+    conf(estado["pedidos_resultado"] == n and not pg.is_visible("#p-aviso"), "abrir outra chamada: o acompanhamento da anterior para e a linha de aviso some")
+    b.close()
+
+    # ---- coordenação: e-mail de teste ----
+    reiniciar()
+    b = pw.chromium.launch()
+    c = b.new_context(viewport={"width": 1366, "height": 900})
+    c.route("**/*", handler)
+    pg = c.new_page(); erros = []
+    pg.on("pageerror", lambda e: erros.append(str(e)))
+    pg.on("dialog", lambda d: d.dismiss())
+    pg.goto("http://localhost:8765/")
+    pg.wait_for_selector("#v-auth:not([hidden])")
+    pg.click('.tab[data-p="admin"]')
+    pg.fill("#email", ADMIN_EMAIL)
+    pg.fill("#senha", "senha12345")
+    pg.click("#btn-auth")
+    pg.wait_for_selector("#v-admin:not([hidden])")
+    pg.wait_for_selector("#em-teste")
+    conf(pg.input_value("#em-teste") == ADMIN_EMAIL, "Resumo: o campo do teste já vem com o e-mail de quem está logado")
+    pg.fill("#em-teste", "")
+    pg.click('button[data-act="email-teste"]')
+    pg.wait_for_function("document.querySelector('#msg-adm').textContent.includes('Digite o e-mail')")
+    conf(estado["testes"] == [], "campo vazio: nada é enviado ao servidor, a tela pede o e-mail")
+    pg.fill("#em-teste", "  alguem@unicerrado.edu.br ")
+    pg.click('button[data-act="email-teste"]')
+    pg.wait_for_function("document.querySelector('#msg-adm').textContent.includes('E-mail de teste enviado')")
+    conf(estado["testes"] == [{"para": "alguem@unicerrado.edu.br"}], f"envia POST /admin/email-teste com o endereço sem espaços: {estado['testes']}")
+    conf("ok" in (pg.get_attribute("#msg-adm", "class") or "") and pg.is_enabled('button[data-act="email-teste"]'), "sucesso em verde e o botão volta a ficar habilitado")
+    estado["teste_resp"] = {"ok": False, "mensagem": "O teste falhou: O Brevo bloqueou o endereço IP do servidor. " + X1}
+    pg.click('button[data-act="email-teste"]')
+    pg.wait_for_function("document.querySelector('#msg-adm').textContent.includes('O teste falhou')")
+    conf("err" in (pg.get_attribute("#msg-adm", "class") or "") and "bloqueou o endereço IP" in pg.inner_text("#msg-adm"), "falha: mensagem do servidor em vermelho, com o motivo")
+    conf(pg.evaluate("window.__xss || 0") == 0 and pg.locator("#msg-adm img").count() == 0, "mensagem do servidor aparece como TEXTO e não executa")
+    conf(pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"), "Resumo com o bloco novo: sem rolagem horizontal")
+    conf(not erros, "coordenação: nenhum erro de JavaScript: %s" % erros)
     b.close()
 
     # =========================== aluno ===========================

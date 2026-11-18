@@ -21,6 +21,7 @@ import secrets
 import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -1615,6 +1616,35 @@ def enviar_email(para: str, assunto: str, texto: str) -> None:
         raise RuntimeError("envio de e-mail não configurado")
 
 
+def _motivo_falha_email(exc: Exception) -> str:
+    """Traduz a recusa do provedor de e-mail numa frase curta e acionável, para o log, o painel do professor e o teste da coordenação.
+    Nunca devolve endereço de e-mail (o texto do provedor passa por um filtro) nem a chave de API."""
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            d = json.loads(exc.read().decode("utf-8", "replace")[:2000])
+        except Exception:
+            d = {}
+        texto = str(d.get("message", "")) if isinstance(d, dict) else ""
+        baixo = texto.lower()
+        texto = re.sub(r"\S+@\S+", "[e-mail]", " ".join(texto.split()))[:120]
+        if re.search(r"\bip\b", baixo):
+            return ("o Brevo bloqueou o endereço IP do servidor. No Brevo, abra Security > Authorised IPs e desative o bloqueio "
+                    "por IP (a Render troca de IP)")
+        if exc.code == 401:
+            return "o Brevo recusou a chave (EMAIL_API_KEY): use uma chave de API v3 ativa, copiada inteira e sem espaços"
+        if exc.code == 400 and "sender" in baixo:
+            return ("o remetente (EMAIL_REMETENTE) não está verificado no Brevo: cadastre e valide esse e-mail em "
+                    "Senders, Domains & Dedicated IPs")
+        if exc.code in (402, 403, 429):
+            return f"o Brevo negou o envio por limite, cota ou permissão (HTTP {exc.code})" + (f": {texto}" if texto else "")
+        return f"o Brevo recusou o envio (HTTP {exc.code})" + (f": {texto}" if texto else "")
+    if isinstance(exc, OSError):  # sem conexão, DNS, tempo esgotado (URLError e socket.timeout são OSError)
+        return "não foi possível falar com o provedor de e-mail (sem conexão ou tempo esgotado)"
+    if type(exc).__name__ == "SMTPAuthenticationError":
+        return "o servidor SMTP recusou o usuário ou a senha (SMTP_USUARIO e SMTP_SENHA)"
+    return f"erro ao enviar o e-mail ({type(exc).__name__})"
+
+
 def _hash_codigo(perfil: str, email: str, codigo: str) -> str:
     return hmac.new(SECRET_KEY.encode(), f"cod|{perfil}|{email}|{codigo}".encode(), hashlib.sha256).hexdigest()
 
@@ -2109,7 +2139,7 @@ def _texto_do_aviso(aluno_nome: str, prof: str, titulo: str, disciplina: str, lo
 def _enviar_aviso(aula_id: int, link: str) -> None:
     """Roda depois da resposta, em outra thread. Qualquer erro é contido aqui: não existe requisição para recebê-lo."""
     enviados = falhas = seguidas = 0
-    parou = ""
+    parou = erro = ""
     try:
         with SessionLocal() as db:
             a = db.get(Aula, aula_id)
@@ -2132,14 +2162,17 @@ def _enviar_aviso(aula_id: int, link: str) -> None:
                     enviados, seguidas = enviados + 1, 0
                 except Exception as exc:  # não imprime o endereço
                     falhas, seguidas = falhas + 1, seguidas + 1
-                    print("Falha ao enviar o aviso de chamada:", type(exc).__name__)
+                    motivo = _motivo_falha_email(exc)
+                    erro = erro or motivo   # guarda o motivo da primeira falha: é ele que o professor e a coordenação precisam ler
+                    print("Falha ao enviar o aviso de chamada:", motivo)
                     if seguidas >= AVISO_EMAIL_FALHAS_SEGUIDAS:
                         parou = "provedor recusando os envios"
                         break
                 if AVISO_EMAIL_PAUSA_S:
                     time.sleep(AVISO_EMAIL_PAUSA_S)
             log_seg(db, a.professor_id, "aviso_email",
-                    f"aula={aula_id}; enviados={enviados}; falhas={falhas}" + (f"; parou={parou}" if parou else ""), commit=True)
+                    f"aula={aula_id}; enviados={enviados}; falhas={falhas}" + (f"; parou={parou}" if parou else "")
+                    + (f"; erro={erro[:150].replace('; ', ', ')}" if erro else ""), commit=True)
     except Exception as exc:
         print("Falha no aviso por e-mail:", type(exc).__name__)
 
@@ -2198,6 +2231,32 @@ def encerrar_aula(aula_id: int, u: dict = Depends(so_professor), db: Session = D
         db.commit()
         _cache_ativas["t"] = 0
     return aula_dict(a)
+
+
+@app.get("/api/aulas/{aula_id}/aviso")
+def resultado_do_aviso(aula_id: int, u: dict = Depends(so_professor), db: Session = Depends(get_db)):
+    """Como terminou o aviso por e-mail desta chamada (o painel pergunta de tempos em tempos). `fim` é falso enquanto o envio roda
+    (o log só é gravado no fim); depois vêm as contagens e, se algo falhou, o motivo da primeira falha."""
+    _aula_do_professor(db, aula_id, u["id"])
+    achado = None
+    for lin in db.scalars(select(LogSeguranca).where(LogSeguranca.usuario_id == u["id"], LogSeguranca.acao == "aviso_email")
+                          .order_by(LogSeguranca.id.desc()).limit(30)).all():
+        if (lin.detalhe or "").startswith(f"aula={aula_id};"):
+            achado = lin
+            break
+    if achado is None:
+        return {"fim": False}
+    campos = {}
+    for parte in (achado.detalhe or "").split("; "):
+        chave, _, valor = parte.partition("=")
+        campos[chave] = valor
+    def _n(k):
+        try:
+            return max(0, int(campos.get(k, "0")))
+        except ValueError:
+            return 0
+    return {"fim": True, "enviados": _n("enviados"), "falhas": _n("falhas"), "parou": campos.get("parou") or None,
+            "erro": campos.get("erro") or None}
 
 
 # ---------------- QR code da chamada ----------------
@@ -3562,6 +3621,35 @@ def _pedidos_senha(db: Session, limite: int = 100) -> list:
 @app.get("/api/admin/pedidos-senha")
 def adm_pedidos_senha(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
     return _pedidos_senha(db)
+
+
+class EmailTesteIn(BaseModel):
+    para: str = Field(min_length=5, max_length=160)
+
+
+@app.post("/api/admin/email-teste")
+def adm_email_teste(b: EmailTesteIn, request: Request, u: dict = Depends(so_admin), db: Session = Depends(get_db)):
+    """Envia UM e-mail de teste para o endereço digitado, para a coordenação descobrir por que os e-mails não chegam sem abrir
+    chamada nem olhar o log. Devolve sempre 200 com `ok` e uma frase em português; o texto do e-mail é fixo (nada que o usuário
+    digitou além do destino) e o endereço não vai para o log."""
+    para = " ".join(b.para.split()).lower()
+    if not EMAIL_RE.match(para):
+        raise HTTPException(422, "Digite um e-mail válido para receber o teste.")
+    if not email_configurado():
+        return {"ok": False, "mensagem": "O envio de e-mail NÃO está configurado neste servidor. Defina na Render EMAIL_PROVEDOR=brevo, "
+                                         "EMAIL_API_KEY e EMAIL_REMETENTE e reinicie o serviço."}
+    limitar_tentativas(f"email-teste:{u['id']}", 5, 600)
+    try:
+        enviar_email(para, "Teste do Guará Check",
+                     "Este é um e-mail de teste do Guará Check, enviado pela coordenação. Se você o recebeu, o envio de e-mails "
+                     "(código de confirmação e aviso de chamada) está funcionando.\n\nGuará Check · UniCerrado")
+    except Exception as exc:
+        motivo = _motivo_falha_email(exc)
+        log_seg(db, u["id"], "email_teste", "falhou: " + motivo[:200], ip_cliente(request), commit=True)
+        return {"ok": False, "mensagem": "O teste falhou: " + motivo[0].upper() + motivo[1:] + "."}
+    log_seg(db, u["id"], "email_teste", "enviado", ip_cliente(request), commit=True)
+    return {"ok": True, "mensagem": "E-mail de teste enviado. Confira a caixa de entrada e também o spam; pode levar alguns minutos. "
+                                    "Se não chegar, confirme no Brevo (Transactional > Logs) se o envio aparece."}
 
 
 @app.get("/api/admin/resumo")

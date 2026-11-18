@@ -110,6 +110,7 @@ NOMES = {
     "adm_estatisticas", "XLSX_MIME", "adm_estatisticas_xlsx",
     # --- Funcionalidade 17: aviso por e-mail quando a chamada abre ---
     "_condicoes_do_aviso", "_planejar_aviso", "_limpo", "_texto_do_aviso", "_enviar_aviso", "AvisosIn", "meus_avisos",
+    "_motivo_falha_email", "resultado_do_aviso", "EmailTesteIn", "adm_email_teste",
     # --- Funcionalidade 18: app instalável (PWA) ---
     "MANIFESTO", "ASSET_RE", "CSP_PAGINA",
     # --- Funcionalidade 19: LGPD (aceite, meus dados, pedidos do titular, retenção, /privacidade) ---

@@ -29,3 +29,14 @@ services:
         sync: false
       - key: VPN_MODO
         value: bloquear
+      # E-mail (código de confirmação do cadastro e aviso de chamada aberta). Plano grátis da Render bloqueia SMTP: use o Brevo (API por HTTPS).
+      # EMAIL_REMETENTE precisa ser um remetente VERIFICADO no Brevo; no Brevo, desative o bloqueio por IP (Security > Authorised IPs).
+      # Depois de preencher, use "Enviar e-mail de teste" no Resumo da coordenação para conferir.
+      - key: EMAIL_PROVEDOR
+        value: brevo
+      - key: EMAIL_API_KEY
+        sync: false
+      - key: EMAIL_REMETENTE
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
