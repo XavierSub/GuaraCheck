@@ -103,6 +103,9 @@ NOMES = {
     "_fmt_duracao", "_status_presenca", "registrar_saida",
     # --- Funcionalidade 15: certificado de participação ---
     "assinatura_certificado", "_horas_texto", "_certificado_liberado", "gerar_pdf_certificado", "certificado_pdf", "validar_certificado",
+    # --- Funcionalidade 16: estatísticas da coordenação ---
+    "LIMITE_ESTATISTICAS", "ESTATISTICAS_DIAS_PADRAO", "ESTATISTICAS_DIAS_MAX", "_periodo_estatisticas", "_dados_estatisticas",
+    "adm_estatisticas", "XLSX_MIME", "adm_estatisticas_xlsx",
 }
 ENV_DO_APP = ["SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PROFESSORES", "CHAVE_MASTER", "CODIGO_PROFESSOR", "TOKEN_HORAS",
               "FUSO_HORAS", "PRECISAO_MAX_M", "IDADE_MAX_POSICAO_S", "RISCO_MAX", "VELOCIDADE_MAX_MS", "MATRICULA_REGEX",
@@ -218,6 +221,12 @@ class Col:
     def __gt__(self, o):
         return Cmp(self, "gt", o)
 
+    def __ge__(self, o):
+        return Cmp(self, "ge", o)
+
+    def __le__(self, o):
+        return Cmp(self, "le", o)
+
     def valor(self, row):
         return getattr(row, self.name)
 
@@ -289,6 +298,10 @@ class Cmp:
             return v is not None and v < self.val
         if self.op == "gt":
             return v is not None and v > self.val
+        if self.op == "ge":
+            return v is not None and v >= self.val
+        if self.op == "le":
+            return v is not None and v <= self.val
         if self.op == "ne":
             return v is not None and self.val is not None and v != self.val   # SQL: NULL != x não é verdadeiro
         vals = list(db.scalars(self.val)) if isinstance(self.val, Select) else self.val       # IN (lista ou subconsulta)

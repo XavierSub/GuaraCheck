@@ -260,6 +260,8 @@ main{position:relative;z-index:1}header{position:relative;z-index:2}
 .previa .stats{margin:12px 0 4px}.previa .grid2 label{margin-top:8px}.previa td select{min-width:150px}.previa .ck{display:flex;gap:8px;align-items:flex-start;font-weight:400;font-size:14px;margin:14px 0 0}.previa .ck input{width:auto;flex:none;margin-top:4px}
 .previa .bad{color:var(--err);font-size:13.5px;margin:6px 0 0}.previa .acoes{margin-top:16px}
 details.cola{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}#pt-presentes:not(.com-saida) .col-saida{display:none}
+.barra-lin{display:grid;grid-template-columns:72px 1fr 52px;gap:10px;align-items:center;margin:6px 0;font-size:14px}.barra{display:block;height:12px;border-radius:6px;background:var(--line);overflow:hidden}.barra i{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--pri),var(--lima))}.barra-lin b{text-align:right;font-weight:600}
+.filtros{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin:6px 0 14px}.filtros label{margin:0;font-size:13px}.filtros input,.filtros select{width:auto;min-width:150px}
 label.chk{display:flex;gap:8px;align-items:center;margin:8px 0;font-size:14px}label.chk input{width:auto}
 details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
 @media(max-width:860px){.entrada{grid-template-columns:1fr;gap:20px}.geo{display:none}.hero p{margin-bottom:6px}.fio-topo{display:none}}
@@ -663,7 +665,7 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
   </div>
 
   <div class="atabs" id="adm-tabs">
-    <button data-t="resumo" class="on">Resumo</button><button data-t="cursos">Cursos</button>
+    <button data-t="resumo" class="on">Resumo</button><button data-t="estatisticas">Estatísticas</button><button data-t="cursos">Cursos</button>
     <button data-t="professores">Professores</button><button data-t="alunos">Alunos</button>
     <button data-t="matriculas">Matrículas</button><button data-t="pedidos">Pedidos de senha</button><button data-t="aulas">Aulas</button><button data-t="alertas">Alertas</button><button data-t="auditoria">Auditoria</button>
   </div>
@@ -1085,14 +1087,14 @@ $('#aulas').onclick = async e => {
 
 /* PDF do comprovante: o servidor gera (com o código de validação do evento e a autenticação) e o navegador baixa. */
 const baixarPDF = (id, btn, aviso) => baixarPdfDe(`/api/aluno/presencas/${id}/pdf`, `comprovante-presenca-${id}.pdf`, btn, aviso);
-async function baixarPdfDe(url, nomeArquivo, btn, aviso){
-  msg(aviso, ''); const rot = btn.textContent; btn.disabled = true; btn.textContent = 'Gerando PDF…';
+async function baixarPdfDe(url, nomeArquivo, btn, aviso, ocupado = 'Gerando PDF…'){   // serve para qualquer arquivo gerado pelo servidor (PDF, XLSX)
+  msg(aviso, ''); const rot = btn.textContent; btn.disabled = true; btn.textContent = ocupado;
   try {
     const r = await fetch(url, {headers:{Authorization:'Bearer ' + S.token}});
     if (!r.ok){
       let d = null; try { d = await r.json(); } catch {}
       if (r.status === 401) return sair('Sessão expirada. Entre novamente.');
-      throw new Error(typeof d?.detail === 'string' ? d.detail : 'Não foi possível gerar o PDF agora. Tente de novo.');
+      throw new Error(typeof d?.detail === 'string' ? d.detail : 'Não foi possível gerar o arquivo agora. Tente de novo.');
     }
     const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = nomeArquivo;
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
@@ -1681,7 +1683,7 @@ $('#p-tabs').onclick = e => {
 };
 
 /* ---------------- Coordenação ---------------- */
-const ADM = {aba:'resumo', pag:1, q:'', curso:0};
+const ADM = {aba:'resumo', pag:1, q:'', curso:0, est:{de:'', ate:'', curso:0}};
 const iniciais = n => String(n || '?').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(w => (w.match(/\p{L}/u) || ['?'])[0]).join('').toUpperCase();
 const cartaoPendente = p => `<article class="pessoa pend">
   <div class="pessoa-topo"><span class="avatar" aria-hidden="true">${esc(iniciais(p.nome))}</span><div><b>${esc(p.nome)}</b><span class="mut">${esc(p.email)}</span></div></div>
@@ -1763,7 +1765,8 @@ function matPreviaHtml(r, cs){
 const ACAO = {exportar_chamada:'Exportou chamada (CSV)', excluir_aula:'Excluiu aula', excluir_todas_aulas:'Excluiu todas as aulas', excluir_aula_admin:'Coordenação excluiu aula',
   pedido_senha:'Pediu nova senha', login_admin:'Login da coordenação', login_admin_falha:'Falha de login da coordenação', cadastro_professor:'Professor se cadastrou', criar_professor:'Coordenação criou professor',
   autorizar_professor:'Autorizou professor', recusar_professor:'Recusou cadastro de professor', excluir_professor:'Excluiu professor', criar_coordenacao:'Criou conta da coordenação', professor_coordenacao:'Mudou papel na coordenação', professor_ativo:'Ativou/desativou professor', criar_curso:'Criou curso', curso_ativo:'Ativou/desativou curso', editar_aluno:'Editou aluno',
-  excluir_aluno:'Excluiu aluno', redefinir_senha:'Redefiniu senha', trocar_senha_admin:'Coordenação trocou a própria senha', importar_matriculas:'Importou matrículas', excluir_matricula:'Excluiu matrícula autorizada'};
+  excluir_aluno:'Excluiu aluno', redefinir_senha:'Redefiniu senha', trocar_senha_admin:'Coordenação trocou a própria senha', importar_matriculas:'Importou matrículas', excluir_matricula:'Excluiu matrícula autorizada',
+  exportar_estatisticas:'Exportou estatísticas (XLSX)', presenca_manual:'Professor lançou presença manual', desfazer_presenca_manual:'Professor desfez presença manual'};
 const ADM_ABAS = {
   async resumo(){
     const r = await api('/admin/resumo');
@@ -1777,6 +1780,29 @@ const ADM_ABAS = {
     return prov + (r.senha_provisoria ? cardSenha : '') + ver + aviso + aut + pend + `<div class="stats">${[['Alunos',r.alunos],['Alunos inativos',r.alunos_inativos],['Professores',r.professores],['Aguardando autorização',r.professores_pendentes || 0],['Aulas',r.aulas],['Presenças',r.presencas],['Chamadas abertas',r.aulas_ativas],['Matrículas autorizadas',r.matriculas_autorizadas],['Matrículas já vinculadas',r.matriculas_utilizadas],['Alunos sem curso',r.alunos_sem_curso]].map(([k,v]) => `<div class="stat"><b>${v}</b>${k}</div>`).join('')}</div>
       <h3 style="margin-top:16px">Alunos por curso</h3>` + tb(['Curso','Alunos'], r.por_curso.map(c => `<tr><td>${esc(c.curso)}</td><td>${c.alunos}</td></tr>`)) +
       `<h3 style="margin-top:16px">Proteção contra VPN</h3><p class="mut">Confere se o servidor enxerga o seu IP corretamente e se a verificação de VPN está ativa.</p><button class="btn alt" data-act="vpn-test">Testar proteção contra VPN</button>` + (r.senha_provisoria ? '' : cardSenha);
+  },
+  async estatisticas(){
+    const q = new URLSearchParams();
+    if (ADM.est.de) q.set('de', ADM.est.de);
+    if (ADM.est.ate) q.set('ate', ADM.est.ate);
+    if (ADM.est.curso) q.set('curso_id', ADM.est.curso);
+    const [cs, r] = await Promise.all([api('/cursos'), api('/admin/estatisticas' + (q.toString() ? '?' + q : ''))]);
+    const k = r.resumo, pct = v => v == null ? '—' : String(v).replace('.', ',') + '%', mes = m => m.slice(5) + '/' + m.slice(0, 4);
+    const maxMes = Math.max(1, ...r.por_mes.map(m => m.presencas));
+    const filtros = `<div class="filtros"><label>De<input type="date" id="est-de" value="${esc(r.de)}"></label><label>Até<input type="date" id="est-ate" value="${esc(r.ate)}"></label>
+      <label>Curso<select id="est-curso"><option value="0">Todos os cursos</option>${opcCursos(cs, r.curso_id || 0)}</select></label>
+      <button class="btn" data-act="est-ok">Atualizar</button>
+      <button class="btn alt" data-act="est-xlsx" data-de="${esc(r.de)}" data-ate="${esc(r.ate)}" data-curso="${r.curso_id || 0}">Baixar planilha (XLSX)</button></div>`;
+    const corte = r.truncado ? `<div class="msg err">Este período tem mais de ${r.limite} eventos. Os números abaixo cobrem só os ${r.limite} mais recentes: escolha um período menor.</div>` : '';
+    const tiles = [['Eventos', k.eventos], ['Presenças', k.presencas], ['Alunos que participaram', k.participantes], ['Alunos ativos', k.alunos_ativos], ['Adesão', pct(k.adesao_pct)],
+      ['Média por evento', String(k.media_por_evento).replace('.', ',')], ['Lançadas pelo professor', k.manuais], ['Tentativas recusadas', k.tentativas_recusadas]];
+    return `<p class="mut">Números por data de abertura do evento (horário de Brasília). Adesão = alunos que participaram de pelo menos um evento do período ÷ alunos ativos.</p>` + filtros + corte
+      + `<div class="stats">${tiles.map(([n, v]) => `<div class="stat"><b>${v}</b>${n}</div>`).join('')}</div>`
+      + `<h3 style="margin-top:18px">Presenças por mês</h3>` + (r.por_mes.length ? r.por_mes.map(m => `<div class="barra-lin"><span>${mes(m.mes)}</span><span class="barra"><i style="width:${Math.round(100 * m.presencas / maxMes)}%"></i></span><b>${m.presencas}</b></div>`).join('') : '<p class="mut">Nenhum evento no período.</p>')
+      + `<h3 style="margin-top:18px">Por curso do aluno</h3>` + tb(['Curso', 'Alunos ativos', 'Participaram', 'Adesão', 'Presenças'], r.por_curso.map(c => `<tr><td>${esc(c.curso)}</td><td>${c.alunos_ativos}</td><td>${c.participantes}</td><td>${pct(c.adesao_pct)}</td><td>${c.presencas}</td></tr>`))
+      + `<h3 style="margin-top:18px">Por professor</h3>` + tb(['Professor', 'Eventos', 'Presenças'], r.por_professor.map(p => `<tr><td>${esc(p.professor)}</td><td>${p.eventos}</td><td>${p.presencas}</td></tr>`))
+      + `<h3 style="margin-top:18px">Eventos mais recentes</h3><p class="mut">Os ${r.eventos.length} mais recentes do período${k.eventos > r.eventos.length ? '. A planilha traz a lista completa' : ''}.</p>`
+      + tb(['Evento', 'Tipo', 'Data', 'Professor', 'Curso', 'Presenças', 'Lançadas'], r.eventos.map(e => `<tr><td>${esc(e.titulo)}</td><td>${e.tipo === 'palestra' ? 'Palestra' : 'Aula'}</td><td>${dh(e.data)}</td><td>${esc(e.professor)}</td><td>${esc(e.curso)}</td><td>${e.presencas}</td><td>${e.manuais}</td></tr>`));
   },
   async cursos(){
     const l = await api('/admin/cursos');
@@ -1946,6 +1972,11 @@ $('#adm-corpo').onclick = async e => {
     else if (act === 'busca'){ ADM.q = $('#adm-q').value.trim(); ADM.curso = +$('#adm-curso').value; ADM.pag = 1; }
     else if (act === 'busca-mat'){ ADM.q = $('#adm-q').value.trim(); ADM.pag = 1; }
     else if (act === 'pag') ADM.pag = Math.max(1, ADM.pag + +v);
+    else if (act === 'est-ok') ADM.est = {de:$('#est-de').value, ate:$('#est-ate').value, curso:+$('#est-curso').value};
+    else if (act === 'est-xlsx'){
+      const qs = new URLSearchParams({de:b.dataset.de, ate:b.dataset.ate}); if (+b.dataset.curso) qs.set('curso_id', b.dataset.curso);
+      return baixarPdfDe('/api/admin/estatisticas/xlsx?' + qs, `estatisticas-${b.dataset.de}-a-${b.dataset.ate}.xlsx`, b, m, 'Gerando planilha…');
+    }
     admRender();
   } catch (x) { msg(m, x.message, 'err'); }
 };

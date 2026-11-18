@@ -3927,6 +3927,164 @@ def adm_auditoria(u: dict = Depends(so_admin), db: Session = Depends(get_db)):
              "ip": l.ip, "data_hora": iso(l.data_hora)} for l, nome in rows]
 
 
+# ----------------- Estatísticas da coordenação (painel + planilha) -----------------
+LIMITE_ESTATISTICAS = 5000          # eventos por consulta (mais que isso: o resultado avisa que foi cortado)
+ESTATISTICAS_DIAS_PADRAO = 180
+ESTATISTICAS_DIAS_MAX = 3660
+
+
+def _periodo_estatisticas(de: str, ate: str):
+    """(início, fim, de_texto, ate_texto): o período vem em datas de Brasília (AAAA-MM-DD), 'ate' inclusive. Sem datas: últimos 180 dias."""
+    fuso = timezone(timedelta(hours=FUSO_HORAS))
+    hoje = utcnow().astimezone(fuso).date()
+    try:
+        d_ate = datetime.strptime(ate, "%Y-%m-%d").date() if ate else hoje
+        d_de = datetime.strptime(de, "%Y-%m-%d").date() if de else d_ate - timedelta(days=ESTATISTICAS_DIAS_PADRAO)
+    except ValueError:
+        raise HTTPException(422, "Datas inválidas. Use o formato AAAA-MM-DD (ex.: 2026-03-01).")
+    if d_ate < d_de:
+        raise HTTPException(422, "A data final é anterior à data inicial.")
+    if (d_ate - d_de).days > ESTATISTICAS_DIAS_MAX:
+        raise HTTPException(422, "Período grande demais. Escolha no máximo 10 anos.")
+    ini = datetime(d_de.year, d_de.month, d_de.day, tzinfo=fuso).astimezone(timezone.utc)
+    fim = (datetime(d_ate.year, d_ate.month, d_ate.day, tzinfo=fuso) + timedelta(days=1)).astimezone(timezone.utc)
+    return ini, fim, d_de.isoformat(), d_ate.isoformat()
+
+
+def _dados_estatisticas(db: Session, ini, fim, curso_id: Optional[int]) -> dict:
+    """Números do período, por evento (data de abertura). Só consultas simples (JOIN + GROUP BY + COUNT) e a soma final
+    em Python: os eventos do período são poucos milhares no máximo (LIMITE_ESTATISTICAS)."""
+    fuso = timezone(timedelta(hours=FUSO_HORAS))
+    cond = [Aula.aberta_em >= ini, Aula.aberta_em < fim]
+    if curso_id:
+        cond.append(Aula.curso_id == curso_id)
+    rows = db.execute(
+        select(Aula.id, Aula.titulo, Aula.tipo, Aula.aberta_em, Professor.nome, Curso.nome, func.count(Presenca.id))
+        .select_from(Aula).join(Professor, Professor.id == Aula.professor_id)
+        .outerjoin(Curso, Curso.id == Aula.curso_id).outerjoin(Presenca, Presenca.aula_id == Aula.id)
+        .where(*cond).group_by(Aula.id, Professor.nome, Curso.nome)
+        .order_by(Aula.aberta_em.desc(), Aula.id.desc()).limit(LIMITE_ESTATISTICAS + 1)).all()
+    truncado = len(rows) > LIMITE_ESTATISTICAS
+    rows = rows[:LIMITE_ESTATISTICAS]
+    ids_do_periodo = select(Aula.id).where(*cond)
+    manuais = dict(db.execute(select(Presenca.aula_id, func.count(Presenca.id))
+                              .where(Presenca.manual.is_(True), Presenca.aula_id.in_(ids_do_periodo))
+                              .group_by(Presenca.aula_id)).all())
+    tentativas = _contar(db, Tentativa, Tentativa.aula_id.in_(ids_do_periodo))
+    # quem participou: uma linha por aluno (com quantas presenças teve no período) e o curso dele
+    alunos = db.execute(select(Presenca.aluno_id, Aluno.curso_id, func.count(Presenca.id))
+                        .select_from(Presenca).join(Aula, Aula.id == Presenca.aula_id).join(Aluno, Aluno.id == Presenca.aluno_id)
+                        .where(*cond).group_by(Presenca.aluno_id, Aluno.curso_id)).all()
+    cond_al = [or_(Aluno.status.is_(None), Aluno.status != "inativo")]
+    if curso_id:
+        cond_al.append(Aluno.curso_id == curso_id)
+    ativos = db.execute(select(Aluno.curso_id, func.count(Aluno.id)).where(*cond_al).group_by(Aluno.curso_id)).all()
+    nomes_cursos = dict(db.execute(select(Curso.id, Curso.nome)).all())
+
+    eventos, por_prof, por_mes = [], {}, {}
+    for aid, titulo, tipo, aberta, prof, curso, n in rows:
+        eventos.append({"id": aid, "titulo": titulo, "tipo": tipo or "aula", "data": iso(aberta), "professor": prof,
+                        "curso": curso or "Todos os cursos", "presencas": n, "manuais": manuais.get(aid, 0)})
+        pf = por_prof.setdefault(prof, {"professor": prof, "eventos": 0, "presencas": 0})
+        pf["eventos"] += 1
+        pf["presencas"] += n
+        mes = aware(aberta).astimezone(fuso).strftime("%Y-%m")
+        m = por_mes.setdefault(mes, {"mes": mes, "eventos": 0, "presencas": 0})
+        m["eventos"] += 1
+        m["presencas"] += n
+
+    por_curso = {}
+    for cid, qtd in ativos:
+        por_curso[cid] = {"curso": nomes_cursos.get(cid) or "Sem curso", "alunos_ativos": qtd, "participantes": 0, "presencas": 0}
+    for _aluno, cid, qtd in alunos:
+        c = por_curso.setdefault(cid, {"curso": nomes_cursos.get(cid) or "Sem curso", "alunos_ativos": 0, "participantes": 0, "presencas": 0})
+        c["participantes"] += 1
+        c["presencas"] += qtd
+    for c in por_curso.values():
+        c["adesao_pct"] = round(100 * c["participantes"] / c["alunos_ativos"], 1) if c["alunos_ativos"] else None
+
+    presencas = sum(e["presencas"] for e in eventos)
+    ativos_total = sum(q for _c, q in ativos)
+    participantes = len(alunos)
+    return {
+        "resumo": {"eventos": len(eventos), "presencas": presencas, "participantes": participantes, "alunos_ativos": ativos_total,
+                   "adesao_pct": round(100 * participantes / ativos_total, 1) if ativos_total else None,
+                   "media_por_evento": round(presencas / len(eventos), 1) if eventos else 0,
+                   "manuais": sum(e["manuais"] for e in eventos), "tentativas_recusadas": tentativas},
+        "por_curso": sorted(por_curso.values(), key=lambda c: (-c["presencas"], c["curso"])),
+        "por_professor": sorted(por_prof.values(), key=lambda x: (-x["presencas"], x["professor"] or "")),
+        "por_mes": [por_mes[k] for k in sorted(por_mes)],
+        "eventos": eventos, "truncado": truncado, "limite": LIMITE_ESTATISTICAS}
+
+
+@app.get("/api/admin/estatisticas")
+def adm_estatisticas(de: str = "", ate: str = "", curso_id: int = 0, u: dict = Depends(so_admin),
+                     db: Session = Depends(get_db)):
+    """Painel de estatísticas da coordenação: eventos, presenças, adesão por curso, professores e meses no período."""
+    ini, fim, de_t, ate_t = _periodo_estatisticas(de, ate)
+    d = _dados_estatisticas(db, ini, fim, curso_id or None)
+    return {"de": de_t, "ate": ate_t, "curso_id": curso_id or None, **d, "eventos": d["eventos"][:15]}
+
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@app.get("/api/admin/estatisticas/xlsx")
+def adm_estatisticas_xlsx(request: Request, de: str = "", ate: str = "", curso_id: int = 0, u: dict = Depends(so_admin),
+                          db: Session = Depends(get_db)):
+    """Mesma base do painel, em planilha (Resumo, Por curso, Por professor, Por mês e a lista completa de Eventos)."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+    except ImportError:
+        raise HTTPException(503, "A geração de planilhas não está disponível no servidor. Avise a TI.")
+    ini, fim, de_t, ate_t = _periodo_estatisticas(de, ate)
+    d = _dados_estatisticas(db, ini, fim, curso_id or None)
+    curso = db.scalar(select(Curso.nome).where(Curso.id == curso_id)) if curso_id else None
+    fuso = timezone(timedelta(hours=FUSO_HORAS))
+    wb = Workbook()
+
+    def folha(nome, cab, linhas, primeira=False):
+        ws = wb.active if primeira else wb.create_sheet()
+        ws.title = nome
+        ws.append(cab)
+        for c in ws[1]:
+            c.font = Font(bold=True)
+        for l in linhas:
+            ws.append([_seguro(v) if isinstance(v, str) else v for v in l])
+        for i, h in enumerate(cab):
+            ws.column_dimensions[chr(65 + i)].width = max(14, min(60, len(h) + 4))
+        ws.freeze_panes = "A2"
+        return ws
+
+    r = d["resumo"]
+    ws = folha("Resumo", ["Indicador", "Valor"], [
+        ["Período (datas de Brasília)", f"{de_t} a {ate_t}"], ["Curso", curso or "Todos"],
+        ["Eventos", r["eventos"]], ["Presenças", r["presencas"]], ["Alunos que participaram", r["participantes"]],
+        ["Alunos ativos", r["alunos_ativos"]], ["Adesão (%)", r["adesao_pct"] if r["adesao_pct"] is not None else ""],
+        ["Média de presenças por evento", r["media_por_evento"]], ["Presenças lançadas pelo professor", r["manuais"]],
+        ["Tentativas recusadas", r["tentativas_recusadas"]],
+        ["Aviso", f"Lista cortada nos {d['limite']} eventos mais recentes do período." if d["truncado"] else ""],
+        ["Gerado em", utcnow().astimezone(fuso).strftime("%d/%m/%Y %H:%M")]], primeira=True)
+    ws.column_dimensions["A"].width, ws.column_dimensions["B"].width = 38, 40
+    folha("Por curso", ["Curso", "Alunos ativos", "Participantes", "Adesão (%)", "Presenças"],
+          [[c["curso"], c["alunos_ativos"], c["participantes"], c["adesao_pct"] if c["adesao_pct"] is not None else "", c["presencas"]]
+           for c in d["por_curso"]])
+    folha("Por professor", ["Professor", "Eventos", "Presenças"],
+          [[x["professor"], x["eventos"], x["presencas"]] for x in d["por_professor"]])
+    folha("Por mês", ["Mês", "Eventos", "Presenças"], [[m["mes"], m["eventos"], m["presencas"]] for m in d["por_mes"]])
+    folha("Eventos", ["Nº", "Evento", "Tipo", "Data", "Professor", "Curso", "Presenças", "Lançadas pelo professor"],
+          [[e["id"], e["titulo"], "Palestra" if e["tipo"] == "palestra" else "Aula",
+            aware(datetime.fromisoformat(e["data"])).astimezone(fuso).strftime("%d/%m/%Y %H:%M"), e["professor"], e["curso"],
+            e["presencas"], e["manuais"]] for e in d["eventos"]])
+    buf = io.BytesIO()
+    wb.save(buf)
+    log_seg(db, u["id"], "exportar_estatisticas", f"periodo={de_t}..{ate_t}; curso={curso_id or 'todos'}; eventos={r['eventos']}",
+            ip_cliente(request), commit=True)
+    return Response(buf.getvalue(), media_type=XLSX_MIME, headers={
+        "Content-Disposition": f'attachment; filename="estatisticas-{de_t}-a-{ate_t}.xlsx"', "Cache-Control": "no-store"})
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")),
