@@ -31,7 +31,8 @@ Edite o `.env` e preencha **no mínimo**:
 | `SECRET_KEY` | Texto longo e aleatório (`openssl rand -hex 32`). Assina os logins: se mudar, todos precisam entrar de novo. |
 | `POSTGRES_PASSWORD` | Só letras e números (`openssl rand -hex 24`), porque entra numa URL. |
 | `CHAVE_MASTER` | Chave do primeiro acesso da coordenação (sem ela ninguém cria conta de professor). |
-| `PUBLIC_URL` | Endereço público com `https://`, ex.: `https://presenca.unicerrado.edu.br`. Vai dentro do QR code da chamada. |
+| `PUBLIC_URL` | Endereço público completo com `https://`, ex.: `https://dipi.unicerrado.edu.br/check`. Vai dentro do QR code da chamada. |
+| `APP_PREFIX` | Prefixo público, sem barra final, quando o app não ocupa a raiz do domínio. Ex.: `/check`. Deixe vazio na raiz. |
 | `CERTIFICADO_ATIVO` | `1` libera o certificado de participação (PDF e conferência do código). Sem a variável (ou com `0`) ele fica **bloqueado**: o aluno vê "Certificado: em breve". |
 
 Depois:
@@ -64,8 +65,11 @@ server {
     # ssl_certificate / ssl_certificate_key: os da instituição
 
     client_max_body_size 8m;
-    location / {
-        proxy_pass http://127.0.0.1:8000;
+    location = /check {
+        return 301 /check/;
+    }
+    location /check/ {
+        proxy_pass http://127.0.0.1:8000/;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;

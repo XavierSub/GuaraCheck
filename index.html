@@ -8,7 +8,7 @@
 <meta name="color-scheme" content="only light">
 <link rel="icon" type="image/png" href="assets/favicon.png">
 <link rel="apple-touch-icon" href="assets/icone-192.png">
-<link rel="manifest" href="/manifest.webmanifest">
+<link rel="manifest" href="manifest.webmanifest">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Guará Check">
@@ -512,7 +512,7 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
   <div class="lgpd-card" id="lgpd-aceite" role="region" aria-labelledby="lgpd-aceite-t" hidden>
     <h3 id="lgpd-aceite-t">Antes de registrar presença: aviso de privacidade</h3>
     <p>Para conferir que você está no local do evento, o Guará Check usa a localização do seu celular. A posição é lida só no seu aparelho e <b>só é enviada ao servidor quando você toca em Registrar presença</b> (ou saída). Os dados detalhados (posição exata, aparelho e IP) são apagados depois de um tempo, e você pode baixar os seus dados ou pedir a exclusão quando quiser.</p>
-    <p><a class="lnk-bloco" href="/privacidade" target="_blank" rel="noopener">Ler o aviso de privacidade completo</a></p>
+    <p><a class="lnk-bloco" href="privacidade" target="_blank" rel="noopener">Ler o aviso de privacidade completo</a></p>
     <div class="acoes"><button class="btn" id="lgpd-aceitar" type="button">Li e aceito</button></div>
   </div>
   <div class="inst" id="instalar" role="region" aria-label="Instalar o aplicativo" hidden>
@@ -543,7 +543,7 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
   <details class="cola" id="lgpd-box">
     <summary>Meus dados e privacidade</summary>
     <p class="mut">Seus dados servem só para registrar a presença e emitir o comprovante e o certificado. Use os botões abaixo para exercer os seus direitos.</p>
-    <p><a class="lnk-bloco" href="/privacidade" target="_blank" rel="noopener">Ler o aviso de privacidade completo</a></p>
+    <p><a class="lnk-bloco" href="privacidade" target="_blank" rel="noopener">Ler o aviso de privacidade completo</a></p>
     <div class="msg" id="msg-lgpd" hidden></div>
     <p class="mut" id="lgpd-estado"></p>
     <div class="acoes">
@@ -722,7 +722,7 @@ details.cola summary{cursor:pointer;font-weight:600;color:var(--azul)}
   <div class="card" id="adm-corpo"></div>
 </section>
 </main>
-<p class="rodape-priv" id="rodape-priv"><a href="/privacidade" target="_blank" rel="noopener">Aviso de privacidade</a></p>
+<p class="rodape-priv" id="rodape-priv"><a href="privacidade" target="_blank" rel="noopener">Aviso de privacidade</a></p>
 
 <div id="mostrar" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="m-titulo">
   <div class="overlay-box" tabindex="-1">
@@ -763,6 +763,8 @@ const SITE = {
   versao: 'V1',
   aviso: {ativo: false, selo: 'Turma encerrada', titulo: 'As inscrições desta turma estão encerradas', texto: 'A próxima turma será divulgada pelo portal da UniCerrado.', link: '', rotuloLink: 'Ver portal'}
 };
+const APP_PREFIX = '__APP_PREFIX__';
+const appUrl = path => APP_PREFIX + (path.startsWith('/') ? path : '/' + path);
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const S = {token:null, user:null, perfil:'aluno', modo:'login', pend:null, aula:null, rows:[], ultimo:0, hist:[], poll:null, timer:null,
@@ -784,7 +786,7 @@ function show(v){ ['auth','aluno','prof','admin'].forEach(x => $('#v-'+x).hidden
 
 async function api(path, {method='GET', body} = {}){
   const h = {'Content-Type':'application/json'}; if (S.token) h.Authorization = 'Bearer ' + S.token;
-  let r; try { r = await fetch('/api' + path, {method, headers:h, body: body ? JSON.stringify(body) : undefined}); }
+  let r; try { r = await fetch(appUrl('/api' + path), {method, headers:h, body: body ? JSON.stringify(body) : undefined}); }
   catch { throw new Error('Sem conexão com o servidor. Verifique sua internet.'); }
   let d = null; try { d = await r.json(); } catch {}
   if (!r.ok){
@@ -996,7 +998,7 @@ $('#instalar-btn').onclick = async () => {
   try { await e.prompt(); await e.userChoice; } catch {}
 };
 $('#instalar-fecha').onclick = () => { store.set('gc_instalar_nao', '1'); instalarMostrar(); };
-if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));   // sem isso o navegador não oferece instalar
+if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register(appUrl('/sw.js'), {scope:appUrl('/')}).catch(() => {}));   // sem isso o navegador não oferece instalar
 
 function iniciar(){
   $('#user-nome').textContent = S.user.nome.split(' ')[0]; faixaPreencher();
@@ -1233,7 +1235,7 @@ const baixarPDF = (id, btn, aviso) => baixarPdfDe(`/api/aluno/presencas/${id}/pd
 async function baixarPdfDe(url, nomeArquivo, btn, aviso, ocupado = 'Gerando PDF…'){   // serve para qualquer arquivo gerado pelo servidor (PDF, XLSX)
   msg(aviso, ''); const rot = btn.textContent; btn.disabled = true; btn.textContent = ocupado;
   try {
-    const r = await fetch(url, {headers:{Authorization:'Bearer ' + S.token}});
+    const r = await fetch(url.startsWith('/') ? appUrl(url) : url, {headers:{Authorization:'Bearer ' + S.token}});
     if (!r.ok){
       let d = null; try { d = await r.json(); } catch {}
       if (r.status === 401) return sair('Sessão expirada. Entre novamente.');
@@ -1757,7 +1759,7 @@ async function baixarCSV(aulaId, falhar){
   if (csvBaixando) return;
   csvBaixando = true; const btn = $('#btn-csv'); if (btn) btn.disabled = true;
   try {
-    let r; try { r = await fetch(`/api/v1/export/chamada?aula_id=${aulaId}`, {headers:{Authorization:'Bearer ' + S.token}}); }
+    let r; try { r = await fetch(appUrl(`/api/v1/export/chamada?aula_id=${aulaId}`), {headers:{Authorization:'Bearer ' + S.token}}); }
     catch { throw new Error('Sem conexão com o servidor. Verifique sua internet.'); }
     if (!r.ok){
       let d = null; try { d = await r.json(); } catch {}
@@ -2078,7 +2080,7 @@ const ADM_ABAS = {
       + (r.pedidos.length ? r.pedidos.map(aberto).join('') : '<p class="mut">Nenhum pedido em aberto.</p>')
       + `<h3 style="margin-top:16px">Pedidos já respondidos</h3>` + tb(['Pedido','Aluno','Situação','Respondido em','Resposta'], r.respondidos.map(p => `<tr><td>${esc(PEDIDO_TIPO_ADM[p.tipo] || p.tipo)}</td><td>${p.aluno ? esc(p.aluno.nome) : '—'}</td><td>${esc(PEDIDO_SIT[p.status] || p.status)}</td><td>${dh(p.resolvido_em)}</td><td>${esc(p.resposta || '')}</td></tr>`))
       + `<h3 style="margin-top:16px">Limpeza de dados antigos</h3>` + reten
-      + `<p class="mut" style="margin-top:14px">Aviso de privacidade (versão ${esc(c.versao)}), controlador: ${esc(c.controlador)}${c.encarregado_nome ? ', encarregado(a): ' + esc(c.encarregado_nome) : ''}. <a href="/privacidade" target="_blank" rel="noopener">Abrir o aviso</a></p>`;
+      + `<p class="mut" style="margin-top:14px">Aviso de privacidade (versão ${esc(c.versao)}), controlador: ${esc(c.controlador)}${c.encarregado_nome ? ', encarregado(a): ' + esc(c.encarregado_nome) : ''}. <a href="${appUrl('/privacidade')}" target="_blank" rel="noopener">Abrir o aviso</a></p>`;
   },
   async auditoria(){
     const l = await api('/admin/auditoria');
@@ -2228,10 +2230,10 @@ $('#adm-corpo').onchange = async e => {
 
 /* ---------------- Início ---------------- */
 (async () => {
-  try { S.cfg = await (await fetch('/api/config')).json(); } catch {}
+  try { S.cfg = await (await fetch(appUrl('/api/config'))).json(); } catch {}
   certBloqueioAplicar();
   try {
-    S.cursos = await (await fetch('/api/cursos')).json();
+    S.cursos = await (await fetch(appUrl('/api/cursos'))).json();
     const opcoes = S.cursos.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('');
     $('#curso').innerHTML += opcoes; $('#aula-curso').innerHTML += opcoes;
   } catch {}

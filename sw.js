@@ -4,8 +4,10 @@
    servidor), e não mexe em mapas, fontes e bibliotecas de outros endereços. Registrar presença continua exigindo conexão e GPS.
    A página é buscada na rede primeiro (quem tem sinal sempre recebe a versão mais nova); a cópia só entra quando a rede falha.
    Para forçar a troca das cópias guardadas, aumente VERSAO. */
-const VERSAO = 'gc-v1';
-const CASCA = ['/', '/assets/icone-192.png', '/assets/guara-nome-branco.png', '/assets/guara-pino.png', '/assets/favicon.png'];
+const BASE = '__APP_PREFIX__';
+const INICIO = BASE + '/';
+const VERSAO = 'gc-v2-' + (BASE || 'root');
+const CASCA = [INICIO, BASE + '/assets/icone-192.png', BASE + '/assets/guara-nome-branco.png', BASE + '/assets/guara-pino.png', BASE + '/assets/favicon.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSAO).then(c => c.addAll(CASCA)).then(() => self.skipWaiting()));
@@ -21,10 +23,10 @@ async function pagina(req) {
   try {
     const r = await fetch(req);
     const tipo = r.headers.get('content-type') || '';
-    if (r.ok && tipo.startsWith('text/html')) { const c = await caches.open(VERSAO); await c.put('/', r.clone()); }
+    if (r.ok && tipo.startsWith('text/html')) { const c = await caches.open(VERSAO); await c.put(INICIO, r.clone()); }
     return r;
   } catch (erro) {
-    const copia = await caches.match('/');
+    const copia = await caches.match(INICIO);
     if (copia) return copia;
     throw erro;
   }
@@ -41,7 +43,7 @@ async function imagem(req) {
 self.addEventListener('fetch', e => {
   const req = e.request, url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== self.location.origin) return;     // mapas, fontes, bibliotecas: direto da rede
-  if (url.pathname.startsWith('/api/')) return;                                // dados NUNCA vêm de cópia guardada
-  if (req.mode === 'navigate' && url.pathname === '/') e.respondWith(pagina(req));
-  else if (url.pathname.startsWith('/assets/')) e.respondWith(imagem(req));
+  if (url.pathname.startsWith(BASE + '/api/')) return;                         // dados NUNCA vêm de cópia guardada
+  if (req.mode === 'navigate' && url.pathname === INICIO) e.respondWith(pagina(req));
+  else if (url.pathname.startsWith(BASE + '/assets/')) e.respondWith(imagem(req));
 });
