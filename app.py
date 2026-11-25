@@ -64,6 +64,20 @@ def _limpa_chave(v: str) -> str:
 
 
 CHAVE_MASTER = _limpa_chave(os.getenv("CHAVE_MASTER") or os.getenv("CODIGO_PROFESSOR") or "")
+
+
+def _log_chave_errada(digitada: str, onde: str) -> None:
+    """Diagnóstico no log do servidor quando a chave da coordenação é recusada. Nunca grava o valor: só tamanhos e pistas."""
+    d = digitada or ""
+    pista = "diferente"
+    if d.strip() == CHAVE_MASTER:
+        pista = "igual, mas com espaço sobrando no começo ou no fim"
+    elif d.lower() == CHAVE_MASTER.lower():
+        pista = "igual, só muda maiúscula/minúscula (teclado do celular?)"
+    elif len(d) == len(CHAVE_MASTER):
+        pista = "mesmo tamanho, mas algum caractere diferente (l/I/1, 0/O?)"
+    print(f"AVISO: chave da coordenação recusada ({onde}): digitada com {len(d)} caracteres, "
+          f"configurada no servidor com {len(CHAVE_MASTER)}; {pista}.")
 if not CHAVE_MASTER:
     print("AVISO: CHAVE_MASTER não definida - o cadastro de professores está BLOQUEADO.")
 else:
@@ -1852,6 +1866,7 @@ def _registrar(b: "RegistroIn", request: Request, db: Session, *, senha_hash: Op
             if not CHAVE_MASTER:
                 raise HTTPException(403, "Cadastro de professores indisponível: a coordenação ainda não configurou a chave.")
             if not hmac.compare_digest((b.chave_master or "").encode(), CHAVE_MASTER.encode()):
+                _log_chave_errada(b.chave_master, "cadastro de professor")
                 raise HTTPException(403, "Chave de Acesso da Coordenação inválida. Solicite à coordenação.")
         registro = (b.registro_funcional or "").strip()
         depto = (b.departamento or "").strip()
@@ -3682,6 +3697,7 @@ def admin_registro(b: AdminRegistroIn, request: Request, db: Session = Depends(g
     if not CHAVE_MASTER:
         raise HTTPException(403, "Indisponível: a chave de acesso (CHAVE_MASTER) ainda não foi configurada no servidor.")
     if not hmac.compare_digest(b.chave_master.encode(), CHAVE_MASTER.encode()):
+        _log_chave_errada(b.chave_master, "primeiro acesso da coordenação")
         raise HTTPException(403, "Chave de Acesso da Coordenação inválida.")
     p = db.scalar(select(Professor).where(Professor.email == email))
     if p:  # já tem conta de professor: vira coordenação se a senha confere

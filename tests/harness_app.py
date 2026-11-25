@@ -53,7 +53,7 @@ def _achar_app() -> Path:
 APP = _achar_app()
 
 NOMES = {
-    "utcnow", "normalizar_matricula", "matricula_valida", "log_seg", "email_permitido", "hash_senha", "confere_senha",
+    "utcnow", "_log_chave_errada", "normalizar_matricula", "matricula_valida", "log_seg", "email_permitido", "hash_senha", "confere_senha",
     "HASH_FALSO", "sem_acentos", "_forma_simples", "senha_provisoria_ativa", "senha_admin_confere",
     "aguardando_autorizacao", "MSG_AGUARDANDO", "resposta_token", "_cache_contas", "CONTA_CACHE_S", "esquecer_contas",
     "conta_liberada", "usuario_atual", "so_aluno", "so_professor", "_prof_ou_admin", "so_admin", "eh_coordenacao",
