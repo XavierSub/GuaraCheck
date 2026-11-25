@@ -58,6 +58,11 @@ DOMINIOS_PROFESSORES = [d.strip().lower() for d in
 CHAVE_MASTER = (os.getenv("CHAVE_MASTER") or os.getenv("CODIGO_PROFESSOR") or "").strip()
 if not CHAVE_MASTER:
     print("AVISO: CHAVE_MASTER não definida - o cadastro de professores está BLOQUEADO.")
+else:
+    # Diagnóstico sem expor a chave: tamanho + 8 primeiros hex do SHA-256. Compare com a chave que você digita
+    # (python -c "import hashlib;print(hashlib.sha256(input().strip().encode()).hexdigest()[:8])").
+    print(f"CHAVE_MASTER carregada: {len(CHAVE_MASTER)} caracteres, impressão digital "
+          f"{hashlib.sha256(CHAVE_MASTER.encode()).hexdigest()[:8]}")
 
 TOKEN_HORAS = int(os.getenv("TOKEN_HORAS", "12"))
 FUSO_HORAS = int(os.getenv("FUSO_HORAS", "-3"))            # fuso usado no CSV (Brasília = -3)
