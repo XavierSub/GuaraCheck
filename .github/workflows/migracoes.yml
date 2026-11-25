@@ -1,0 +1,76 @@
+# Testa as migrations (Alembic) em banco VAZIO, em PostgreSQL 16 e em SQLite: sobe, confere as tabelas e os cursos,
+# e roda de novo para provar que é idempotente (pode ser executada em banco que já tem dados).
+name: Migrações do banco
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migracoes:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: guara
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: guaracheck
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U guara -d guaracheck" --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      SECRET_KEY: teste-ci-chave-longa-aleatoria
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: PostgreSQL - aplicar (banco vazio)
+        env:
+          DATABASE_URL: postgresql://guara:ci@localhost:5432/guaracheck
+        run: |
+          alembic upgrade head
+          alembic current
+          python - <<'PY'
+          import os, sqlalchemy as sa
+          e = sa.create_engine(os.environ["DATABASE_URL"].replace("postgresql://", "postgresql+psycopg2://"))
+          with e.connect() as c:
+              tabelas = set(sa.inspect(c).get_table_names())
+              falta = {"cursos","alunos","professores","aulas","presencas","tentativas","logs_seguranca",
+                       "pedidos_titular","matriculas_autorizadas","cadastros_pendentes","notas_aluno",
+                       "controle_sistema","alembic_version"} - tabelas
+              assert not falta, falta
+              n = c.execute(sa.text("select count(*) from cursos")).scalar()
+              assert n >= 12, n
+              print("OK:", len(tabelas), "tabelas,", n, "cursos")
+          PY
+
+      - name: PostgreSQL - rodar de novo (idempotente, não duplica)
+        env:
+          DATABASE_URL: postgresql://guara:ci@localhost:5432/guaracheck
+        run: |
+          alembic upgrade head
+          python - <<'PY'
+          import os, sqlalchemy as sa
+          e = sa.create_engine(os.environ["DATABASE_URL"].replace("postgresql://", "postgresql+psycopg2://"))
+          with e.connect() as c:
+              assert c.execute(sa.text("select count(*) from cursos")).scalar() == 12
+              print("OK: continua com 12 cursos")
+          PY
+
+      - name: SQLite - aplicar e repetir
+        env:
+          DATABASE_URL: sqlite:///${{ runner.temp }}/migracao.db
+        run: |
+          alembic upgrade head
+          alembic upgrade head
+          alembic current

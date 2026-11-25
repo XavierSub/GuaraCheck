@@ -30,7 +30,8 @@ RUN pip install -r requirements.txt
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin guara \
     && mkdir /data && chown guara /data
 
-COPY app.py index.html sw.js ./
+COPY app.py index.html sw.js alembic.ini ./
+COPY migrations ./migrations
 COPY assets ./assets
 COPY ferramentas ./ferramentas
 
@@ -43,4 +44,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD ["python", "-c", "import os,sys,urllib.request as u; sys.exit(0 if u.urlopen('http://127.0.0.1:%s/api/health' % os.environ.get('PORT','8000'), timeout=4).status == 200 else 1)"]
 
 # exec: o uvicorn vira o processo principal e recebe o SIGTERM do "docker stop".
-CMD ["sh", "-c", "exec uvicorn app:app --host 0.0.0.0 --port ${PORT} --no-server-header"]
+# Migrações do banco antes de subir (se falhar, avisa e o app sobe mesmo assim: ele também cria o que falta).
+CMD ["sh", "-c", "alembic upgrade head || echo AVISO: migracao falhou; exec uvicorn app:app --host 0.0.0.0 --port ${PORT} --no-server-header"]
