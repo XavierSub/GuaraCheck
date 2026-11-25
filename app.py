@@ -55,7 +55,15 @@ DOMINIO_ALUNOS = os.getenv("DOMINIO_ALUNOS", "alunos.unicerrado.edu.br").lower()
 DOMINIOS_PROFESSORES = [d.strip().lower() for d in
                         os.getenv("DOMINIOS_PROFESSORES", "unicerrado.edu.br").split(",") if d.strip()]
 # Chave de Acesso Master da coordenação (validada só no backend). Sem ela, ninguém cria conta de professor.
-CHAVE_MASTER = (os.getenv("CHAVE_MASTER") or os.getenv("CODIGO_PROFESSOR") or "").strip()
+def _limpa_chave(v: str) -> str:
+    """Tira espaços e aspas que sobram quando a variável é cadastrada (docker --env-file, Portainer, copiar/colar)."""
+    v = (v or "").strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+        v = v[1:-1].strip()
+    return v
+
+
+CHAVE_MASTER = _limpa_chave(os.getenv("CHAVE_MASTER") or os.getenv("CODIGO_PROFESSOR") or "")
 if not CHAVE_MASTER:
     print("AVISO: CHAVE_MASTER não definida - o cadastro de professores está BLOQUEADO.")
 else:
