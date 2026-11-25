@@ -71,13 +71,14 @@ def test_ct1805_icone_maskable_deixa_o_desenho_na_zona_segura():
 def test_ct1806_rotas_do_manifesto_e_do_service_worker_existem():
     assert '@app.get("/manifest.webmanifest")' in APP_PY and '@app.get("/sw.js")' in APP_PY
     assert 'media_type="application/manifest+json"' in APP_PY
-    assert re.search(r'FileResponse\(arq, media_type="text/javascript", headers=\{"Cache-Control": "no-cache"\}\)', APP_PY), \
+    assert re.search(r'Response\(conteudo, media_type="text/javascript", headers=\{"Cache-Control": "no-cache"\}\)', APP_PY), \
         "o service worker precisa de no-cache para as versões novas chegarem"
 
 
-def test_ct1807_pagina_liga_manifesto_e_registra_o_service_worker_na_raiz():
-    assert '<link rel="manifest" href="/manifest.webmanifest">' in HTML
-    assert "navigator.serviceWorker.register('/sw.js')" in HTML
+def test_ct1807_pagina_liga_manifesto_e_registra_o_service_worker_no_prefixo():
+    assert '<link rel="manifest" href="manifest.webmanifest">' in HTML
+    assert "navigator.serviceWorker.register(appUrl('/sw.js')" in HTML
+    assert "const APP_PREFIX = '__APP_PREFIX__'" in HTML
     assert "serviceWorker' in navigator" in HTML                           # navegador sem suporte não quebra a página
 
 
@@ -88,7 +89,7 @@ def test_ct1808_csp_nao_bloqueia_manifesto_nem_service_worker(ns):
 
 
 def test_ct1809_service_worker_nunca_toca_na_api_nem_em_outros_enderecos():
-    assert "url.pathname.startsWith('/api/')) return" in SW
+    assert "url.pathname.startsWith(BASE + '/api/')) return" in SW
     assert "url.origin !== self.location.origin) return" in SW and "req.method !== 'GET'" in SW
     # as cópias só são feitas da página e de /assets/
     assert SW.count("respondWith(") == 2 and "e.respondWith(pagina(req))" in SW and "e.respondWith(imagem(req))" in SW
@@ -97,11 +98,12 @@ def test_ct1809_service_worker_nunca_toca_na_api_nem_em_outros_enderecos():
 def test_ct1810_service_worker_guarda_so_arquivos_que_existem():
     casca = re.search(r"const CASCA = \[(.*?)\];", SW, re.S).group(1)
     caminhos = re.findall(r"'([^']+)'", casca)
-    assert "/" in caminhos
+    assert "INICIO" in casca
     for c in caminhos:
-        if c != "/":
-            assert (RAIZ / c.lstrip("/")).is_file(), f"addAll falharia (instalação do service worker recusada): {c}"
-    assert re.search(r"const VERSAO = 'gc-v\d+'", SW)
+        caminho = c.replace("BASE + ", "").strip()
+        if caminho.startswith("/assets/"):
+            assert (RAIZ / caminho.lstrip("/")).is_file(), f"addAll falharia (instalação do service worker recusada): {c}"
+    assert "const VERSAO = 'gc-v2-'" in SW
 
 
 def test_ct1811_service_worker_troca_de_versao_apagando_as_copias_antigas():
@@ -114,7 +116,13 @@ def test_ct1812_pagina_so_e_guardada_quando_e_html_e_ok():
 
 def test_ct1814_so_a_pagina_principal_e_guardada_outras_paginas_vao_direto_a_rede():
     """Senão /privacidade (também HTML) sobrescreveria a cópia de '/' e quem abrisse sem sinal veria a página errada."""
-    assert "req.mode === 'navigate' && url.pathname === '/'" in SW
+    assert "req.mode === 'navigate' && url.pathname === INICIO" in SW
+
+
+def test_ct1815_manifesto_e_casca_aceitam_subcaminho():
+    assert 'APP_PREFIX = ("/" + os.getenv("APP_PREFIX", "").strip("/"))' in APP_PY
+    assert '"start_url": f"{APP_PREFIX}/"' in APP_PY
+    assert "replace(\"__APP_PREFIX__\", APP_PREFIX)" in APP_PY
 
 
 def test_ct1813_dica_de_instalacao_existe_na_tela_do_aluno():

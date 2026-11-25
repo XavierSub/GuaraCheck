@@ -1565,6 +1565,10 @@ async def lifespan(_: FastAPI):
         ciclo.cancel()
 
 
+# Prefixo público quando o proxy publica o app abaixo de um subcaminho. O proxy remove
+# o prefixo antes de encaminhar, enquanto o navegador recebe URLs que o incluem.
+APP_PREFIX = ("/" + os.getenv("APP_PREFIX", "").strip("/")) if os.getenv("APP_PREFIX", "").strip("/") else ""
+
 # /docs e /openapi.json desligados: não expõem o mapa da API (nem das rotas da coordenação)
 app = FastAPI(title="Guará Check - UniCerrado", lifespan=lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)
@@ -1613,7 +1617,8 @@ def _arquivo_index() -> Path:
 
 @app.get("/")
 def index():
-    return FileResponse(_arquivo_index())
+    conteudo = _arquivo_index().read_text(encoding="utf-8").replace("__APP_PREFIX__", APP_PREFIX)
+    return HTMLResponse(conteudo)
 
 
 ASSET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(png|jpg|jpeg|webp|svg|ico)$", re.I)
@@ -1634,14 +1639,14 @@ def asset(nome: str):
 # Manifesto + service worker (sw.js, na raiz para valer para o site inteiro). O celular oferece "Instalar app"/"Adicionar à tela
 # inicial" e o Guará Check abre em tela cheia, com ícone próprio. O service worker só guarda a casca do site (nunca /api/): ver sw.js.
 MANIFESTO = {
-    "id": "/", "name": "Guará Check", "short_name": "Guará Check", "lang": "pt-BR",
+    "id": f"{APP_PREFIX}/", "name": "Guará Check", "short_name": "Guará Check", "lang": "pt-BR",
     "description": "Registre sua presença em aulas e eventos do UniCerrado pela localização.",
-    "start_url": "/", "scope": "/", "display": "standalone",
+    "start_url": f"{APP_PREFIX}/", "scope": f"{APP_PREFIX}/", "display": "standalone",
     "background_color": "#f5f7ed", "theme_color": "#2f7d40",
     "icons": [
-        {"src": "/assets/icone-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
-        {"src": "/assets/icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
-        {"src": "/assets/icone-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+        {"src": f"{APP_PREFIX}/assets/icone-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": f"{APP_PREFIX}/assets/icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": f"{APP_PREFIX}/assets/icone-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
     ],
 }
 
@@ -1657,7 +1662,8 @@ def service_worker():
     for pasta in (BASE_DIR / "web", BASE_DIR):
         arq = pasta / "sw.js"
         if arq.is_file():
-            return FileResponse(arq, media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+            conteudo = arq.read_text(encoding="utf-8").replace("__APP_PREFIX__", APP_PREFIX)
+            return Response(conteudo, media_type="text/javascript", headers={"Cache-Control": "no-cache"})
     raise HTTPException(404, "sw.js não encontrado")
 
 
@@ -2393,7 +2399,7 @@ def url_base(request: Request) -> str:
     host = (request.headers.get("host") or request.url.netloc or "").strip()
     if not _HOST_OK.match(host):
         raise HTTPException(500, "Não foi possível descobrir o endereço do site. Defina PUBLIC_URL.")
-    return f"{esquema}://{host}"
+    return f"{esquema}://{host}{APP_PREFIX}"
 
 
 def qr_svg(texto: str, borda: int = 4) -> str:
@@ -3075,7 +3081,7 @@ def pagina_privacidade() -> str:
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Privacidade · Guará Check</title>
 <meta name="theme-color" content="#2f7d40">
-<link rel="icon" type="image/png" href="/assets/favicon.png">
+<link rel="icon" type="image/png" href="{APP_PREFIX}/assets/favicon.png">
 <style>
 :root{{color-scheme:light}}
 body{{margin:0;background:#f5f7ed;color:#182830;font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}}
@@ -3091,7 +3097,7 @@ a{{color:#23589a}} footer{{color:#5b6b64;font-size:.9rem;margin-top:2.5rem}}
 </head>
 <body>
 <header><div style="max-width:760px;margin:0 auto"><h1>Aviso de privacidade do Guará Check</h1>
-<a href="/">← Voltar ao Guará Check</a></div></header>
+<a href="{APP_PREFIX}/">← Voltar ao Guará Check</a></div></header>
 <main>
 <p class="nota">Versão <b>{h(LGPD_VERSAO)}</b>. Este texto explica, em linguagem simples, quais dados o Guará Check usa, para quê, por quanto
 tempo e como você pode controlar tudo isso, de acordo com a Lei Geral de Proteção de Dados (Lei 13.709/2018).</p>
@@ -3701,7 +3707,7 @@ def admin_registro(b: AdminRegistroIn, request: Request, db: Session = Depends(g
 
 def _pagina_admin():
     """Endereço /coordenacao (e ADMIN_PATH): abre a mesma tela inicial, já na aba Coordenação."""
-    html = _arquivo_index().read_text(encoding="utf-8")
+    html = _arquivo_index().read_text(encoding="utf-8").replace("__APP_PREFIX__", APP_PREFIX)
     return HTMLResponse(html.replace("<!--ADMIN-->", "<script>window.GC_ADMIN=true</script>"),
                         headers={"Cache-Control": "no-store"})
 

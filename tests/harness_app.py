@@ -98,7 +98,7 @@ NOMES = {
     "NOMINATIM_URL", "NOMINATIM_UA", "LUGAR_MIN", "LUGAR_MAX", "LUGAR_POR_MINUTO", "LUGAR_INTERVALO_S", "LUGAR_CACHE_S",
     "LUGAR_CACHE_MAX", "_lugar_cache", "_lugar_lock", "_lugar_ultima", "_lugar_float", "_lugar_buscar", "buscar_lugares",
     # --- Funcionalidade 11: QR code da chamada (professor mostra, aluno lê) ---
-    "PUBLIC_URL", "_HOST_OK", "url_base", "qr_svg", "qr_da_aula",
+    "PUBLIC_URL", "APP_PREFIX", "_HOST_OK", "url_base", "qr_svg", "qr_da_aula",
     "_int_env", "QR_JANELA_S", "QR_JANELAS_ACEITAS", "qr_token", "qr_token_valido", "qr_renova_em_s",
     # --- Funcionalidade 13: presença manual (lançada pelo professor) ---
     "_permanencia_min", "PresencaManualIn", "lancar_presenca_manual", "desfazer_presenca_manual",
@@ -129,7 +129,7 @@ ENV_DO_APP = ["CERTIFICADO_ATIVO", "SECRET_KEY", "DOMINIO_ALUNOS", "DOMINIOS_PRO
               "CADASTRO_ALUNO_JANELA_S", "ADMIN_FALHAS_IP", "ADMIN_FALHAS_CONTA", "ADMIN_FALHAS_GERAL_HORA",
               "EMAIL_PROVEDOR", "EMAIL_API_KEY", "EMAIL_REMETENTE", "EMAIL_REMETENTE_NOME", "SMTP_HOST", "SMTP_PORT",
               "SMTP_USUARIO", "SMTP_SENHA", "VERIFICAR_EMAIL", "CODIGO_EMAIL_MIN", "CODIGO_MAX_TENTATIVAS",
-              "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP", "AULA_MAX_HORAS", "NOMINATIM_UA", "PUBLIC_URL", "QR_JANELA_S", "QR_JANELAS_ACEITAS",
+               "CODIGO_INTERVALO_S", "CODIGO_ENVIOS_HORA", "CONFIRMA_FALHAS_IP", "AULA_MAX_HORAS", "NOMINATIM_UA", "PUBLIC_URL", "APP_PREFIX", "QR_JANELA_S", "QR_JANELAS_ACEITAS",
               "AVISO_EMAIL_MAX", "AVISO_EMAIL_HORA", "AVISO_EMAIL_PAUSA_S",
               "LGPD_CONTROLADOR", "LGPD_ENCARREGADO_NOME", "LGPD_ENCARREGADO_EMAIL", "LGPD_EXIGIR_ACEITE", "LGPD_RETENCAO_DIAS",
               "LGPD_RETENCAO_LOGS_DIAS"]
@@ -931,4 +931,3 @@ def ctx():
 
 def cod(r):
     return r[0]
-
